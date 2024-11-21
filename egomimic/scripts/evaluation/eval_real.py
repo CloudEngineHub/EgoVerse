@@ -34,7 +34,7 @@ from interbotix_common_modules.common_robot.robot import (
     robot_startup,
 )
 
-from aloha.constants import DT, FOLLOWER_GRIPPER_JOINT_OPEN, START_ARM_POSE
+from eve.constants import DT, FOLLOWER_GRIPPER_JOINT_OPEN, START_ARM_POSE
 
 
 from egomimic.utils.egomimicUtils import (
@@ -55,8 +55,8 @@ from egomimic.configs import config_factory
 from egomimic.pl_utils.pl_model import ModelWrapper
 import datetime
 
-from aloha.robot_utils import move_grippers, move_arms  # requires aloha
-from aloha.real_env import make_real_env  # requires aloha
+from eve.robot_utils import move_grippers, move_arms  # requires aloha
+from eve.real_env import make_real_env  # requires aloha
 
 from egomimic.scripts.evaluation.real_utils import *
 import matplotlib.pyplot as plt
@@ -73,7 +73,7 @@ import pickle
 CURR_INTRINSICS = ARIA_INTRINSICS
 CURR_EXTRINSICS = EXTRINSICS["ariaJul29R"]
 # NORM_STATS = to_torch(NORM_STATS, torch.device("cuda"))
-CAM_KEY = "front_img_1"
+CAM_KEY = "front_img_1_line"
 TEMPORAL_AGG = False
 
 
@@ -187,7 +187,7 @@ def eval_real(model, env, rollout_dir, norm_stats, arm="right"):
                         data["obs"]["joint_positions"] =  qpos[..., 7:].reshape((1, 1, -1))
                         
                         if CAM_KEY == "front_img_1_line":
-                            _, line_image = sam.get_robot_mask_line_batched_from_qpos(obs["images"]["cam_high"][None, :], qpos, EXTRINSICS["ariaJul29"], ARIA_INTRINSICS, arm=arm)
+                            _, line_image = sam.get_robot_mask_line_batched_from_qpos(obs["images"]["cam_high"][None, :], qpos.cpu(), EXTRINSICS["ariaJul29"], ARIA_INTRINSICS, arm=arm)
                             line_image = line_image[0]
                             data["obs"][CAM_KEY] = torch.from_numpy(
                                 line_image[None, None, :]
@@ -207,7 +207,7 @@ def eval_real(model, env, rollout_dir, norm_stats, arm="right"):
 
 
                         if CAM_KEY == "front_img_1_line":
-                            _, line_image = sam.get_robot_mask_line_batched_from_qpos(obs["images"]["cam_high"][None, :], qpos, EXTRINSICS["ariaJul29"], ARIA_INTRINSICS, arm=arm)
+                            _, line_image = sam.get_robot_mask_line_batched_from_qpos(obs["images"]["cam_high"][None, :], qpos.cpu(), EXTRINSICS["ariaJul29"], ARIA_INTRINSICS, arm=arm)
                             line_image = line_image[0]
                             data["obs"][CAM_KEY] = torch.from_numpy(
                                 line_image[None, None, :]
