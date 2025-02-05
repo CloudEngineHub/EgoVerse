@@ -45,20 +45,23 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         data_schematic_dict[dataset] = data_schematic
 
     # Modify dataset configs to include `data_schematic` dynamically at runtime
+    train_datasets = {}
     for dataset_name in cfg.data.train_datasets:
-        log.info(f"Instantiating train datasets with data schematics")
-        cfg.data.train_datasets[dataset_name] = hydra.utils.instantiate(
+        train_datasets[dataset_name] = hydra.utils.instantiate(
             cfg.data.train_datasets[dataset_name], data_schematic=data_schematic_dict[dataset_name]
         )
+    breakpoint()
+    valid_datasets = {}
     for dataset_name in cfg.data.valid_datasets:
-        log.info(f"Instantiating valid datasets with data schematics")
-        cfg.data.valid_datasets[dataset_name] = hydra.utils.instantiate(
+        valid_datasets[dataset_name] = hydra.utils.instantiate(
             cfg.data.valid_datasets[dataset_name], data_schematic=data_schematic_dict[dataset_name]
         )
 
+    breakpoint()
+    #NOTE: Since we instantiate individual Dataset objects with the DataSchematic, we have to hold the instances in a seperate dict and not the cfg object due to OmegaConf needing strict typing
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     assert cfg.data.__target__ == "MultiDataModuleWrapper", "cfg.data.__target__ must be 'MultiDataModuleWrapper'"
-    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data)
+    datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data, train_datasets=train_datasets, valid_datasets=valid_datasets)
 
     # TODO: deprecate shape inference in favor of LeRobotDatasetMetadata
     # NOTE: Since data_schematic is a dict we have per dataset data_schematics that need to infer shapes and norms
@@ -140,6 +143,8 @@ def main(cfg: DictConfig) -> Optional[float]:
     extras(cfg)
 
     print(OmegaConf.to_yaml(cfg))
+
+    #cfg = OmegaConf.resolve(cfg)
 
     # train the model
     metric_dict, _ = train(cfg)
