@@ -50,7 +50,7 @@ class MultiDataModuleWrapper(LightningDataModule):
         iterables = dict()
         for dataset_name, dataset in self.train_datasets.items():
             dataset_params = self.train_dataloader_params.get(dataset_name, {})
-            iterables[dataset[0]["metadata.embodiment"]] = DataLoader(self.dataset, shuffle=True, **dataset_params)
+            iterables[int(dataset[0]["embodiment"])] = DataLoader(dataset, shuffle=True, **dataset_params)
         
         return CombinedLoader(iterables, 'min_size')
     
@@ -58,7 +58,7 @@ class MultiDataModuleWrapper(LightningDataModule):
         iterables = dict()
         for dataset_name, dataset in self.valid_datasets.items():
             dataset_params = self.valid_dataloader_params.get(dataset_name, {})
-            iterables[dataset[0]["metadata.embodiment"]] = DataLoader(self.dataset, shuffle=False, **dataset_params)
+            iterables[int(dataset[0]["embodiment"])] = DataLoader(dataset, shuffle=False, **dataset_params)
         
         return CombinedLoader(iterables, 'min_size')
 

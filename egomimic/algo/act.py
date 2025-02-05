@@ -200,7 +200,7 @@ class ACT(Algo):
     ):
         super().__init__()
 
-        if len(data_schematic.keys() > 1):
+        if len(data_schematic) > 1:
             raise ValueError("ACT should only have 1 dataset")
 
         #NOTE: Since data_schematic is now a dict of data schematics, we have to filter the first key.
@@ -271,6 +271,7 @@ class ACT(Algo):
                 pad_mask: torch.Size([32, 100, 1])
         """
         # checked in init to make sure there is only one embodiment
+        batch = batch[next(iter(batch))]
         batch = self.data_schematic.normalize_data(batch, self.embodiment_id)
 
         batch["joint_positions"] = batch["joint_positions"][:, None, :]
