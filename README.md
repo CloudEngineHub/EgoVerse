@@ -66,7 +66,6 @@ wget https://huggingface.co/datasets/gatech/EgoMimic/resolve/main/bowlplace_robo
 ```
 
 
-
 -------
 
 
