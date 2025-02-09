@@ -11,6 +11,7 @@ This repository contains the data processing and training code for EgoVerse and 
 - [``egomimic/hydra_configs``](./egomimic/hydra_configs): Train configs for each algorithm
 - [``egomimic/trainHydra.py``](./egomimic/trainHydra.py): Main training script, powered by Pytorch Lightning and Hydra (DDP enabled)
 - [``data_processing.md``](./data_processing.md): Instructions to process your own data, both Aria Human data and teleoperated robot data.
+- [``egomimic/evaluation``](./egomimic/evaluation/): Evaluation scripts
 - [``egoverse.md``](./egoverse.md): Instructions to upload data to S3 bucket
 
 ## Installation
