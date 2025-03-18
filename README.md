@@ -62,6 +62,9 @@ Submitit (Run this on slurm)
 Eval (add your own rollout class in [``egomimic/evaluation``](./egomimic/evaluation/) and update [``egomimic/hydra_configs/train.yaml``](./egomimic/hydra_configs/train.yaml))
 `python egomimic/trainHydra.py train=false eval=true`
 
+## Add your embodiment
+See [``model.md``](./model.md)
+
 ## Submitit modification
 Tip: after you launch via submitit, you'll notice that the command won't finish executing.  If you want it to end the command after you launch a job, edit the following file
 
