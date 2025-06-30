@@ -125,6 +125,8 @@ class HPTModel(nn.Module):
         self.depth = None
         self.lambd = None
         
+        self.diffusion = None
+        
     def init_encoder(self, modality, encoder_spec):
         """
         Initialize an encoder for the specified modality.
@@ -639,7 +641,10 @@ class HPTModel(nn.Module):
         """
         features, block_outputs = self.forward_features(domain, data)
         action = {}
-        
+                
+        if self.diffusion:
+            features = (features, domain)
+             
         if domain in self.heads:
             action[domain] = self.heads[domain](features)
         
@@ -806,6 +811,8 @@ class HPT(Algo):
         self.device = kwargs.get("device", torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         model.device = self.device
         
+        model.diffusion = kwargs.get("diffusion", False)
+
         if self.pretrained:
             model.load_pretrained(self.pretrained_checkpoint)
             
