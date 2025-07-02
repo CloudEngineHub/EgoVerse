@@ -1,0 +1,4 @@
+ckpt_path: null
+multirun_path: null
+datasets: null # null (no dataset), multirun (multirun dataset), provided (specify dataset with key)
+eval: # some class
