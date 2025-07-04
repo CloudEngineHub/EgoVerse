@@ -1,10 +1,10 @@
 defaults:
-  - model: hpt_cotrain_transformer_shared
+  - model: hpt_cotrain_right
   - paths: default
   - trainer: ddp
   - debug: null
   - logger: wandb
-  - data: multi_data
+  - data: scoop_granular_cotrain
   - callbacks: null
   - override hydra/launcher: submitit
   - _self_

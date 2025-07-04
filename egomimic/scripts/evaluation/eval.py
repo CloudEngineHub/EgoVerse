@@ -1,14 +1,22 @@
+import os
+import datetime
 class Eval:
     """
     Base class for all evaluation. Using this you can easily adopt your BC rollout pipeline
     """
-    def __init__(self, config, ckpt_path):
+    def __init__(self, eval_path, model):
         """
         config (DictConfig) : model config that would be used to instantiate the model
         ckpt_path (str) : model checkpoint path to instantiate the model
         """
-        self.config = config
-        self.ckpt_path = ckpt_path
+        self.model = model
+        eval_dir = os.path.join(eval_path, 'eval')
+        class_path = os.path.join(eval_dir, self.__class__.__name__.lower())
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.eval_path = os.path.join(class_path, timestamp)
+
+        self.datamodule = None
+        self.data_schematic = None
         
     def process_batch_for_eval(self, batch):
         """
@@ -23,20 +31,8 @@ class Eval:
         """
         raise NotImplementedError("Must implement process_batch_for_eval for this subclass")
 
-    def perform_eval(self):
+    def run_eval(self):
         """
         Calls the relevant methods to perform the rollout
         """
         raise NotImplementedError("Must implement perform_eval for this subclass")
-
-    def eval_real(self):
-        """
-        Perform real world rollout
-        """
-        pass
-
-    def eval_sim(self):
-        """
-        Perform sim rollout
-        """
-        pass
