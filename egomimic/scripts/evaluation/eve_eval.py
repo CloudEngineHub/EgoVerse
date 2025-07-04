@@ -130,6 +130,7 @@ class (Eval):
     
     def run_eval(self):
         device = torch.device("cuda")
+        self.model.to(device)
         aloha_fk = AlohaFK()
         qpos_t, actions_t = [], []
 
@@ -149,7 +150,7 @@ class (Eval):
                     inference_t = time.time()
 
                     if t % self.query_frequency == 0:
-                        batch = self.process_batch_for_eval(obs)
+                        batch = self.process_batch_for_eval(obs).to(device)
                         preds = self.model.model.forward_eval(batch)
                         
                         ac_key = self.model.model.ac_keys[self.embodiment_id]
@@ -172,7 +173,6 @@ class (Eval):
                     qpos_t.append(ts.observation["qpos"])
                     actions_t.append(target_qpos)
 
-            rollout_images = []
             log.info("Moving Robot")
 
             if self.arm == "right":
