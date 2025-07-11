@@ -1,14 +1,10 @@
-import math
-from functools import partial
-
-from typing import Dict
+from typing import Tuple
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 from egomimic.models.denoising_nets import ConditionalUnet1D
 from egomimic.models.denoising_policy import DenoisingPolicy
-from rldb.utils import get_embodiment, get_embodiment_id
+
+from overrides import override
 
 class FMPolicy(DenoisingPolicy):
     """
@@ -40,15 +36,17 @@ class FMPolicy(DenoisingPolicy):
         v_t = self.model(x_t, t, global_cond)
         return x_t + self.dt * v_t, t + self.dt
     
-    def inference(self, noise, global_cond, generator=None):
+    @override
+    def inference(self, noise, global_cond, generator=None) -> torch.Tensor:
         self.dt = -1.0 / self.num_inference_steps
         x_t = noise
         time = torch.ones((len(global_cond)), device=global_cond.device)
         while time[0] >= -self.dt/2:
             x_t , time = self.step(x_t, time, global_cond)
         return x_t
-        
-    def predict(self, actions, global_cond):
+    
+    @override
+    def predict(self, actions, global_cond) -> Tuple[torch.Tensor, torch.Tensor]:
         noise = torch.randn(actions.shape, device=actions.device)
         batch_shape = (actions.shape[0], )
         if self.time_dist == "beta":

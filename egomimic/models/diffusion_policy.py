@@ -1,16 +1,10 @@
-import math
-from functools import partial
-
-from typing import Dict
+from typing import Tuple
 import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 from egomimic.models.denoising_nets import ConditionalUnet1D
 from egomimic.models.denoising_policy import DenoisingPolicy
-from egomimic.models.hpt_nets import AttentivePooling
-from egomimic.utils.plotting import plot_line
 
+from overrides import override
 
 class DiffusionPolicy(DenoisingPolicy):
     """
@@ -37,19 +31,19 @@ class DiffusionPolicy(DenoisingPolicy):
         super().__init__(model, action_horizon, infer_ac_dims, num_inference_steps, **kwargs)
         self.noise_scheduler = noise_scheduler
     
-    def inference(self, noise, global_cond, generator=None):
+    @override
+    def inference(self, noise, global_cond, generator=None) -> torch.Tensor:
         self.noise_scheduler.set_timesteps(self.num_inference_steps, device=global_cond.device)
         actions = noise
         for t in self.noise_scheduler.timesteps:
-            if len(t.shape) != 1:
-                t_model = torch.tensor([t], device=global_cond.device)
-            else:
-                t_model = t
+            t_model = torch.tensor([t], device=global_cond.device) if len(t.shape) != 1 else t
             model_output = self.model(actions, t_model, global_cond)
             actions = self.noise_scheduler.step(model_output, t, actions, generator=generator).prev_sample
         return actions
-    
-    def predict(self, actions, global_cond):
+
+        
+    @override
+    def predict(self, actions, global_cond) -> Tuple[torch.Tensor, torch.Tensor]:
         noise = torch.randn(actions.shape, device=actions.device)
         bsz = actions.shape[0]
         timesteps = torch.randint(0, self.noise_scheduler.num_train_timesteps, (bsz,), device=actions.device).long()

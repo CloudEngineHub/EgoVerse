@@ -10,15 +10,10 @@ import numpy as np
 import einops
 from torchmetrics import MeanSquaredError
 
-# import torch.amp as amp
-
 from egomimic.models.hpt_nets import *
 from egomimic.algo.algo import Algo
 from egomimic.utils.egomimicUtils import draw_actions
 
-from rldb.utils import get_embodiment_id, get_embodiment
-
-from egomimic.utils.egomimicUtils import nds
 from egomimic.utils.egomimicUtils import get_sinusoid_encoding_table, EinOpsRearrange, download_from_huggingface, STD_SCALE
 from egomimic.utils.egomimicUtils import draw_actions, draw_rotation_text
 
@@ -27,6 +22,10 @@ import numpy as np
 from overrides import override
 
 from egomimic.algo.algo import Algo
+
+from rldb.utils import get_embodiment_id, get_embodiment
+
+from termcolor import cprint
 
 from geomloss import SamplesLoss
 from tslearn.metrics import SoftDTWLossPyTorch
@@ -811,8 +810,18 @@ class HPT(Algo):
         self.device = kwargs.get("device", torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         model.device = self.device
         
-        model.diffusion = kwargs.get("diffusion", False)
-
+        self.diffusion = kwargs.get("diffusion", False)
+        model.diffusion = self.diffusion
+        
+        if self.diffusion:
+            if self.data_schematic.norm_mode == "zscore":
+                cprint(
+                    "WARNING: HPTModel with diffusion / flow matching is using 'zscore' normalization. "
+                    "Consider switching to 'minmax' or 'quantile' norm_mode in train.yaml for better stability",
+                    color="yellow",
+                    attrs=["bold"]
+                )
+                
         if self.pretrained:
             model.load_pretrained(self.pretrained_checkpoint)
             
