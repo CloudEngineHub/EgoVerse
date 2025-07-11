@@ -79,6 +79,16 @@ EXTRINSICS = {
        [ 0.99936749,  0.00694131,  0.03487736, -0.31958691],
        [-0.0312035 ,  0.64159747,  0.76640657, -0.14678789],
        [ 0.        ,  0.        ,  0.        ,  1.        ]])
+    },    
+    "ariaJun7": {
+        "left": np.array([[-0.18832572, -0.65324461,  0.73335183,  0.09628296],
+       [ 0.98061435, -0.08392577,  0.17706487,  0.13806555],
+       [-0.05411956,  0.7524812 ,  0.65638641, -0.03473177],
+       [ 0.        ,  0.        ,  0.        ,  1.        ]]),
+        "right": np.array([[ 0.09025644, -0.73272786,  0.67450994,  0.02224729],
+       [ 0.985515  , -0.03192781, -0.1665557 , -0.36016571],
+       [ 0.14357562,  0.67977239,  0.71923261, -0.36191491],
+       [ 0.        ,  0.        ,  0.        ,  1.        ]])
     },
 }
 
@@ -294,7 +304,60 @@ def ee_pose_to_cam_pixels(ee_pose_base, T_cam_base, intrinsics):
     px_val = px_val / px_val[2, :]
 
     return px_val.T
+    
+def pose_to_transform(pose):
+    """
+    Convert a 6D pose [x, y, z, yaw, pitch, roll] into a 4x4 homogeneous transform.
+    Assumes Euler angles are in radians and follow ZYX (yaw-pitch-roll) order.
+    """
+    x, y, z, yaw, pitch, roll = pose
 
+    # Compute individual rotation matrices
+    Rz = np.array([
+        [np.cos(yaw), -np.sin(yaw), 0],
+        [np.sin(yaw),  np.cos(yaw), 0],
+        [0,            0,           1]
+    ])
+    Ry = np.array([
+        [np.cos(pitch), 0, np.sin(pitch)],
+        [0,             1, 0],
+        [-np.sin(pitch),0, np.cos(pitch)]
+    ])
+    Rx = np.array([
+        [1, 0,            0],
+        [0, np.cos(roll), -np.sin(roll)],
+        [0, np.sin(roll),  np.cos(roll)]
+    ])
+    
+    # Combined rotation: note the multiplication order
+    R = Rz @ Ry @ Rx
+
+    # Assemble homogeneous transformation matrix
+    T = np.eye(4)
+    T[:3, :3] = R
+    T[:3, 3] = [x, y, z]
+    return T
+    
+def transform_to_pose(T):
+    """
+    Convert a 4x4 homogeneous transform back to a 6D pose [x, y, z, yaw, pitch, roll].
+    Uses the ZYX (yaw-pitch-roll) convention.
+    """
+    x, y, z = T[:3, 3]
+    R = T[:3, :3]
+
+    # Extract pitch from the (3,1) element of R
+    pitch = np.arcsin(-R[2, 0])
+    # To avoid numerical issues, check for gimbal lock:
+    cos_pitch = np.cos(pitch)
+    if np.abs(cos_pitch) > 1e-6:
+        yaw = np.arctan2(R[1, 0], R[0, 0])
+        roll = np.arctan2(R[2, 1], R[2, 2])
+    else:
+        # Gimbal lock: arbitrarily set yaw=0
+        yaw = 0
+        roll = np.arctan2(-R[0, 1], R[1, 1])
+    return np.array([x, y, z, yaw, pitch, roll])
 
 def cam_frame_to_cam_pixels(ee_pose_cam, intrinsics):
     """
@@ -402,6 +465,48 @@ def transformation_matrix_to_pose(T):
     pose_array = np.concatenate((p, rotation_quaternion))
     return pose_array
 
+def interpolate_arr_euler(v: np.ndarray, seq_length: int) -> np.ndarray:
+    """
+    Interpolate 6DoF poses (translation + Euler angles in radians) along the time axis.
+    If any values in a sequence are >= 1e9 (used as a NaN sentinel), skip interpolation and return filled value.
+    """
+    assert v.ndim == 3 and v.shape[2] == 6, "Input v must be of shape (B, T, 6)"
+    B, T, _ = v.shape
+
+    translations_interp = []
+    rotations_interp = []
+
+    new_time = np.linspace(0, 1, seq_length)
+    old_time = np.linspace(0, 1, T)
+
+    for i in range(B):
+        seq = v[i]
+        if np.any(seq >= 1e8):
+            # Invalid sequence — fill with dummy values
+            translations_interp.append(np.full((seq_length, 3), 1e9))
+            rotations_interp.append(np.full((seq_length, 3), 1e9))
+            continue
+
+        trans_seq = seq[:, :3]
+        rot_seq = seq[:, 3:]
+
+        # Avoid discontinuities in angle interpolation
+        rot_seq_unwrapped = np.unwrap(rot_seq, axis=0)
+
+        trans_interp_func = scipy.interpolate.interp1d(old_time, trans_seq, axis=0, kind='linear')
+        rot_interp_func = scipy.interpolate.interp1d(old_time, rot_seq_unwrapped, axis=0, kind='linear')
+
+        trans_interp = trans_interp_func(new_time)
+        rot_interp = rot_interp_func(new_time)
+        rot_interp = (rot_interp + np.pi) % (2 * np.pi) - np.pi
+
+        translations_interp.append(trans_interp)
+        rotations_interp.append(rot_interp)
+
+    translations_interp = np.array(translations_interp)
+    rotations_interp = np.array(rotations_interp)
+
+    return np.concatenate([translations_interp, rotations_interp], axis=-1)
 
 class AlohaFK:
     def __init__(self):
