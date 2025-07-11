@@ -60,7 +60,7 @@ class FMPolicy(DenoisingPolicy):
         x_t = time_expanded * noise + (1 - time_expanded) * actions
         u_t = noise - actions
 
-        v_t = self.model(x_t , time, global_cond)
+        v_t = self.model(x_t, time, global_cond)
         
         target = u_t
         pred = v_t

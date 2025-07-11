@@ -7,17 +7,18 @@ robomimic_model:
   head_specs:
     shared: null
     aria_bimanual: 
-      _target_: egomimic.models.fm_policy.FMPolicy
+      _target_: egomimic.models.mean_flow_policy.MeanFlowPolicy
       action_horizon: 100
-      num_inference_steps: 50
+      num_inference_steps: 1
       pooling: "flatten"
-      time_dist: "beta"
+      time_dist: "lognorm"
       infer_ac_dims:
         aria_bimanual: 12
       model:
-        _target_:  egomimic.models.denoising_nets.ConditionalUnet1D
+        _target_: egomimic.models.denoising_nets.ConditionalUnet1D
         input_dim: 12
         cond_dim: 256
+        mean_flow: true
         ac_latent_seq: 8
         diffusion_step_embed_dim: 256
         down_dims: [64, 128, 256]
@@ -26,17 +27,18 @@ robomimic_model:
         cond_predict_scale: True
 
     eve_bimanual: 
-      _target_: egomimic.models.fm_policy.FMPolicy
+      _target_: egomimic.models.mean_flow_policy.MeanFlowPolicy
       action_horizon: 100
-      num_inference_steps: 50
+      num_inference_steps: 1
       pooling: "flatten"
-      time_dist: "beta"
+      time_dist: "lognorm"
       infer_ac_dims:
         eve_bimanual: 14
       model:
-        _target_:  egomimic.models.denoising_nets.ConditionalUnet1D
+        _target_: egomimic.models.denoising_nets.ConditionalUnet1D
         input_dim: 14
         cond_dim: 256
+        mean_flow: true
         ac_latent_seq: 8
         diffusion_step_embed_dim: 256
         down_dims: [64, 128, 256]

@@ -1,6 +1,6 @@
 import math
 
-from typing import Union
+from typing import Union, Tuple
 import logging
 import torch
 import torch.nn as nn
@@ -195,21 +195,36 @@ class ConditionalUnet1D(nn.Module):
         n_groups=8,
         cond_predict_scale=False,
         feature_concatenate=False,
+        **kwargs,
     ):
         """
         local conditioning and global conditioning scheme
         """
         super().__init__()
+        
+        self.mean_flow = kwargs.get("mean_flow", False)
+        
         all_dims = [input_dim] + list(down_dims)
         start_dim = down_dims[0]
 
         dsed = diffusion_step_embed_dim
-        diffusion_step_encoder = nn.Sequential(
-            SinusoidalPosEmb(dsed // 2),
-            nn.Linear(dsed // 2, dsed * 2),
-            nn.Mish(),
-            nn.Linear(dsed * 2, dsed // 2),
-        )
+
+        if self.mean_flow:
+            self.t_emb = SinusoidalPosEmb(dsed // 2)
+            self.dt_emb = SinusoidalPosEmb(dsed // 2)
+            diffusion_step_encoder = nn.Sequential(
+                nn.Linear(dsed, dsed * 2),  # t_emb || dt_emb → dsed
+                nn.Mish(),
+                nn.Linear(dsed * 2, dsed // 2),
+            )
+        else:
+            diffusion_step_encoder = nn.Sequential(
+                SinusoidalPosEmb(dsed // 2),
+                nn.Linear(dsed // 2, dsed * 2),
+                nn.Mish(),
+                nn.Linear(dsed * 2, dsed // 2),
+            )
+            
         self.proj_cond = nn.Linear(ac_latent_seq * cond_dim, dsed // 2)
 
         cond_dim = dsed
@@ -218,31 +233,6 @@ class ConditionalUnet1D(nn.Module):
 
         local_cond_encoder = None
         layer_func = ConditionalResidualBlock1D if not feature_concatenate else ConditionalConcatResidualBlock1D
-        # if local_cond_dim is not None:
-        #     _, dim_out = in_out[0]
-        #     dim_in = local_cond_dim
-        #     local_cond_encoder = nn.ModuleList(
-        #         [
-        #             # down encoder
-        #             layer_func(
-        #                 dim_in,
-        #                 dim_out,
-        #                 cond_dim=cond_dim,
-        #                 kernel_size=kernel_size,
-        #                 n_groups=n_groups,
-        #                 cond_predict_scale=cond_predict_scale,
-        #             ),
-        #             # up encoder
-        #             layer_func(
-        #                 dim_in,
-        #                 dim_out,
-        #                 cond_dim=cond_dim,
-        #                 kernel_size=kernel_size,
-        #                 n_groups=n_groups,
-        #                 cond_predict_scale=cond_predict_scale,
-        #             ),
-        #         ]
-        #     )
 
         mid_dim = all_dims[-1]
         self.mid_modules = nn.ModuleList(
@@ -336,14 +326,14 @@ class ConditionalUnet1D(nn.Module):
     def forward(
         self,
         sample: torch.Tensor,
-        timestep: Union[torch.Tensor, float, int],
+        timestep: Union[torch.Tensor, float, int, Tuple[torch.Tensor, torch.Tensor]],
         global_cond,
         *args,
         **kwargs
     ):
         """
         sample: (B,T,input_dim)
-        timestep: (B,) or int, diffusion step
+        timestep: (B,) or int, diffusion step or (r, t) tuple, each of shape (B, )
         local_cond: (B,T,local_cond_dim)
         global_cond: (B,global_cond_dim)
         output: (B,T,input_dim)
@@ -351,20 +341,27 @@ class ConditionalUnet1D(nn.Module):
         sample = einops.rearrange(sample, "b h t -> b t h")
 
         # 1. time
-        timesteps = timestep
-        if not torch.is_tensor(timesteps):
-            # TODO: this requires sync between CPU and GPU. So try to pass timesteps as tensors if you can
-            timesteps = torch.tensor([timesteps], dtype=torch.long, device=sample.device)
+        if self.mean_flow:
+            r, t = timestep   # (B,), (B,)
+            dt = t - r
+            t_emb = self.t_emb(t)
+            dt_emb = self.dt_emb(dt)
+            time_embed = torch.cat([t_emb, dt_emb], dim=-1)  # (B, D)
+            global_feature = self.diffusion_step_encoder(time_embed)
+            
+        else:
+            timesteps = timestep
+            if not torch.is_tensor(timesteps):
+                timesteps = torch.tensor([timesteps], dtype=torch.long, device=sample.device)
 
-        elif torch.is_tensor(timesteps) and len(timesteps.shape) == 0:
-            timesteps = timesteps[None].to(sample.device)
+            elif torch.is_tensor(timesteps) and len(timesteps.shape) == 0:
+                timesteps = timesteps[None].to(sample.device)
 
-        # broadcast to batch dimension in a way that's compatible with ONNX/Core ML
-        timesteps = timesteps.expand(sample.shape[0])
-        global_feature = self.diffusion_step_encoder(timesteps)
+            timesteps = timesteps.expand(sample.shape[0])
+            global_feature = self.diffusion_step_encoder(timesteps)
 
-        cond = self.proj_cond(global_cond)
         if global_cond is not None:
+            cond = self.proj_cond(global_cond)
             global_feature = torch.cat([global_feature, cond], axis=-1)
 
         x = sample
@@ -393,7 +390,6 @@ class ConditionalUnet1D(nn.Module):
         x = self.final_conv(x)
         x = einops.rearrange(x, "b t h -> b h t")
         return x
-
 
 
 
