@@ -129,4 +129,4 @@ class MeanFlowPolicy(DenoisingPolicy):
 
             return loss.mean()
         else:
-            return super().loss_fn()
+            return super().loss_fn(pred, target)
