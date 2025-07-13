@@ -651,6 +651,7 @@ class CrossBlock(nn.Module):
         dropout,
         mlp_layers,
         mlp_ratio,
+        **kwargs,
     ):
         super().__init__()
         self.hidden_dim = hidden_dim
@@ -706,35 +707,6 @@ class CrossBlockCfg2(CrossBlock):
         cond = self.cond_proj(cond)
         cond_time = torch.cat([cond, time], dim=-2)
         return super().forward_cross(x, cond_time)
-
-# class AdaLnTransformer(nn.Module):
-#     def __init__(
-#         self,
-#         nblocks,
-#         cond_dim,
-#         hidden_dim,
-#         act_dim,
-#         n_heads,
-#         dropout,
-#         mlp_layers,
-#         mlp_ratio,
-#         ad_nlayers,
-#         num_train_timesteps
-#     ):
-#         super().__init__()
-#         timestep_table = torch.stack([timestep_embedding(torch.tensor([i], dtype=torch.int), cond_dim)
-#                      for i in range(num_train_timesteps)], dim=0)
-#         self.register_buffer('timestep_table', timestep_table)
-#         self.layers = nn.ModuleList([DiTBlock(cond_dim, hidden_dim, n_heads, dropout, mlp_layers, mlp_ratio, ad_nlayers) for i in range(nblocks)])
-#         self.proj_u = nn.Linear(act_dim, hidden_dim)
-#         self.proj_d = nn.Linear(hidden_dim, act_dim)
-
-#     def forward(self, x, timesteps, global_cond):
-#         hid_tkns = self.proj_u(x)
-#         for layer in self.layers:
-#             hid_tkns = layer(hid_tkns, timesteps, global_cond, self.timestep_table)
-#         x = self.proj_d(hid_tkns)
-#         return x
     
 class CrossTransformer(nn.Module):
     def __init__(
@@ -755,18 +727,27 @@ class CrossTransformer(nn.Module):
         self.proj_u = nn.Linear(act_dim, hidden_dim//2)
         self.proj_d = nn.Linear(hidden_dim, act_dim)
         self.pos_emb = nn.Parameter(torch.zeros(1, act_seq, hidden_dim// 2))
+        self.mean_flow = kwargs.get("mean_flow", False)            
 
 
-    def forward(self, x, timesteps, cond, *args, **kwargs):
+    def forward(self, x, timesteps, cond):
         hid_tkns = self.proj_u(x)
         hid_tkns = hid_tkns + self.pos_emb
-        time_embed = posemb_sincos(timesteps, self.proj_u.out_features, min_period=4e-3, max_period=4.0).unsqueeze(1).expand(hid_tkns.shape[0], hid_tkns.shape[1], -1).to(hid_tkns.device)
-        # if hasattr(timesteps, "shape") and len(timesteps.shape) > 0 and timesteps.shape[0] == 1:
-        #     breakpoint()
+        if self.mean_flow:
+            r, t = timesteps
+            dt = t - r
+            t_embed = posemb_sincos(t, self.proj_u.out_features // 2, min_period=4e-3, max_period=4.0)
+            dt_embed = posemb_sincos(dt, self.proj_u.out_features // 2, min_period=4e-3, max_period=4.0)
+            time_embed = torch.cat([t_embed, dt_embed], dim=-1)
+        else:
+            time_embed = posemb_sincos(timesteps, self.proj_u.out_features, min_period=4e-3, max_period=4.0)
+
+        time_embed = time_embed.unsqueeze(1).expand(hid_tkns.shape[0], hid_tkns.shape[1], -1).to(hid_tkns.device)
         hid_tkns = torch.cat([hid_tkns, time_embed], dim=-1)
 
         for layer in self.layers:
             hid_tkns = layer(hid_tkns, cond)
+
         x = self.proj_d(hid_tkns)
         return x
 
@@ -795,8 +776,7 @@ class CrossTransformerCfg2(nn.Module):
         hid_tkns = self.proj_u(x)
         hid_tkns = hid_tkns + self.pos_emb
         time_embed = posemb_sincos(timesteps, self.proj_u.out_features, min_period=4e-3, max_period=4.0).unsqueeze(1).expand(hid_tkns.shape[0], hid_tkns.shape[1], -1).to(hid_tkns.device) # (1, S, D)
-        # if hasattr(timesteps, "shape") and len(timesteps.shape) > 0 and timesteps.shape[0] == 1:
-        #     breakpoint()
+
         for layer in self.layers:
             hid_tkns = layer(hid_tkns, cond, time_embed)
         x = self.proj_d(hid_tkns)

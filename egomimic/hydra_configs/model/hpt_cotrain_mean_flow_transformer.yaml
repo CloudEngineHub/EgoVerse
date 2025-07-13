@@ -9,43 +9,45 @@ robomimic_model:
       _target_: egomimic.models.mean_flow_policy.MeanFlowPolicy
       action_horizon: 100
       num_inference_steps: 1
-      pooling: "flatten"
+      pooling: null
       time_dist: "lognorm"
       adaptive_loss: true
       infer_ac_dims:
         aria_bimanual: 12
       model:
-        _target_: egomimic.models.denoising_nets.ConditionalUnet1D
-        input_dim: 12
+        _target_: egomimic.models.denoising_nets.CrossTransformer
+        nblocks: 6
         cond_dim: 256
+        hidden_dim: 128
+        act_dim: 12
+        act_seq: 100
+        n_heads: 4
+        dropout: 0.1
+        mlp_layers: 4 
+        mlp_ratio: 4
         mean_flow: true
-        ac_latent_seq: 8
-        diffusion_step_embed_dim: 256
-        down_dims: [64, 128, 256]
-        kernel_size: 3
-        n_groups: 8
-        cond_predict_scale: True
 
     eve_bimanual: 
       _target_: egomimic.models.mean_flow_policy.MeanFlowPolicy
       action_horizon: 100
       num_inference_steps: 1
-      pooling: "flatten"
+      pooling: null
       time_dist: "lognorm"
       adaptive_loss: true
       infer_ac_dims:
         eve_bimanual: 14
       model:
-        _target_: egomimic.models.denoising_nets.ConditionalUnet1D
-        input_dim: 14
+        _target_: egomimic.models.denoising_nets.CrossTransformer
+        nblocks: 6
         cond_dim: 256
+        hidden_dim: 128
+        act_dim: 14
+        act_seq: 100
+        n_heads: 4
+        dropout: 0.1
+        mlp_layers: 4 
+        mlp_ratio: 4
         mean_flow: true
-        ac_latent_seq: 8
-        diffusion_step_embed_dim: 256
-        down_dims: [64, 128, 256]
-        kernel_size: 3
-        n_groups: 8
-        cond_predict_scale: True
 
 optimizer:
   _target_: torch.optim.AdamW
