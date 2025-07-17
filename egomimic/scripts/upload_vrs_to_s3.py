@@ -97,7 +97,8 @@ for vrs_file in vrs_files:
     player_proc.terminate()
 
     metadata = submitted_metadata
-    metadata["arm"] = arm  # Inject arm from task_map
+    metadata["arm"] = arm
+    metadata["task"] = task_name
     lab = metadata["lab"]
     scene = metadata["scene"]
     rec = metadata["recording_number"]
