@@ -89,6 +89,25 @@ def append_status(row: dict):
         boto3.client("s3").upload_file(
             str(LOCAL_STATUS), "rldb", "processed/vrs_conversion_status.csv")
 
+def extract_lab_name(vrs_stem: str, task_name: str) -> str:
+    """
+    Extract lab_name from a VRS stem using known task_name.
+
+    Example:
+    vrs_stem = 'scoop_granular_rl2_lab_scene_10_recording_3'
+    task_name = 'scoop_granular'
+    → lab_name = 'rl2_lab'
+    """
+    try:
+        prefix = vrs_stem.split("_scene_")[0]  # 'scoop_granular_rl2_lab'
+        expected_prefix = task_name + "_"
+        if not prefix.startswith(expected_prefix):
+            return "unknown"
+        lab_part = prefix[len(expected_prefix):]
+        return lab_part
+    except Exception:
+        return "unknown"
+
 # ───────────────── Ray task ────────────────────────────────────
 @ray.remote(num_cpus=24, memory=48 * 1024 ** 3)
 def convert_one(vrs: str, jsonf: str, mps_dir: str,
@@ -160,13 +179,20 @@ def launch(dry: bool = False):
         done_ref, _ = ray.wait(list(pending), num_returns=1)
         ds_path, frames = ray.get(done_ref[0])
         task, vrs_stem  = pending.pop(done_ref[0])
-        meta = load_meta_fields(RAW_ROOT / task / f"{vrs_stem}.vrs")
+        vrs_path = RAW_ROOT / task / f"{vrs_stem}.vrs"
+        meta = load_meta_fields(vrs_path)
+
+        lab_name = meta.get("lab_name", extract_lab_name(vrs_stem, task))
+
         row = {
-            "task": task,
+            "task": meta.get("task", task),
+            "lab": meta.get("lab", lab_name),
             "vrs": vrs_stem,
             "total_frames": frames,
-            "output_path": ds_path
+            "output_path": ds_path,
+            **meta  # add any other metadata
         }
+        
         row.update(meta)
         append_status(row)
 
