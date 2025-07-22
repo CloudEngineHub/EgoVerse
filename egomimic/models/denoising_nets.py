@@ -597,9 +597,9 @@ class AdaptiveLayerNorm(nn.Module):
 
         self.mlp = nn.Sequential(
             nn.LayerNorm(hidden_dim),
-            nn.Linear(hidden_dim, 4 * hidden_dim),
+            nn.Linear(hidden_dim, 2 * hidden_dim),
             nn.SiLU(),
-            nn.Linear(4 * hidden_dim, out_dim)
+            nn.Linear(2 * hidden_dim, out_dim)
         )
 
         nn.init.zeros_(self.mlp[-1].weight)
