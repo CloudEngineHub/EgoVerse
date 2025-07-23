@@ -166,7 +166,7 @@ class EveEval(Eval):
         T[..., 3, 3] = 1.0
 
         T_base = T
-        # T_base = extrinsics @ T # Should we multiply from base frame to cam frame?
+        T_base = extrinsics @ T # Should we multiply from base frame to cam frame?
         
         # actions_rotmat = T_base[..., :3, :3]
         # wxyz -> xyzw
