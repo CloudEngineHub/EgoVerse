@@ -24,6 +24,7 @@ from egomimic.utils.egomimicUtils import (
     EXTRINSICS,
     ee_pose_to_cam_frame,
     AlohaFK,
+    AlohaIK
 )
 
 from eve.robot_utils import move_grippers, move_arms  # requires EgoMimic-eve
@@ -74,7 +75,7 @@ class EveEval(Eval):
         debug=False,
         **kwargs
     ):
-        super().__init__(eval_path, **kwargs)
+        super().__init__(eval_path)
 
         log.info(f"Instantiating model from checkpoint<{ckpt_path}>")
         self.model = ModelWrapper.load_from_checkpoint(ckpt_path)
@@ -83,6 +84,8 @@ class EveEval(Eval):
         self.num_rollouts = num_rollouts
         self.debug = debug
         self.cartesian = True
+
+        self.ik = AlohaIK()
         
         self.plot_pred_freq = kwargs.get("plot_pred_freq", None)
         # if self.data_schematic is None:
@@ -134,7 +137,10 @@ class EveEval(Eval):
             data["left_wrist_img"] = torch.from_numpy(obs["images"]["cam_left_wrist"][None, :]).permute(0,3,1,2).to(torch.uint8) / 255.0
             data["joint_positions"] = qpos[..., :].reshape((1, 1, -1))
         data["embodiment"] = torch.tensor([self.embodiment_id], dtype=torch.int64)
-        data["actions_joints"] = torch.zeros_like(data["joint_positions"])
+        if not self.cartesian:
+            data["actions_joints"] = torch.zeros_like(data["joint_positions"])
+        else:
+            data["actions_cartesian"] = torch.zeros_like(data["joint_positions"])
         processed_batch[self.embodiment_id] = data
         for key, val in data.items():
             data[key] = val.to(self.device)
@@ -142,15 +148,15 @@ class EveEval(Eval):
     
         return processed_batch
     
-    def solve_ik(self, actions_cartesian, current_joint_positions, arm="right"):
+    def solve_ik(self, actions_cartesian, current_joint_positions, permutation=(0, 1, 2), arm="right"):
         """
         for each arm, right or left for extrinsics (works for batch and unbatched)
         """
-        breakpoint()
-        actions_cartesian = actions_cartesian
-        actions_gripper = actions_cartesian[..., -1]
+        # breakpoint()
+        actions_gripper = actions_cartesian[..., -1].unsqueeze(-1)
         actions_pos = actions_cartesian[..., :3]
         actions_ypr = actions_cartesian[..., 3:6]
+        actions_ypr = actions_ypr[..., list(permutation)]
         actions_rotmat = batched_euler_to_rot_matrix(actions_ypr)
         extrinsics = torch.from_numpy(self.model.model.camera_transforms.extrinsics[arm]).to(actions_cartesian.device).float()
         batch_shape = actions_cartesian.shape[:-1]
@@ -159,7 +165,8 @@ class EveEval(Eval):
         T[..., :3, 3] = actions_pos
         T[..., 3, 3] = 1.0
 
-        T_base = extrinsics @ T
+        T_base = T
+        # T_base = extrinsics @ T # Should we multiply from base frame to cam frame?
         
         # actions_rotmat = T_base[..., :3, :3]
         # wxyz -> xyzw
@@ -167,6 +174,10 @@ class EveEval(Eval):
         # actions_quat = matrix_to_quaternion(actions_rotmat)
         # actions_quat = torch.cat([actions_quat[..., 1:], actions_quat[..., :1]], dim=-1)
 
+        if T_base.dim() == 3:
+            T_base = T_base.unsqueeze(1) # add the T dim
+        if actions_gripper.dim() == 2:
+            actions_gripper = actions_gripper.unsqueeze(0)
         actions = []
         for b in range(T_base.shape[0]):
             actions.append(transformation_matrix_to_pose(T_base[b].cpu().numpy()))
@@ -175,12 +186,15 @@ class EveEval(Eval):
 
         actions_pos = actions[..., :3]
         actions_quat = actions[..., 3:]
-        target_joint_positions = self.ik.solve(target_pos=actions_pos, 
-                                               target_orientation=actions_quat, 
-                                               target_gripper=actions_gripper.cpu().numpy(),
-                                               current_joints=current_joint_positions)
-        
-        return target_joint_positions[None, :, :]
+        target_joint_positions_l = []
+        for i in range(batch_shape[0]):
+            target_joint_positions = self.ik.solve(target_pos=actions_pos[i], 
+                                                target_orientation=actions_quat[i], 
+                                                current_joints=current_joint_positions)
+            target_joint_positions_l.append(target_joint_positions)
+        actions_joint_positions = np.stack(target_joint_positions_l)
+        actions_joint_positions = np.concatenate((actions_joint_positions, actions_gripper.cpu().numpy()), axis=-1)
+        return actions_joint_positions
     
     def run_eval(self):
         self.device = torch.device("cuda")
@@ -208,7 +222,7 @@ class EveEval(Eval):
                         preds = self.model.model.forward_eval(batch)
                         
                         ac_key = self.model.model.ac_keys[self.embodiment_id]
-                        actions = preds[f"{self.embodiment_name}_{ac_key}"].cpu().numpy()
+                        actions = preds[f"{self.embodiment_name}_{ac_key}"]
                         if self.cartesian:
                             if self.arm == "right":
                                 qpos = torch.from_numpy(np.array(obs["qpos"])).float().to(self.device)
@@ -227,6 +241,8 @@ class EveEval(Eval):
                                 solved_left = self.solve_ik(actions_left, current_joint_left, "left")
                                 solved_right = self.solve_ik(actions_right, current_joint_right, "right")
                                 actions = np.concatenate([solved_left, solved_right], axis=-1)
+                        else:
+                            actions = actions.cpu().numpy()
 
                         if TEMPORAL_AGG:
                             TA.add_action(actions[0])
@@ -239,9 +255,18 @@ class EveEval(Eval):
                             im = data_dict['front_img_1'].squeeze(0).permute(1, 2, 0).cpu().numpy()
                             if im.dtype != np.uint8:
                                 im = (im * 255).astype(np.uint8)
-                            pred_type = "joints"
+                            pred_type = None
+                            if self.cartesian:
+                                pred_type = "joints"
+                            else:
+                                pred_type = "xyz" # haven't test debug in cartesian mode
                             color = "Purples"
-                            viz_actions = preds[f'{self.embodiment_name}_actions_joints'].squeeze(0).cpu().numpy()
+                            action_name = None
+                            if self.cartesian:
+                                action_name = 'actions_cartesian'
+                            else:
+                                action_name = 'actions_joints'
+                            viz_actions = preds[f'{self.embodiment_name}_{action_name}'].squeeze(0).cpu().numpy()
                             viz_actions = viz_actions[:100, :]
                             extrinsics = self.model.model.camera_transforms.extrinsics
                             intrinsics = self.model.model.camera_transforms.intrinsics

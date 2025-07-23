@@ -18,6 +18,8 @@ import pyarrow.parquet as pq
 import huggingface_hub
 import math
 import argparse
+import pybullet as p
+import pybullet_data
 
 STD_SCALE = 0.02
 
@@ -502,6 +504,13 @@ def transformation_matrix_to_pose(T):
     pose_array = np.concatenate((p, rotation_quaternion))
     return pose_array
 
+def transformation_matrix_to_6dof(T, euler_order='xyz'):
+    R = T[:3, :3]
+    p = T[:3, 3]
+    euler_angles = Rotation.from_matrix(R).as_euler(euler_order, degrees=False)  # 3D rotation
+    pose_array = np.concatenate((p, euler_angles))  # shape (6,)
+    return pose_array
+
 def interpolate_arr_euler(v: np.ndarray, seq_length: int) -> np.ndarray:
     """
     Interpolate 6DoF poses (translation + Euler angles in radians) along the time axis.
@@ -548,17 +557,60 @@ def interpolate_arr_euler(v: np.ndarray, seq_length: int) -> np.ndarray:
 class AlohaFK:
     def __init__(self):
         urdf_path = os.path.join(
-            os.path.dirname(egomimic.__file__), "resources/model.urdf"
+            os.path.dirname(egomimic.__file__), "resources/aloha_vx300s.urdf"
         )
         self.chain = pk.build_serial_chain_from_urdf(
-            open(urdf_path).read(), "vx300s/ee_gripper_link"
+            open(urdf_path).read(), "aloha_vx300s/ee_gripper_link"
         )
 
     def fk(self, qpos):
         if isinstance(qpos, np.ndarray):
             qpos = torch.from_numpy(qpos)
 
-        return self.chain.forward_kinematics(qpos, end_only=True).get_matrix()[:, :3, 3]
+        return self.chain.forward_kinematics(qpos, end_only=True).get_matrix()
+
+class AlohaIK:
+    def __init__(self):
+        self.urdf = os.path.join(
+            os.path.dirname(egomimic.__file__), "resources/aloha_vx300s.urdf"
+        )
+        self.robot_id = self.init_pybullet(urdf_path=self.urdf)
+        
+    def init_pybullet(self, urdf_path, GUI=False):
+        if GUI:
+            p.connect(p.GUI)
+        else:
+            p.connect(p.DIRECT)
+        p.setAdditionalSearchPath(pybullet_data.getDataPath())
+        robot_id = p.loadURDF(urdf_path, basePosition=[0, 0, 0], useFixedBase=True)
+        p.setGravity(0, 0, 9.81)
+        return robot_id
+    
+    def solve(self, target_pos, target_orientation, current_joints):
+        """
+        target_pos : xyz (T, 3)
+        target_orientation: xyzw quat (T, 4)
+        target_gripper: (T, 1)
+        current_joints: (7, )
+        """
+        T = target_pos.shape[0]
+        joint_actions = np.zeros([T, 6])
+        current_joints = current_joints[:6].tolist() + [0, 0.02239, -0.02239]
+        current_joints[0] += math.pi/2
+        for t in range(T):
+            joint_angle_t = p.calculateInverseKinematics(
+                self.robot_id,
+                endEffectorLinkIndex=12, 
+                targetPosition=target_pos[t], 
+                targetOrientation=target_orientation[t], 
+                currentPositions=current_joints,
+                maxNumIterations=100,
+                residualThreshold=0.001
+            )
+            joint_angle_t = np.array(list(joint_angle_t)[:6])
+            joint_angle_t[0] -= math.pi/2   
+            joint_actions[t] = joint_angle_t
+        return joint_actions
 
 
 def robo_to_aria_imstyle(im):

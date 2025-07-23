@@ -5,3 +5,4 @@ arm: "right"
 query_frequency: 50
 num_rollouts: 50
 debug: ${debug}
+cartesian: true
