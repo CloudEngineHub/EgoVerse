@@ -1,10 +1,11 @@
 defaults:
-  - model: hpt_cotrain
+  - model: hpt_cotrain_bimanual
   - paths: default
   - trainer: ddp
   - debug: null
   - logger: wandb
   - data: multi_data
+  - callbacks: null
   - override hydra/launcher: submitit
   - _self_
 
@@ -33,6 +34,7 @@ launch_params:
 
 data_schematic: # Dynamically fill in these shapes from the dataset
   _target_: rldb.utils.DataSchematic
+  norm_mode: minmax
   schematic_dict:
     # eve_bimanual:
     #   front_img_1: #batch key
@@ -89,6 +91,6 @@ data_schematic: # Dynamically fill in these shapes from the dataset
     # eve_bimanual:
     #   front_img_1
     # aria_bimanual:
-      # front_img_1
+    #   front_img_1
     aria_right_arm:
       front_img_1
