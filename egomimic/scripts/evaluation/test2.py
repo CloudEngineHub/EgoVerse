@@ -27,6 +27,7 @@ from egomimic.utils.egomimicUtils import *
 # from eve.real_env import make_real_env
 
 from scipy.spatial.transform import Rotation as R
+import math
 
 extrinsics = EXTRINSICS['ariaJun7']
 
@@ -168,12 +169,12 @@ def rollout_ee_pose_real(robot_id, env, left_ee_pose, right_ee_pose, joints=[0, 
 
     return target_qpos_list
 
-def rollout_ee_pose_offline(robot_id, env, left_ee_pose, right_ee_pose, qpos):
+def rollout_ee_pose_offline(robot_id, left_ee_pose, right_ee_pose, qpos_dataset):
     target_qpos_list = []
     qpos_list = []
     for t, (left_pose, right_pose) in enumerate(zip(left_ee_pose, right_ee_pose)):
 
-        qpos = np.array(qpos[t])
+        qpos = np.array(qpos_dataset[t])
 
         qpos_left = qpos[:6]
         qpos_right = qpos[7:13] # waist                  shoulder             elbow                   forearm_roll        wrist angle      wrist rotate 
@@ -254,7 +255,6 @@ def cam_cartesian_to_base_quat(cartesians_6dof, T_cam_base, euler_order='zyx', q
 
     pos_base = ee_pose_to_base_frame(pos_cam, T_cam_base)
     
-    breakpoint()
     R_cam_batch = R.from_euler(euler_order, ang_cam, degrees=False).as_matrix()   # (T,3,3)
     R_base_cam  = T_cam_base[..., :3, :3]                                              # (3,3)
     R_base_batch = np.einsum('ij,tjk->tik', R_base_cam, R_cam_batch)   
@@ -286,7 +286,7 @@ def main(args):
     # robot_startup(node)
 
     if args.debug:
-        episodes = [0, 1]
+        episodes = [0]
         dataset = RLDBDataset(repo_id=repo_id, root=root, local_files_only=True, episodes=episodes, mode="sample")
         joint_positions = torch.stack([
             sample["actions_joints"][0] for sample in dataset
@@ -311,7 +311,7 @@ def main(args):
         left_fk_ee_pose = cam_cartesian_to_base_quat(cartesians_left, extrinsics['left'])
         right_fk_ee_pose = cam_cartesian_to_base_quat(cartesians_right, extrinsics['right'])
 
-        joint_positions_reconstructed = rollout_ee_pose_offline(robot_id, left_fk_ee_pose, right_fk_ee_pose)
+        joint_positions_reconstructed = rollout_ee_pose_offline(robot_id, left_fk_ee_pose, right_fk_ee_pose, joint_positions)
         ###
         breakpoint()
         joint_positions_reconstructed = np.stack(joint_positions_reconstructed).astype(np.float32)
