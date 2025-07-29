@@ -169,71 +169,34 @@ def rollout_ee_pose_real(robot_id, env, left_ee_pose, right_ee_pose, joints=[0, 
 
     return target_qpos_list
 
-def rollout_ee_pose_offline(robot_id, left_ee_pose, right_ee_pose, qpos_dataset):
-    target_qpos_list = []
-    qpos_list = []
-    for t, (left_pose, right_pose) in enumerate(zip(left_ee_pose, right_ee_pose)):
+def rollout_ee_pose_arm(robot_id, ee_pose, qpos_dataset):
+  target_qpos_list = []
+  for t, pose in enumerate(ee_pose):
+    qpos = np.asarray(qpos_dataset[t])
 
-        qpos = np.array(qpos_dataset[t])
+    qpos_arm = qpos[:6].tolist() + [0, 0.02239, -0.02239]
+    qpos_arm[0] += math.pi / 2
 
-        qpos_left = qpos[:6]
-        qpos_right = qpos[7:13] # waist                  shoulder             elbow                   forearm_roll        wrist angle      wrist rotate 
+    target_pos = pose[:3]
+    target_orientation = pose[3:]
 
-        qpos_left = qpos_left.tolist() + [0, 0.02239, -0.02239]
-        qpos_right = qpos_right.tolist() + [0, 0.02239, -0.02239] # ee_gripper   left finger     right finger
-        left_current_joint_positions = qpos_left
-        right_current_joint_positions = qpos_right
-        # print(f"CURRENT: {current_joint_positions}")
+    joint_angles = p.calculateInverseKinematics(
+      robot_id,
+      endEffectorLinkIndex=12,
+      targetPosition=target_pos,
+      targetOrientation=target_orientation,
+      currentPositions=qpos_arm,
+      maxNumIterations=100,
+      residualThreshold=0.001,
+    )
 
-        left_current_joint_positions[0] += math.pi/2
-        right_current_joint_positions[0] += math.pi/2
+    joint_angles = list(joint_angles)
+    target_qpos = np.asarray(joint_angles[:7])
+    target_qpos[0] -= math.pi / 2
 
-        # target_pos = [pose[2], pose[0], pose[1]]
-        left_target_pos = left_pose[:3]
-        left_target_orientation = left_pose[3:]
-        t0 = time.time()
-        left_joint_angles = p.calculateInverseKinematics(
-            robot_id, 
-            endEffectorLinkIndex=12, 
-            targetPosition=left_target_pos, 
-            targetOrientation=left_target_orientation, 
-            currentPositions=left_current_joint_positions,
-            maxNumIterations=100,
-            residualThreshold=0.001
-        )
-        right_target_pos = right_pose[:3]
-        right_target_orientation = right_pose[3:]
-        right_joint_angles = p.calculateInverseKinematics(
-            robot_id, 
-            endEffectorLinkIndex=12, 
-            targetPosition=right_target_pos, 
-            targetOrientation=right_target_orientation, 
-            currentPositions=right_current_joint_positions,
-            maxNumIterations=100,
-            residualThreshold=0.001
-        )
-        t1 = time.time() - t0
-        print(f"Time per calcuation: {t1}")
-        left_joint_angles = list(left_joint_angles)
-        right_joint_angles = list(right_joint_angles)
+    target_qpos_list.append(target_qpos)
 
-        left_target_qpos = np.array(left_joint_angles[:7])
-        right_target_qpos = np.array(right_joint_angles[:7])
-        left_target_qpos[0] -= math.pi/2
-        right_target_qpos[0] -= math.pi/2
-        # print(f"TARGET: {target_qpos}")
-
-        target_qpos = np.concatenate([left_target_qpos, right_target_qpos])
-
-        # ts = env.step(target_qpos)
-
-        qpos_list.append(qpos)
-        target_qpos_list.append(target_qpos)
-
-        # time.sleep(0.02)
-
-
-    return target_qpos_list
+  return target_qpos_list
 
 
 def ee_pose_to_base_frame(ee_pose_cam, T_cam_base):
