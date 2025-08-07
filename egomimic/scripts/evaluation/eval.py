@@ -13,6 +13,7 @@ class Eval:
         class_path = os.path.join(eval_dir, self.__class__.__name__)
         timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         self.eval_path = os.path.join(class_path, timestamp)
+        os.makedirs(self.eval_path, exist_ok=True)
 
         self.datamodule = None
         self.data_schematic = None

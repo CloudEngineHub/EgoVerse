@@ -35,24 +35,27 @@ def eval(cfg: DictConfig):
             log.info(f"Using multirun validation datasets")
             eval_datasets = cfg.multirun_cfg.data.valid_datasets
             datasets_target = cfg.multirun_cfg.data._target_
+            datasets_instance = cfg.multirun_cfg.data
         elif "eval_datasets" in cfg.datasets and cfg.datasets.eval_datasets is not None:
             log.info(f"Using specified yaml evaluation datasets")
             eval_datasets = cfg.datasets.data.eval_datasets
             datasets_target = cfg.datasets.data._target_
+            datasets_instance = cfg.datasets.data
         elif "valid_datasets" in cfg.datasets and cfg.datasets.valid_datasets is not None:
             log.ingo(f"Using specified yaml validation datasets")
             eval_datasets = cfg.datasets.data.valid_datasets
             datasets_target = cfg.datasets.data._target_
+            datasets_instance = cfg.datasets.data
         
         eval_datasets_dict = {}
         for dataset_name in eval_datasets:
-            eval_datasets[dataset_name] = hydra.utils.instantiate(
-                eval_datasets_dict[dataset_name]
+            eval_datasets_dict[dataset_name] = hydra.utils.instantiate(
+               eval_datasets[dataset_name]
             )
     
         log.info(f"Instantiating datamodule <{datasets_target}>")
         assert "MultiDataModuleWrapper" in datasets_target, "cfg.data._target_ must be 'MultiDataModuleWrapper'"
-        datamodule: LightningDataModule = hydra.utils.instantiate(cfg.data, valid_datasets=eval_datasets_dict)
+        datamodule: LightningDataModule = hydra.utils.instantiate(datasets_instance, valid_datasets=eval_datasets_dict)
     
         for dataset_name, dataset in datamodule.valid_datasets.items():
             log.info(f"Inferring shapes for dataset <{dataset_name}>")
@@ -64,7 +67,7 @@ def eval(cfg: DictConfig):
     eval.data_schematic = data_schematic # unsure if this is necessary to pass in
 
     log.info("Starting evaluation!")
-    eval.run_eval_offline()
+    eval.run_eval()
 
 @hydra.main(version_base="1.3", config_path="./hydra_configs", config_name="eval.yaml")
 def main(cfg: DictConfig) -> Optional[float]:

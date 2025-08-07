@@ -50,6 +50,7 @@ class ModelWrapper(LightningModule):
     def training_step(self, batch, batch_idx):
         self.train()
         loss_dicts = []
+        breakpoint()
         batch = self.model.process_batch_for_training(batch)
         predictions = self.model.forward_training(batch)
         losses = self.model.compute_losses(predictions, batch)

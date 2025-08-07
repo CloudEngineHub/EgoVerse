@@ -67,16 +67,13 @@ from egomimic.scripts.evaluation.utils import TemporalAgg, save_image, transform
 from egomimic.utils.pylogger import RankedLogger
 log = RankedLogger(__name__, rank_zero_only=True)
 
-class EveEval(Eval):
+class VideoEval(Eval):
     def __init__(
         self,
         eval_path,
         ckpt_path,
         embodiment_name,
         display_arm,
-        query_frequency,
-        num_rollouts,
-        debug=False,
         **kwargs
     ):
         super().__init__(eval_path)
@@ -84,9 +81,6 @@ class EveEval(Eval):
         log.info(f"Instantiating model from checkpoint<{ckpt_path}>")
         self.model = ModelWrapper.load_from_checkpoint(ckpt_path)
         self.embodiment_name = embodiment_name
-        self.query_frequency = query_frequency
-        self.num_rollouts = num_rollouts
-        self.debug = debug
         self.cartesian = True
         self.arm = display_arm
 
@@ -168,119 +162,10 @@ class EveEval(Eval):
         joint_positions_reconstructed = np.stack(joint_positions_reconstructed).astype(np.float32)
         joint_positions_reconstructed = np.concatenate([joint_positions_reconstructed, gripper], axis=-1)
         return joint_positions_reconstructed
-    
+        
     def run_eval(self):
         self.device = torch.device("cuda")
         self.model.to(self.device)
-        aloha_fk = AlohaFK()
-        qpos_t, actions_t = [], []
-
-        if TEMPORAL_AGG:
-            TA = TemporalAgg()
-
-        ts = self.env.reset()
-        t0 = time.time()
-
-        for rollout_id in range(self.num_rollouts):
-            with torch.inference_mode():
-                rollout_images = []
-                for t in range(1000):
-                    time.sleep(max(0, DT*2 - (time.time() - t0)))
-                    t0 = time.time()
-                    obs = ts.observation
-                    inference_t = time.time()
-
-                    if t % self.query_frequency == 0:
-                        batch = self.process_batch_for_eval(obs)
-                        preds = self.model.model.forward_eval(batch)
-                        
-                        ac_key = self.model.model.ac_keys[self.embodiment_id]
-                        actions = preds[f"{self.embodiment_name}_{ac_key}"]
-                        if self.cartesian:
-                            if self.arm == "right":
-                                qpos = torch.from_numpy(np.array(obs["qpos"])).float().to(self.device)
-                                current_joint_positions = qpos[7:]
-                                actions = self.solve_ik(actions, current_joint_positions, "right")
-                            elif self.arm == "left":
-                                qpos = torch.from_numpy(np.array(obs["qpos"])).float().to(self.device)
-                                current_joint_positions = qpos[:7]
-                                actions = self.solve_ik(actions, current_joint_positions, "left")
-                            else:
-                                qpos = torch.from_numpy(np.array(obs["qpos"])).float().to(self.device)
-                                actions_left = actions[..., :7]
-                                actions_right = actions[..., 7:]
-                                current_joint_left = qpos[:7]
-                                current_joint_right = qpos[7:]
-                                solved_left = self.solve_ik(actions_left, current_joint_left, "left")
-                                solved_right = self.solve_ik(actions_right, current_joint_right, "right")
-                                actions = np.concatenate([solved_left, solved_right], axis=-1)
-                        else:
-                            actions = actions.cpu().numpy()
-
-                        if TEMPORAL_AGG:
-                            TA.add_action(actions[0])
-                            actions = TA.smoothed_action()[None, :]
-
-                        print(f"Inference time: {time.time() - inference_t}")
-                        if self.debug:
-                            breakpoint()
-                            data_dict = batch[self.embodiment_id]
-                            im = data_dict['front_img_1'].squeeze(0).permute(1, 2, 0).cpu().numpy()
-                            if im.dtype != np.uint8:
-                                im = (im * 255).astype(np.uint8)
-                            pred_type = None
-                            if self.cartesian:
-                                pred_type = "joints"
-                            else:
-                                pred_type = "xyz" # haven't test debug in cartesian mode
-                            color = "Purples"
-                            action_name = None
-                            if self.cartesian:
-                                action_name = 'actions_cartesian'
-                            else:
-                                action_name = 'actions_joints'
-                            viz_actions = preds[f'{self.embodiment_name}_{action_name}'].squeeze(0).cpu().numpy()
-                            viz_actions = viz_actions[:100, :]
-                            extrinsics = self.model.model.camera_transforms.extrinsics
-                            intrinsics = self.model.model.camera_transforms.intrinsics
-                            drawn_im = draw_actions(im, pred_type, color, viz_actions, extrinsics, intrinsics, self.arm)
-                            save_image(drawn_im, os.path.join(self.eval_path, f'image_{t}.png'))
-
-                    raw_action = actions[:, t % self.query_frequency]
-                    raw_action = raw_action[0]
-                    target_qpos = raw_action
-
-                    if self.arm == "right":
-                        target_qpos = np.concatenate([np.zeros(7), target_qpos])
-                    
-                    ts = self.env.step(target_qpos)
-                    qpos_t.append(ts.observation["qpos"])
-                    actions_t.append(target_qpos)
-
-            log.info("Moving Robot")
-
-            if self.arm == "right":
-                move_grippers(
-                [self.env.follower_bot_right], [FOLLOWER_GRIPPER_JOINT_OPEN], moving_time=0.5
-                )  # open
-                move_arms([self.env.follower_bot_right], [START_ARM_POSE[:6]], moving_time=1.0)
-            elif self.arm == "left":
-                move_grippers(
-                [self.env.follower_bot_left], [FOLLOWER_GRIPPER_JOINT_OPEN], moving_time=0.5
-                ) 
-                move_arms([self.env.follower_bot_left], [START_ARM_POSE[:6]], moving_time=1.0)
-            elif self.arm == "both":
-                move_grippers(
-                    [self.env.follower_bot_left, self.env.follower_bot_right], [FOLLOWER_GRIPPER_JOINT_OPEN]*2, moving_time=0.5
-                )  # open
-                move_arms([self.env.follower_bot_left, self.env.follower_bot_right], [START_ARM_POSE[:6]]*2, moving_time=1.0)
-        return
-        
-    def run_eval_video(self):
-        self.device = torch.device("cuda")
-        self.model.to(self.device)
-        aloha_fk = AlohaFK()
-        qpos_t, actions_t = [], []
         start_time = time.time()
         if TEMPORAL_AGG:
             TA = TemporalAgg()
@@ -288,19 +173,11 @@ class EveEval(Eval):
         trainloader = self.datamodule.val_dataloader()
         for i, batch in enumerate(trainloader):
             with torch.inference_mode():
-                # batch = self.process_batch_for_eval(obs)
                 proc_batch = self.model.model.process_batch_for_training(batch[0])
                 self.batch_to_device(proc_batch, self.device)
                 preds = self.model.model.forward_eval(proc_batch)
                 ac_key = self.model.model.ac_keys[self.embodiment_id]
                 actions = preds[f"{self.embodiment_name}_{ac_key}"]
-                # if not self.cartesian:
-                #     if actions.shape[-1] == 7:
-                #         actions = self.aloha_fk.fk(actions)
-                #     else:
-                #         left_actions = self.aloha.fk(actions[..., :6])
-                #         right_actions = self.aloha.fk(actions[..., 7:13])
-                #         actions = torch.cat([left_actions, actions[..., [6]], right_actions, actions[..., [13]]], dim=-1)
                 actions = actions.cpu().numpy()
 
                 if TEMPORAL_AGG:
@@ -325,7 +202,6 @@ class EveEval(Eval):
                     drawn_im = draw_actions(im, pred_type, color, viz_actions, extrinsics, intrinsics, self.arm)
                     imgs.append(torch.from_numpy(drawn_im))
         imgs = torch.stack(imgs)
-        breakpoint()
         video_path = os.path.join(self.eval_path, "eval_video.mp4")
         tvio.write_video(video_path, imgs, fps=30, video_codec="h264")
         end_time = time.time()
