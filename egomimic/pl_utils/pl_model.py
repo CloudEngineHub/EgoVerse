@@ -67,7 +67,6 @@ class ModelWrapper(LightningModule):
         info["policy_grad_norms"] = grad_norm.item()
         info["losses"] = TensorUtils.detach(losses)
         self.step_log_all_train.append(self.model.log_info(info))
-
         return losses["action_loss"]
 
     @rank_zero_only

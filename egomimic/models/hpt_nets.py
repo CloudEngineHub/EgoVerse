@@ -579,12 +579,18 @@ class DinoV3(PolicyStem):
             self.proj = nn.Linear(self.model.config.hidden_sizes[-1], output_dim)
         else:
             self.proj = nn.Linear(self.model.config.hidden_size, output_dim)
+            
         if self.freeze_backbone:
             for p in self.model.parameters():
                 p.requires_grad = False
             
             self.model.eval()
         else:
+            # fix for ViT DinoV3 to prevent unused params error
+            for name, p in self.model.named_parameters():
+                if "mask_token" in name:
+                    p.requires_grad = False
+
             self.model.train()
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
