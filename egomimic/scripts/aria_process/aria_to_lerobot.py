@@ -80,6 +80,19 @@ ROTATION_MATRIX = np.array([[0, 1, 0],
 #         actions[..., 4] *= -1  # Multiply y by -1 for second set
 #     return actions
 
+def compute_end_effector_relative_pose(pose_t: np.ndarray, pose_t_k: np.ndarray) -> np.ndarray:
+    """
+    Convert two absolute poses (in the SAME reference frame) into a relative pose
+    expressed in the palm/EEF local frame at time t.
+
+    pose_t, pose_t_k: (6,) arrays [x,y,z, yaw, pitch, roll]
+    returns: (6,) [dx, dy, dz, d_yaw, d_pitch, d_roll] in EEF(t) frame
+    """
+    T_t  = pose_to_transform(pose_t)     # 4x4
+    T_k  = pose_to_transform(pose_t_k)   # 4x4
+    Trel = np.linalg.inv(T_t) @ T_k
+    return transform_to_pose(Trel)
+
 def compute_camera_relative_pose(pose, cam_t_inv, cam_offset):
     """
     pose (6,) : np.array
@@ -276,6 +289,8 @@ class AriaVRSExtractor:
         episode_feats["observations"][f"state.{state_key}"] = pose
         episode_feats["observations"][f"images.{camera_key}"] = images
         episode_feats["actions_cartesian"] = actions
+        breakpoint()
+        episode_feats["actions_palm"] = get_action_palm(actions, arm)
 
         num_timesteps = episode_feats["observations"][f"state.ee_pose"].shape[0]
         if arm == "right":
@@ -289,6 +304,31 @@ class AriaVRSExtractor:
 
         return episode_feats
 
+    @staticmethod
+    def get_action_palm(actions_cartesian, arm):
+        """
+        Convert absolute cam_t-frame actions into palm-relative actions.
+        actions_cartesian: [N, H, D], D=6 (single arm) or 12 (both arms L||R).
+        Returns: [N, H, D] palm-relative actions.
+        """
+        actions_palm = []
+        for t, action in enumerate(actions_cartesian):
+            action_palm = np.empty_like(action, dtype=np.float64)
+            if arm == "both":
+                pose_t_l = action[0, :6]
+                pose_t_r = action[0, 6:]
+                for k in range(action.shape[0]):
+                    action_palm[k, :6] = compute_end_effector_relative_pose(pose_t_l, action[k, :6])
+                    action_palm[k, 6:] = compute_end_effector_relative_pose(pose_t_r, action[k, 6:])
+            else:
+                pose_t = action[0, :6]
+                for k in range(action.shape[0]):
+                    action_palm[k, :6] = compute_end_effector_relative_pose(pose_t, action[k, :6])
+            actions_palm.append(np.array(action_palm))
+        
+        actions_palm = np.array(actions_palm)
+        return actions_palm
+            
     @staticmethod
     def get_action(pose : np.array, mps_reader, vrs_reader, stream_timestamps_ns : dict, transform : np.array, arm : str, HORIZON=HORIZON_DEFAULT, STEP=STEP_DEFAULT, prestack=False, no_rot=False):
         """
