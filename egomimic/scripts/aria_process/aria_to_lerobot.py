@@ -289,8 +289,7 @@ class AriaVRSExtractor:
         episode_feats["observations"][f"state.{state_key}"] = pose
         episode_feats["observations"][f"images.{camera_key}"] = images
         episode_feats["actions_cartesian"] = actions
-        breakpoint()
-        episode_feats["actions_palm"] = get_action_palm(actions, arm)
+        episode_feats["actions_palm"] = AriaVRSExtractor.get_action_palm(actions, arm)
 
         num_timesteps = episode_feats["observations"][f"state.ee_pose"].shape[0]
         if arm == "right":
