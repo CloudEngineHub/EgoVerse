@@ -1,9 +1,9 @@
 defaults:
   - model: hpt_cotrain_flow_transformer
   - paths: default
-  - trainer: debug
+  - trainer: ddp
   - debug: null
-  - logger: debug
+  - logger: wandb
   - data: multi_data
   - callbacks: checkpoints
   - override hydra/launcher: submitit
