@@ -4,3 +4,6 @@
 [submodule "external/oculus_reader"]
 	path = external/oculus_reader
 	url = git@github.com:rail-berkeley/oculus_reader.git
+[submodule "external/arx5-sdk"]
+	path = external/arx5-sdk
+	url = git@github.com:real-stanford/arx5-sdk.git
