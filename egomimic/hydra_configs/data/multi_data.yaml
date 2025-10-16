@@ -1,28 +1,121 @@
 _target_: egomimic.pl_utils.pl_data_utils.MultiDataModuleWrapper
 train_datasets:
+  # dataset1:
+  #   _target_: rldb.utils.MultiRLDBDataset
+  #   datasets:
+  #     eth-scene1-bluetoy-purplebowl-1_processed:
+  #       _target_: rldb.utils.RLDBDataset
+  #       repo_id: "eth-scene1-bluetoy-purplebowl-1_processed"
+  #       root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/eth-scene1-bluetoy-purplebowl-1_processed"
+  #       local_files_only: true
+  #       mode: "train"
+  #     eth-scene1-browntoy-purplebowl-1_processed:
+  #       _target_: rldb.utils.RLDBDataset
+  #       repo_id: "eth-scene1-browntoy-purplebowl-1_processed"
+  #       root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/eth-scene1-browntoy-purplebowl-1_processed"
+  #       local_files_only: true
+  #       mode: "train"
+  #     eth-scene1-colorstoy-greybowl-1_processed:
+  #       _target_: rldb.utils.RLDBDataset
+  #       repo_id: "eth-scene1-colorstoy-greybowl-1_processed"
+  #       root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/eth-scene1-colorstoy-greybowl-1_processed"
+  #       local_files_only: true
+  #       mode: "train"
+  #     eth-scene1-greentoy-purplebowl-1_processed:
+  #       _target_: rldb.utils.RLDBDataset
+  #       repo_id: "eth-scene1-greentoy-purplebowl-1_processed"
+  #       root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/eth-scene1-greentoy-purplebowl-1_processed"
+  #       local_files_only: true
+  #       mode: "train"
+  #     eth-scene1-yellowtoy-greybowl-1_processed:
+  #       _target_: rldb.utils.RLDBDataset
+  #       repo_id: "eth-scene1-yellowtoy-greybowl-1_processed"
+  #       root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/eth-scene1-yellowtoy-greybowl-1_processed"
+  #       local_files_only: true
+  #       mode: "train"
+  #     eth-scene1-yellowtoy-whitebowl-1_processed:
+  #       _target_: rldb.utils.RLDBDataset
+  #       repo_id: "eth-scene1-yellowtoy-whitebowl-1_processed"
+  #       root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/eth-scene1-yellowtoy-whitebowl-1_processed"
+  #       local_files_only: true
+  #       mode: "train"
+  #   embodiment: "aria_right_arm"
+
+
+
+  # dataset1:
+  #   _target_: rldb.utils.RLDBDataset
+  #   # Uncomment or adjust paths as needed:
+  #   # parquet_path: /coc/flash9/skareer6/Projects/RLDB/rldb/export/oboo_robot
+  #   repo_id: "human_blue_toy_purple_bowl"
+  #   root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/eth-scene1-bluetoy-purplebowl-1_processed"
+  #   local_files_only: true
+  #   mode: "train"
+
   dataset1:
     _target_: rldb.utils.RLDBDataset
-    # Uncomment or adjust paths as needed:
-    # parquet_path: /coc/flash9/skareer6/Projects/RLDB/rldb/export/oboo_robot
-    repo_id: "put_cup_on_saucer_eth_scene_1_recording_1_processed"
-    root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/cupOnSAUZZ/put_cup_on_saucer_eth_scene_1_recording_1_processed"
-    local_files_only: true
-    mode: "train"
-
-  dataset2:
-    _target_: rldb.utils.RLDBDataset
-    # Uncomment or adjust paths as needed:
-    # parquet_path: /coc/flash9/skareer6/Projects/RLDB/rldb/export/oboo_robot
-    repo_id: "cup_lerobot_DEBUG"
-    root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/cupOnSAUZZ/cup_lerobot"
+    repo_id: "objCont"
+    # root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/objectInContainer"
+    # root: "${oc.env:TMPDIR}/cup_camframe" # remember to just directly use the folder
+    root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/cupOnSAUZZ/release/cup_on_saucer_eeframe/cup_lerobot"
     local_files_only: true
     mode: "train"
 
 valid_datasets:
+  # dataset1:
+  #   _target_: rldb.utils.MultiRLDBDataset
+  #   datasets:
+  #     eth-scene1-bluetoy-purplebowl-1_processed:
+  #       _target_: rldb.utils.RLDBDataset
+  #       repo_id: "eth-scene1-bluetoy-purplebowl-1_processed"
+  #       root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/eth-scene1-bluetoy-purplebowl-1_processed"
+  #       local_files_only: true
+  #       mode: "valid"
+  #     eth-scene1-browntoy-purplebowl-1_processed:
+  #       _target_: rldb.utils.RLDBDataset
+  #       repo_id: "eth-scene1-browntoy-purplebowl-1_processed"
+  #       root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/eth-scene1-browntoy-purplebowl-1_processed"
+  #       local_files_only: true
+  #       mode: "valid"
+  #     eth-scene1-colorstoy-greybowl-1_processed:
+  #       _target_: rldb.utils.RLDBDataset
+  #       repo_id: "eth-scene1-colorstoy-greybowl-1_processed"
+  #       root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/eth-scene1-colorstoy-greybowl-1_processed"
+  #       local_files_only: true
+  #       mode: "valid"
+  #     eth-scene1-greentoy-purplebowl-1_processed:
+  #       _target_: rldb.utils.RLDBDataset
+  #       repo_id: "eth-scene1-greentoy-purplebowl-1_processed"
+  #       root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/eth-scene1-greentoy-purplebowl-1_processed"
+  #       local_files_only: true
+  #       mode: "valid"
+  #     eth-scene1-yellowtoy-greybowl-1_processed:
+  #       _target_: rldb.utils.RLDBDataset
+  #       repo_id: "eth-scene1-yellowtoy-greybowl-1_processed"
+  #       root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/eth-scene1-yellowtoy-greybowl-1_processed"
+  #       local_files_only: true
+  #       mode: "valid"
+  #     eth-scene1-yellowtoy-whitebowl-1_processed:
+  #       _target_: rldb.utils.RLDBDataset
+  #       repo_id: "eth-scene1-yellowtoy-whitebowl-1_processed"
+  #       root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/eth-scene1-yellowtoy-whitebowl-1_processed"
+  #       local_files_only: true
+  #       mode: "valid"
+  #   embodiment: "aria_right_arm"
+
+  # dataset1:
+  #   _target_: rldb.utils.RLDBDataset
+  #   repo_id: "human_blue_toy_purple_bowl"
+  #   root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/eth-scene1-bluetoy-purplebowl-1_processed"
+  #   local_files_only: true
+  #   mode: "valid"
+
   dataset1:
     _target_: rldb.utils.RLDBDataset
-    repo_id: "put_cup_on_saucer_eth_scene_3_recording_1_processed"
-    root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/cupOnSAUZZ/put_cup_on_saucer_eth_scene_3_recording_1_processed"
+    repo_id: "objCont"
+    # root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/objectInContainer"
+    # root: "${oc.env:TMPDIR}/cup_camframe"
+    root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/cupOnSAUZZ/release/cup_on_saucer_eeframe/cup_lerobot"
     local_files_only: true
     mode: "valid"
 
@@ -30,11 +123,18 @@ train_dataloader_params:
   dataset1:
     batch_size: 32
     num_workers: 10
-  dataset2:
-    batch_size: 32
-    num_workers: 10
+    prefetch_factor: 2  # Number of batches loaded in advance by each worker
+  # dataset2:
+  #   batch_size: 32
+  #   num_workers: 10
+  #   prefetch_factor: 2
 
 valid_dataloader_params:
   dataset1:
     batch_size: 32
     num_workers: 10
+    prefetch_factor: 2  # Number of batches loaded in advance by each worker
+  # dataset2:
+  #   batch_size: 32
+  #   num_workers: 10
+  #   prefetch_factor: 2

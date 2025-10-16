@@ -7,5 +7,5 @@ model_checkpoint:
   filename: "epoch_{epoch}"
   save_last: true
   save_top_k: -1
-  every_n_epochs: 200
+  every_n_epochs: 100
   every_n_train_steps: null

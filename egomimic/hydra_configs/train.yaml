@@ -9,8 +9,8 @@ defaults:
   - override hydra/launcher: submitit
   - _self_
 
-name: cotrain
-description: cotrain_cup
+name: cup_eeframe
+description: cup_eeframe
 ckpt_path: null
 train: true
 eval: false
@@ -36,19 +36,19 @@ data_schematic: # Dynamically fill in these shapes from the dataset
   _target_: rldb.utils.DataSchematic
   norm_mode: quantile
   schematic_dict:
-    aria_bimanual:
-      front_img_1:
-        key_type: camera_keys
-        lerobot_key: observations.images.front_img_1
-      ee_pose:
-        key_type: proprio_keys
-        lerobot_key: observations.state.ee_pose
-      actions_cartesian:
-        key_type: action_keys
-        lerobot_key: actions_cartesian
-      embodiment:
-        key_type: metadata_keys
-        lerobot_key: metadata.embodiment
+    # aria_right_arm:
+    #   front_img_1:
+    #     key_type: camera_keys
+    #     lerobot_key: observations.images.front_img_1
+    #   ee_pose:
+    #     key_type: proprio_keys
+    #     lerobot_key: observations.state.ee_pose
+    #   actions_cartesian:
+    #     key_type: action_keys
+    #     lerobot_key: actions_cartesian
+    #   embodiment:
+    #     key_type: metadata_keys
+    #     lerobot_key: metadata.embodiment
     eve_bimanual:
       front_img_1:
         key_type: camera_keys
@@ -56,6 +56,9 @@ data_schematic: # Dynamically fill in these shapes from the dataset
       ee_pose:
         key_type: proprio_keys
         lerobot_key: observations.state.ee_pose
+      cartesian_arm:
+        key_type: proprio_keys
+        lerobot_key: observations.state.cartesian_arm
       joint_positions:
         key_type: proprio_keys
         lerobot_key: observations.state.joints_hand
@@ -69,7 +72,7 @@ data_schematic: # Dynamically fill in these shapes from the dataset
         key_type: metadata_keys
         lerobot_key: metadata.embodiment
   viz_img_key: 
-    aria_bimanual:
-      front_img_1
+    # aria_right_arm:
+    #   front_img_1
     eve_bimanual:
       front_img_1
