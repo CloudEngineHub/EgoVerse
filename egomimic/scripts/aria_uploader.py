@@ -12,7 +12,7 @@ class VRSUpload(UploadTemplate):
         Initialize VRS uploader for ARIA embodiment.
         Directory will be prompted from user during file discovery.
         """
-        super().__init__("ARIA_TEST")
+        super().__init__("aria")
         self.datatype = ".vrs"
     
     def verifylocal(self):
@@ -41,43 +41,22 @@ class VRSUpload(UploadTemplate):
         
         print(f"\nDiscovered {len(self.file_paths)} valid VRS file pairs.")
 
-    async def run(self):
+    def run(self):
         """
-        Process and upload all discovered VRS file pairs.
-        Collects metadata sequentially but uploads concurrently in background.
+        Process and upload all discovered HDF5 files.
+        First collects all metadata from user, then uploads everything at once.
         """
-        background_tasks = []
-        
-        for vrs_file, json_file in self.file_paths:
-            # Collect metadata (requires user input)
-            metadict, stamped_name = self.prompt_user(vrs_file)
 
-            print(f"Starting background upload for {vrs_file.name}...")
-            
-            # Create upload coroutines for all files
-            upload_coroutines = [
-                self.upload_metadata(stamped_name, metadict),
-                self.upload_file(vrs_file, stamped_name + vrs_file.suffix),
-                self.upload_file(json_file, stamped_name + json_file.suffix)
-            ]
-            
-            # Start upload task in background (non-blocking)
-            async def upload_and_report(file_name, tasks):
-                try:
-                    await asyncio.gather(*tasks)
-                    print(f"Completed upload for {file_name}")
-                except Exception as e:
-                    print(f"Failed to upload {file_name}: {e}")
-                    raise
-            
-            task = asyncio.create_task(upload_and_report(vrs_file.name, upload_coroutines))
-            background_tasks.append(task)
-        
-        # Wait for all background uploads to complete
-        if background_tasks:
-            print(f"\nWaiting for {len(background_tasks)} background upload sets to complete...")
-            await asyncio.gather(*background_tasks)
-            print("All uploads completed!")
+        file_metadata_pairs = []
+
+        for vrs_file, json_file in self.file_paths:
+            metadict, stamped_name = self.prompt_user(vrs_file)
+            file_metadata_pairs.append((vrs_file, json_file, metadict, stamped_name))
+
+        for vrs_file, json_file, metadict, stamped_name in file_metadata_pairs:
+            self.upload_metadata(stamped_name, metadict)
+            self.upload_file(vrs_file, stamped_name + vrs_file.suffix)
+            self.upload_file(json_file, stamped_name + json_file.suffix)
     
 def main():
     """Main entry point for VRS uploader."""
@@ -89,14 +68,8 @@ def main():
     
     # Verify files
     uploader.verifylocal()
-    
-    if not uploader.file_paths:
-        print("No VRS file pairs found to upload.")
-        return
-    
-    # Run the async upload process
-    asyncio.run(uploader.run())
 
+    uploader.run()
 
 if __name__ == "__main__":
     main()

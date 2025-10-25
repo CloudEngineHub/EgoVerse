@@ -12,7 +12,7 @@ class HDF5Upload(UploadTemplate):
         Initialize HDF5 uploader for EVE embodiment.
         Directory will be prompted from user during file discovery.
         """
-        super().__init__("EVE_TEST")
+        super().__init__("eve")
         self.datatype = ".hdf5"
     
     def verifylocal(self):
@@ -36,43 +36,22 @@ class HDF5Upload(UploadTemplate):
         
         print(f"\nDiscovered {len(self.file_paths)} HDF5 files to process.")
 
-    async def run(self):
+    def run(self):
         """
         Process and upload all discovered HDF5 files.
-        Collects metadata sequentially but uploads concurrently in background.
+        First collects all metadata from user, then uploads everything at once.
         """
-        background_tasks = []
+        
+        file_metadata_pairs = []
         
         for hdf5_file in self.file_paths:
-            # Collect metadata (requires user input)
             metadict, stamped_name = self.prompt_user(hdf5_file)
-            
-            print(f"Starting background upload for {hdf5_file.name}...")
-
-            # Create upload coroutines
-            upload_coroutines = [
-                self.upload_metadata(stamped_name, metadict),
-                self.upload_file(hdf5_file, stamped_name + hdf5_file.suffix),
-            ]
-            
-            # Start upload task in background (non-blocking)
-            async def upload_and_report(file_name, tasks):
-                try:
-                    await asyncio.gather(*tasks)
-                    print(f"Completed upload for {file_name}")
-                except Exception as e:
-                    print(f"Failed to upload {file_name}: {e}")
-                    raise
-            
-            task = asyncio.create_task(upload_and_report(hdf5_file.name, upload_coroutines))
-            background_tasks.append(task)
+            file_metadata_pairs.append((hdf5_file, metadict, stamped_name))
         
-        # Wait for all background uploads to complete
-        if background_tasks:
-            print(f"\nWaiting for {len(background_tasks)} background uploads to complete...")
-            await asyncio.gather(*background_tasks)
-            print("All uploads completed!")
-    
+        for hdf5_file, metadict, stamped_name in file_metadata_pairs:
+            self.upload_metadata(stamped_name, metadict)
+            self.upload_file(hdf5_file, stamped_name + hdf5_file.suffix)
+
 def main():
     """Main entry point for HDF5 uploader."""
     # Initialize uploader
@@ -83,13 +62,8 @@ def main():
     
     # Verify files
     uploader.verifylocal()
-    
-    if not uploader.file_paths:
-        print("No HDF5 files found to upload.")
-        return
-    
-    # Run the async upload process
-    asyncio.run(uploader.run())
+
+    uploader.run()
 
 
 if __name__ == "__main__":

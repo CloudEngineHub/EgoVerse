@@ -18,13 +18,13 @@ class UploadTemplate(ABC):
         self.s3_base_prefix = f"raw_v2/{embodiment}/"
 
         # File system configuration - will be prompted from user
-        self.local_dir = None
         self.embodiment = embodiment
         self.directory_prompted = False
+        self.local_dir = None
         
         # Metadata configuration
         self.metadata_keys = [
-            "operator", "lab", "task", "scene", "description", "objects"
+            "operator", "lab", "task", "robot_name", "task_description", "scene", "objects"
         ]
         
         # Auto-fill functionality
@@ -69,37 +69,6 @@ class UploadTemplate(ABC):
             self.directory_prompted = True
             break
 
-    def _prompt_for_directory(self):
-        """
-        Internal method to get directory path string.
-        
-        Returns:
-            str: Path to the directory containing files
-        """
-        print("\n" + "=" * 60)
-        print("DATA DIRECTORY SELECTION")
-        print("=" * 60)
-        
-        while True:
-            directory = input("Enter the path to the directory containing files to upload: ").strip()
-            
-            if not directory:
-                print("Error: Directory path cannot be empty. Please enter a valid path.")
-                continue
-            
-            dir_path = Path(directory).expanduser().resolve()
-            
-            if not dir_path.exists():
-                print(f"Error: Directory '{dir_path}' does not exist. Please enter a valid path.")
-                continue
-            
-            if not dir_path.is_dir():
-                print(f"Error: '{dir_path}' is not a directory. Please enter a directory path.")
-                continue
-            
-            print(f"Selected directory: {dir_path}")
-            return str(dir_path)
-
     @abstractmethod
     def verifylocal(self):
         pass
@@ -122,8 +91,7 @@ class UploadTemplate(ABC):
         
         # Prompt for directory on first call if not provided during initialization
         if not self.directory_prompted and self.local_dir is None:
-            self.local_dir = Path(self._prompt_for_directory())
-            self.directory_prompted = True
+            self.set_directory()
         
         # Handle batch metadata prompt on first file only
         if not self.batch_metadata_asked and len(self.file_paths) > 1:
@@ -132,7 +100,7 @@ class UploadTemplate(ABC):
             
             batch_prompt = (
                 "Do all files share the same metadata "
-                "(operator, lab, task, scene, description, objects)? (y/N): "
+                "(operator, lab, task, robot_name, task_description, scene, objects)? (y/N): "
             )
             response = input(batch_prompt)
             
@@ -162,7 +130,6 @@ class UploadTemplate(ABC):
             print(f"\nProcessing file: {file_path.name} (using batch metadata)")
         else:
             # Collect individual metadata for this file
-            submitted_metadata = {"embodiment": self.embodiment}
 
             print(f"\nFile: {file_path.name}")
             print("-" * 50)
@@ -189,7 +156,8 @@ class UploadTemplate(ABC):
             timestamp_ms = int(stats.st_ctime * 1000)
 
         file_timestamp = str(timestamp_ms)
-        submitted_metadata["timestamp"] = file_timestamp
+        submitted_metadata["episode_hash"] = file_timestamp
+        submitted_metadata["embodiment"] = self.embodiment
 
         json_metadata = json.dumps(submitted_metadata)
         
@@ -240,7 +208,7 @@ class UploadTemplate(ABC):
             else:
                 print(f"Error: {key} cannot be empty. Please enter a value.")
 
-    async def upload_metadata(self, file_timestamp, metadict):
+    def upload_metadata(self, file_timestamp, metadict):
         """
         Upload metadata file to S3.
         
@@ -268,7 +236,7 @@ class UploadTemplate(ABC):
             # Clean up temporary file
             os.remove(metadata_tempfile.name)
 
-    async def upload_file(self, local_file, stamped_name):
+    def upload_file(self, local_file, stamped_name):
         """
         Upload a file to S3.
 
