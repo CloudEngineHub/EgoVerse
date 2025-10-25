@@ -56,11 +56,11 @@ from scipy.spatial.transform import Rotation as R
 
 
 ## CHANGE THIS TO YOUR DESIRED CACHE FOR HF
-os.environ["HF_HOME"] = "/storage/cedar/cedar0/cedarp-dxu345-0/rpunamiya6/.cache/huggingface"
+os.environ["HF_HOME"] = "~/.cache/huggingface"
 
 HORIZON_DEFAULT = 10
 STEP_DEFAULT = 3.0
-EPISODE_LENGTH = 1000
+EPISODE_LENGTH = 100
 CHUNK_LENGTH_ACT = 100
 
 ROTATION_MATRIX = np.array([[0, 1, 0], 
@@ -659,7 +659,8 @@ class AriaVRSExtractor:
                     right_obs_t = np.concatenate((right_palm_pose, right_palm_euler), axis=None)
 
                 ee_pose_obs_t = np.concatenate((left_obs_t, right_obs_t), axis=None)
-            
+            else:
+                print(f"[WARNING]: INCORRECT ARM PROVIDED : {arm}")
             ee_pose.append(np.ravel(ee_pose_obs_t))
         ee_pose = np.array(ee_pose)
         if no_rot:
@@ -914,6 +915,7 @@ class DatasetConverter:
         self.logger.info(f"#writer processes: {self.image_writer_processes}")
         self.logger.info(f"#writer threads: {self.image_writer_threads}")
 
+        
         self.episode_list = list(self.raw_path.glob("*.vrs"))
         self.buffer = []
 
@@ -921,7 +923,7 @@ class DatasetConverter:
             self.episode_list = self.episode_list[:2]
 
         processed_episode = AriaVRSExtractor.process_episode(
-            episode_path=self.episode_list[-1],
+            episode_path=self.episode_list[0],
             arm=self.arm,
             prestack=self.prestack,
         )
@@ -1096,12 +1098,6 @@ def argument_parse():
     # Debugging and output configuration
     parser.add_argument("--output-dir", type=Path, default=Path(LEROBOT_HOME), help="Directory where the processed dataset will be stored. Defaults to LEROBOT_HOME.")
     parser.add_argument("--debug", action="store_true", help="Store only 2 episodes for debug purposes.")
-
-    # SLURM-related arguments
-    parser.add_argument("--overcap", type=str2bool, default=False, help="Flag to indicate if the job should run in the 'overcap' partition.")
-    parser.add_argument("--gpus-per-node", type=int, default=1, help="Number of GPUs per node.")
-    parser.add_argument("--num-nodes", type=int, default=1, help="Number of cluster nodes.")
-    parser.add_argument("--partition", type=str, default="hoffman-lab", help="SLURM partition/account.")
 
     args = parser.parse_args()
 
