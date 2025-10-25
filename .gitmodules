@@ -3,4 +3,4 @@
 	url = git@github.com:GaTech-RL2/rldb.git
 [submodule "external/oculus_reader"]
 	path = external/oculus_reader
-	url = https://github.com/rail-berkeley/oculus_reader.git
+	url = git@github.com/rail-berkeley/oculus_reader.git
