@@ -2,7 +2,7 @@
 """
 run_aria_conversion_sql.py – SQL-backed driver (no CSV/S3)
 
-• Walks /mnt/raw for bundles: {name}.vrs, {name}.json OR {name}.vrs.json, mps_{name}_vrs/
+• Walks /mnt/raw for bundles: {name}.vrs, {name}.json , mps_{name}_vrs/
 • name == episode_hash (TEXT in DB) – row must already exist in app.episodes; otherwise skipped
 • Uses Ray to run conversions with absolute symlinks in per-job tmp dirs
 • On success, updates app.episodes.processed_path and num_frames
@@ -18,10 +18,14 @@ import os
 import shutil
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Iterator, Tuple
 
 import ray
+
+# --- Conversion wrapper ------------------------------------------------------
+from aria_helper import lerobot_job
 
 # --- SQL helpers --------------------------------------------------------------
 from egomimic.utils.aws.aws_sql import (
@@ -31,12 +35,10 @@ from egomimic.utils.aws.aws_sql import (
     update_episode,
 )
 
-# --- Conversion wrapper ------------------------------------------------------
-from aria_helper import lerobot_job
-
 # --- Paths -------------------------------------------------------------------
 RAW_ROOT = Path("/mnt/raw")
 PROCESSED_ROOT = Path("/mnt/processed")
+
 
 # --- Utilities ---------------------------------------------------------------
 def ensure_path_ready(p: str | Path, retries: int = 30) -> bool:
@@ -53,20 +55,21 @@ def ensure_path_ready(p: str | Path, retries: int = 30) -> bool:
 
 def iter_vrs_bundles(root: Path) -> Iterator[Tuple[Path, Path, Path]]:
     """
-    Yield tuples (vrs_file, json_file, mps_dir) for every valid bundle in `root`.
+    Yield (vrs_file, json_file, mps_dir) for every valid bundle in `root`.
 
-    Accept either:
-      • {name}.vrs + {name}.json + mps_{name}_vrs/
-      • {name}.vrs + {name}.vrs.json + mps_{name}_vrs/
-    All three must be in the SAME directory.
+    Accept bundles containing:
+      • {name}.vrs
+      • {name}.json
+      • mps_{name}_vrs/
+    All must be in the SAME directory.
     """
     for vrs in sorted(root.glob("*.vrs")):
-        name   = vrs.stem
-        json1  = root / f"{name}.json"
-        json2  = root / f"{name}.vrs.json"
-        jsonf  = json1 if json1.exists() else (json2 if json2.exists() else None)
+        name = vrs.stem
+        jsonf = root / f"{name}.json"
         mpsdir = root / f"mps_{name}_vrs"
-        if jsonf is not None and mpsdir.is_dir():
+
+        # Require all four to exist
+        if mpsdir.is_dir():
             yield vrs, jsonf, mpsdir
 
 
@@ -80,13 +83,19 @@ def infer_arm_from_row(row: TableRow) -> str:
         return "left"
     if "right" in emb:
         return "right"
-    if "bimanual" in emb or "bi" in emb:
+    if "bimanual" in emb:
         return "bimanual"
     return "bimanual"
 
 
+def _load_episode_hash(episode_hash: Path) -> str | None:
+    return datetime.fromtimestamp(float(episode_hash) / 1000.0, timezone.utc).strftime(
+        "%Y-%m-%d-%H-%M-%S-%f"
+    )
+
+
 # --- Ray task ----------------------------------------------------------------
-@ray.remote(num_cpus=24, memory=48 * 1024 ** 3)
+@ray.remote(num_cpus=24, memory=48 * 1024**3)
 def convert_one_bundle(
     vrs: str,
     jsonf: str,
@@ -95,10 +104,13 @@ def convert_one_bundle(
     dataset_name: str,
     arm: str,
     description: str,
-) -> tuple[str, int]:
+) -> tuple[str, str, int]:
     """
     Perform symlink-based conversion for a single episode.
-    Returns (dataset_path, total_frames). total_frames = -1 if unknown/failure.
+    Returns (ds_path, mp4_path, total_frames).
+      • ds_path: dataset folder path
+      • mp4_path: per-episode MP4 ('' if not created)
+      • total_frames: -1 if unknown/failure
     """
     stem = Path(vrs).stem
 
@@ -115,7 +127,7 @@ def convert_one_bundle(
         if not ensure_path_ready(t):
             print(f"[ERR] missing {t}", flush=True)
             shutil.rmtree(tmp_dir, ignore_errors=True)
-            return "", -1
+            return "", "", -1
         link = tmp_dir / t.name
         try:
             os.symlink(t, link, target_is_directory=t.is_dir())
@@ -145,10 +157,18 @@ def convert_one_bundle(
             except Exception:
                 frames = -1
 
-        return str(ds_path), frames
+        candidate = ds_path / f"{stem}_video.mp4"
+        if candidate.exists():
+            mp4_str = str(candidate)
+        else:
+            matches = list(ds_path.glob(f"*{stem}*_video.mp4"))
+            mp4_str = str(matches[0]) if matches else ""
+
+        return str(ds_path), mp4_str, frames
+
     except Exception as e:
         print(f"[FAIL] {stem}: {e}", flush=True)
-        return str(ds_path), -1
+        return str(ds_path), "", -1
     finally:
         shutil.rmtree(tmp_dir, ignore_errors=True)
 
@@ -162,7 +182,11 @@ def launch(dry: bool = False, skip_if_done: bool = False):
         name = vrs.stem
 
         # IMPORTANT: episode_hash is TEXT in DB; do not cast to int
-        episode_key = name  # string key matching DB column type
+        episode_key = _load_episode_hash(name)
+
+        if not episode_key:
+            print(f"[SKIP] {name}: no 'episode_hash' for {name}")
+            continue
 
         row = episode_hash_to_table_row(engine, episode_key)
         if row is None:
@@ -180,7 +204,9 @@ def launch(dry: bool = False, skip_if_done: bool = False):
         description = row.task_description or ""
 
         if dry:
-            print(f"[DRY] {name}: arm={arm} → {out_dir}/{dataset_name} | desc='{description[:60]}'")
+            print(
+                f"[DRY] {name}: arm={arm} → {out_dir}/{dataset_name} | desc='{description[:60]}'"
+            )
             continue
 
         ref = convert_one_bundle.remote(
@@ -201,7 +227,7 @@ def launch(dry: bool = False, skip_if_done: bool = False):
     while pending:
         done_refs, _ = ray.wait(list(pending), num_returns=1)
         ref = done_refs[0]
-        ds_path, frames = ray.get(ref)
+        ds_path, mp4_path, frames = ray.get(ref)
         episode_key, _dataset_name = pending.pop(ref)
 
         row = episode_hash_to_table_row(engine, episode_key)
@@ -211,6 +237,7 @@ def launch(dry: bool = False, skip_if_done: bool = False):
 
         row.processed_path = ds_path or ""
         row.num_frames = frames if isinstance(frames, int) else -1
+        row.mp4_path = mp4_path or ""
 
         try:
             update_episode(engine, row)
@@ -226,9 +253,14 @@ def launch(dry: bool = False, skip_if_done: bool = False):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--dry-run", action="store_true")
-    p.add_argument("--skip-if-done", action="store_true",
-                   help="Skip episodes that already have a processed_path in SQL")
-    p.add_argument("--ray-address", default="auto", help="Ray cluster address (default: auto)")
+    p.add_argument(
+        "--skip-if-done",
+        action="store_true",
+        help="Skip episodes that already have a processed_path in SQL",
+    )
+    p.add_argument(
+        "--ray-address", default="auto", help="Ray cluster address (default: auto)"
+    )
     args = p.parse_args()
 
     ray.init(address=args.ray_address)
