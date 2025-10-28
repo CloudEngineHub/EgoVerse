@@ -35,7 +35,7 @@ def lerobot_job(
         push            = False,
         prestack        = True,
         image_compressed= False,
-
+        save_mp4        = True,
         private   = False,
         license   = "apache-2.0",
         nproc     = 10,
