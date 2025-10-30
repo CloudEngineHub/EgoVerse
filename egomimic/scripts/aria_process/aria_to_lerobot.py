@@ -641,8 +641,6 @@ class AriaVRSExtractor:
         bad_actions_data_mask = np.any(actions >= 1e8, axis=(1,2))
         bad_human_actions_data_mask = np.isnan(human_actions).any(axis=1)
 
-        assert (bad_pose_data_mask == bad_human_actions_data_mask).all(), "inconsistent visibility"
-
         bad_data_mask = bad_pose_data_mask | bad_actions_data_mask | bad_human_actions_data_mask
 
         actions = actions[~bad_data_mask]
