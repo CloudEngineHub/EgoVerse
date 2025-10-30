@@ -38,7 +38,8 @@ from egomimic.utils.aws.aws_sql import (
 # --- Paths -------------------------------------------------------------------
 RAW_ROOT = Path("/mnt/raw")
 PROCESSED_ROOT = Path("/mnt/processed")
-
+PROCESSED_LOCAL_ROOT = Path(os.environ.get("PROCESSED_LOCAL_ROOT", "/mnt/processed")).resolve()
+PROCESSED_REMOTE_PREFIX = os.environ.get("PROCESSED_REMOTE_PREFIX", "rldb:/processed_v2/aria").rstrip("/")
 
 # --- Utilities ---------------------------------------------------------------
 def ensure_path_ready(p: str | Path, retries: int = 30) -> bool:
@@ -52,6 +53,16 @@ def ensure_path_ready(p: str | Path, retries: int = 30) -> bool:
         time.sleep(1)
     return False
 
+def _map_processed_local_to_remote(p: str | Path) -> str:
+    """Map any path under PROCESSED_LOCAL_ROOT → PROCESSED_REMOTE_PREFIX/relative."""
+    if not p:
+        return ""
+    p = Path(p).resolve()
+    try:
+        rel = p.relative_to(PROCESSED_LOCAL_ROOT)  # raises if not under root
+    except Exception:
+        return str(p)
+    return f"{PROCESSED_REMOTE_PREFIX}/{rel.as_posix()}" if PROCESSED_REMOTE_PREFIX else str(p)
 
 def iter_vrs_bundles(root: Path) -> Iterator[Tuple[Path, Path, Path]]:
     """
@@ -235,9 +246,9 @@ def launch(dry: bool = False, skip_if_done: bool = False):
             print(f"[WARN] Episode {episode_key}: row disappeared before update?")
             continue
 
-        row.processed_path = ds_path or ""
+        row.processed_path = _map_processed_local_to_remote(ds_path) or ""
         row.num_frames = frames if isinstance(frames, int) else -1
-        row.mp4_path = mp4_path or ""
+        row.mp4_path = _map_processed_local_to_remote(mp4_path) or ""
 
         try:
             update_episode(engine, row)
