@@ -175,6 +175,7 @@ def convert_one_bundle(
             matches = list(ds_path.glob(f"*{stem}*_video.mp4"))
             mp4_str = str(matches[0]) if matches else ""
 
+        breakpoint()
         return str(ds_path), mp4_str, frames
 
     except Exception as e:
@@ -261,8 +262,8 @@ def launch(dry: bool = False, skip_if_done: bool = False):
         row.num_frames = frames if isinstance(frames, int) else -1
         
         if row.num_frames > 0:
-            row.processed_path = _map_processed_local_to_remote(ds_path) or ""
-            row.mp4_path = _map_processed_local_to_remote(mp4_path) or ""
+            row.processed_path = _map_processed_local_to_remote(ds_path)
+            row.mp4_path = _map_processed_local_to_remote(mp4_path)
         else:
             row.processed_path = ""
             row.mp4_path = ""
