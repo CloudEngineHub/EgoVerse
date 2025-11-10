@@ -130,10 +130,12 @@ class UCSDHDFExtractor:
                 "ucsd_h1.left_wrist_6d_rot": [],
                 "ucsd_h1.right_wrist_6d_rot": [],
                 "ucsd_h1.left_hand_kpts": [],
-                "ucsd_h1.right_hand_kpts": []
+                "ucsd_h1.right_hand_kpts": [],
+                "hp_human_states": [],
             }
 
             for state in f["observation.state"]:
+                state_dict["hp_human_states"].append(state)
                 cur_cmd_dict = cmd_dict_from_128dim(state, finger_tip_only=True)
                 # Translation
                 cur_state = np.array([
@@ -156,9 +158,11 @@ class UCSDHDFExtractor:
                 "actions.ucsd_h1.right_hand_kpts": [],
                 "actions.ucsd_h1.left_wrist_6d_rot": [],
                 "actions.ucsd_h1.right_wrist_6d_rot": [],
-                "actions.ucsd_h1.head_6d_rot": []
+                "actions.ucsd_h1.head_6d_rot": [],
+                "actions_hp_human_actions": [],
             }
             for action in f["action"]:
+                action_dict["actions_hp_human_actions"].append(action)
                 cur_cmd_dict = cmd_dict_from_128dim(action, finger_tip_only=True)
                 # Translation
                 cur_action = np.array([
