@@ -23,7 +23,7 @@ git clone --recursive git@github.com:GaTech-RL2/EgoVerse.git
 cd EgoVerse
 conda env create -f environment.yaml
 conda activate emimic
-pip install projectaria-tools'[all]'==1.5.7
+pip install projectaria-tools'[all]'
 pip install -e external/lerobot
 pip install -e .
 ```
