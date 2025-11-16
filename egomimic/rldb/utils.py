@@ -207,6 +207,21 @@ class RLDBDataset(LeRobotDataset):
         return item
 
 
+class AnnotationLoader:
+    def __init__(
+        self,
+        annotations_path: str,
+
+    ):
+        self.annotations_path = annotations_path
+    
+    def load_annotations(self):
+        df = pd.DataFrame()
+        for csv in self.annotations_path.iterdir():
+            df = pd.concat([df, pd.read_csv(csv)], ignore_index=True)
+        return df
+    
+
 # TODO(Ryan) : Override individual dataset valid ratios and train modes
 
 
@@ -404,6 +419,7 @@ class S3RLDBDataset(MultiRLDBDataset):
             f"Syncing S3 datasets with filters {filters} to local directory {temp_root}..."
         )
         logger.info(f"S3 prefix being used: {s3_prefix}")
+        logger.info(f"filtered paths: {filtered_paths}")
 
         self._sync_s3_to_local(
             bucket_name=bucket_name,
@@ -562,6 +578,8 @@ class S3RLDBDataset(MultiRLDBDataset):
             dt = datetime.strptime(hashes, fmt).replace(tzinfo=timezone.utc)
             milliseconds = int(dt.timestamp() * 1000)
             collection_path = local_dir / str(milliseconds)
+            collection_path.mkdir(parents=True, exist_ok=True)
+            logger.info(f"Preparing collection at: {collection_path}")
 
             for s3sub in s3_subfolders:
                 if s3sub.startswith("/"):
@@ -571,12 +589,13 @@ class S3RLDBDataset(MultiRLDBDataset):
 
                 localsub = collection_path / s3sub.rstrip("/")
                 s3_full_path = folder.rstrip("/") + "/" + s3sub
+                logger.info(f"Syncing S3 path: {s3_full_path} to local path: {localsub}")
 
                 localsub.mkdir(parents=True, exist_ok=True)
-                print(f"Created local directory: {localsub}")
+                logger.info(f"Created local directory: {localsub}")
 
                 if not any(localsub.iterdir()):
-                    print(f"Downloading from S3 path: {s3_full_path}")
+                    logger.info(f"Downloading from S3 path: {s3_full_path}")
                     S3RLDBDataset._download_files(bucket_name, s3_full_path, localsub)
                     logger.info(
                         f"Downloaded data files from {s3_full_path} to {localsub}"
@@ -928,3 +947,10 @@ class DataSchematic(object):
                 denorm_data[key] = tensor
 
         return denorm_data
+
+if __name__ == "__main__":  
+    loader = AnnotationLoader(
+        annotations_path=Path("/coc/flash7/scratch/rldb_temp/S3_rldb_data/annotations/")
+    )
+    df = loader.load_annotations()
+    df.display()
