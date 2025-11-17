@@ -206,6 +206,22 @@ class RLDBDataset(LeRobotDataset):
 
         return item
 
+class AnnotationLoader:
+    def __init__(self, root):
+        if Path(root + "annotations").is_dir():
+            self.annotation_path = Path(root + "annotations")
+        else:
+            raise ValueError(f"Annotation path {root + 'annotations'} does not exist.")
+    
+    def load_annotations(self):
+        df = pd.DataFrame()
+        for file in self.annotation_path.iterdir():
+            temp_df = pd.read_csv(file)
+            parts = file.name.split("_")
+            temp_df['idx'] = str(parts[1])
+            df = pd.concat([df, temp_df], ignore_index=True)
+        return df
+        
 
 # TODO(Ryan) : Override individual dataset valid ratios and train modes
 
