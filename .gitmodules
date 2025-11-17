@@ -1,3 +1,4 @@
-[submodule "external/rldb"]
-	path = external/rldb
-	url = git@github.com:GaTech-RL2/rldb.git
+[submodule "external/openpi"]
+	path = external/openpi
+	url = https://github.com/Physical-Intelligence/openpi.git
+

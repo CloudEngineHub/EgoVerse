@@ -1,6 +1,6 @@
 torch==2.6.0
 torchvision==0.21.0
-projectaria-tools[all]==1.5.7
+projectaria-tools[all]==2.0.0
 pyyaml
 matplotlib
 packaging
@@ -20,6 +20,7 @@ einops
 av==12.0.0
 opencv-python==4.7.0.72
 dm-control==1.0.8
+mink
 mujoco
 mujoco-py==2.1.2.14
 submitit
@@ -28,7 +29,6 @@ pytorch-kinematics
 lightning
 positional-encodings[pytorch]
 argparse
-getdaft
 pandas
 overrides
 zarr
@@ -36,6 +36,16 @@ tabulate
 transformers
 timm
 boto3
+cloudpathlib
+sqlalchemy
+psycopg
 ray
 geomloss
 tslearn
+sqlalchemy
+psycopg[binary]
+boto3
+typing_extensions
+pyarrow==19.0.1
+simplejpeg
+prettytable

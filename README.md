@@ -23,20 +23,24 @@ git clone --recursive git@github.com:GaTech-RL2/EgoVerse.git
 cd EgoVerse
 conda env create -f environment.yaml
 conda activate emimic
-pip install projectaria-tools'[all]'==1.5.7
-pip install -e external/rldb
-pip install -e external/rldb/external/lerobot
+pip install projectaria-tools'[all]'
+pip install -e external/lerobot
 pip install -e .
 ```
 # UV
+
+if uv not installed
+```
+curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/path/to/flash/storage" sh
+```
+
 ```
 uv venv emimic --python 3.10
 source emimic/bin/activate
-git clone --recursive git@github.com:GaTech-RL2/EgoVerse.git
+git clone git@github.com:GaTech-RL2/EgoVerse.git
 cd EgoVerse
 uv pip install -r requirements.txt
-uv pip install -e external/rldb
-uv pip install -e external/rldb/external/lerobot
+uv pip install -e external/lerobot
 uv pip install -e .
 ```
 
