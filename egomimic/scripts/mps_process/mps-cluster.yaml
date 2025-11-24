@@ -56,6 +56,11 @@ initialization_commands:
   - sudo DEBIAN_FRONTEND=noninteractive python3 get-pip.py || true
   - sudo DEBIAN_FRONTEND=noninteractive apt-get install -yq s3fs
   - python3 -m pip install -U ray boto3 Pillow --quiet
+  - |
+      python3 -m pip install \
+        --index-url https://test.pypi.org/simple/ \
+        --extra-index-url https://pypi.org/simple/ \
+        projectaria-mps==1.0.2a2
   - aria_mps --help >/dev/null 2>&1 && echo "✅ aria_mps CLI detected" || echo "⚠️ aria_mps CLI not found"
   - sudo apt-get autoremove -yq
   - sudo apt-get clean -yq
@@ -96,8 +101,10 @@ setup_commands:
       gt submodule update --init --recursive --quiet || true
 
   - |
-      (crontab -l 2>/dev/null | grep -v run_daily_mps_v2.py ; \
+      (crontab -l 2>/dev/null \
+        | grep -v 'run_daily_mps_v2.py' \
+        | grep -v 'CRON_TZ=America/New_York' ; \
        echo 'CRON_TZ=America/New_York'; \
-       echo '0 22 * * * /usr/bin/python3 ~/EgoVerse/egomimic/scripts/mps_process/run_daily_mps_v3.py >> ~/daily_mps.log 2>&1') \
+       echo '0 22 * * * flock -n /tmp/run_daily_mps.lock /usr/bin/python3 /home/ubuntu/EgoVerse/egomimic/scripts/mps_process/run_daily_mps_v2.py >> /home/ubuntu/daily_mps.log 2>&1') \
        | crontab - || true
   - crontab -l || true
