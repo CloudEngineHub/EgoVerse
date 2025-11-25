@@ -37,7 +37,7 @@ def lerobot_job(
         save_mp4=True,
         private=False,
         license="apache-2.0",
-        nproc=10,
+        nproc=8,
         nthreads=2,
         debug=False,
     )
