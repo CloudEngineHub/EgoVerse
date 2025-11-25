@@ -25,6 +25,8 @@ from typing import Iterator, Tuple
 import ray
 import traceback
 
+import csv
+
 # --- Conversion wrapper ------------------------------------------------------
 from aria_helper import lerobot_job
 
@@ -118,7 +120,7 @@ def _load_episode_hash(episode_hash: Path) -> str | None:
 
 
 # --- Ray task ----------------------------------------------------------------
-@ray.remote(num_cpus=8, memory=30 * 1024**3)
+@ray.remote(num_cpus=8)
 def convert_one_bundle(
     vrs: str,
     jsonf: str,
@@ -202,6 +204,8 @@ def launch(dry: bool = False, skip_if_done: bool = False):
     engine = create_default_engine()
     pending: dict = {}
 
+    benchmark_rows = []
+    
     for vrs, jsonf, mps in iter_vrs_bundles(RAW_ROOT):
         name = vrs.stem
 
@@ -244,6 +248,7 @@ def launch(dry: bool = False, skip_if_done: bool = False):
             )
             continue
 
+        start_time = time.time()
         ref = convert_one_bundle.remote(
             str(vrs),
             str(jsonf),
@@ -253,7 +258,7 @@ def launch(dry: bool = False, skip_if_done: bool = False):
             arm,
             description,
         )
-        pending[ref] = (episode_key, dataset_name)
+        pending[ref] = (episode_key, dataset_name, start_time)
 
     if dry or not pending:
         return
@@ -263,18 +268,14 @@ def launch(dry: bool = False, skip_if_done: bool = False):
         done_refs, _ = ray.wait(list(pending), num_returns=1)
         ref = done_refs[0]
         ds_path, mp4_path, frames = ray.get(ref)
-        episode_key, _dataset_name = pending.pop(ref)
+        episode_key, _dataset_name, start_time = pending.pop(ref)
 
+        duration_sec = time.time() - start_time
+        
         row = episode_hash_to_table_row(engine, episode_key)
         if row is None:
             print(f"[WARN] Episode {episode_key}: row disappeared before update?")
             continue
-
-        print(f"[DEBUG_BEFORE_NUM_FRAMES] episode_key={episode_key}")
-        print(f"[DEBUG_BEFORE_NUM_FRAMES] ds_path={ds_path}")
-        print(f"[DEBUG_BEFORE_NUM_FRAMES] mp4_path={mp4_path}")
-        print(f"[DEBUG_BEFORE_NUM_FRAMES] frames={frames} type={type(frames)}")
-        print(f"[DEBUG_BEFORE_NUM_FRAMES] row={row}")
 
         row.num_frames = frames
 
@@ -291,9 +292,47 @@ def launch(dry: bool = False, skip_if_done: bool = False):
                 f"[OK] Updated SQL for {episode_key}: "
                 f"processed_path={row.processed_path}, num_frames={row.num_frames}"
             )
+            
+            ## timing bench
+            if row.num_frames > 0 and row.processed_path:
+                benchmark_rows.append(
+                    {
+                        "episode_key": episode_key,
+                        "processed_path": row.processed_path,
+                        "mp4_path": row.mp4_path,
+                        "num_frames": row.num_frames,
+                        "duration_sec": duration_sec,
+                    }
+                )
+                print(
+                    f"[BENCH] episode_key={episode_key} "
+                    f"processed_path={row.processed_path} "
+                    f"duration_sec={duration_sec:.2f}"
+                )
+                
         except Exception as e:
             print(f"[ERR] SQL update failed for {episode_key}: {e}")
 
+    if benchmark_rows:
+        timing_file = Path("./aria_conversion_timings.csv")
+        file_exists = timing_file.exists()
+        fieldnames = [
+            "episode_key",
+            "processed_path",
+            "mp4_path",
+            "num_frames",
+            "duration_sec",
+        ]
+        try:
+            with timing_file.open("a", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                if not file_exists:
+                    writer.writeheader()
+                for bench_row in benchmark_rows:
+                    writer.writerow(bench_row)
+            print(f"[BENCH] wrote {len(benchmark_rows)} entries → {timing_file.resolve()}")
+        except Exception as e:
+            print(f"[ERR] Failed to write benchmark CSV {timing_file}: {e}")
 
 # --- CLI ---------------------------------------------------------------------
 def main():
