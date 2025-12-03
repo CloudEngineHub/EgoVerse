@@ -65,3 +65,5 @@ By completing these steps, you should be well-equipped to navigate and contribut
 
 
 ## Graphite Instructions
+
+Use gt sync to pull changes from database, and create branches with gt create "name"
