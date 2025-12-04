@@ -1267,7 +1267,7 @@ class HPT(Algo):
                     preds, preds_rot = self._extract_xyz(preds)
                 
                     # If we are using ee_frame, where gt and preds are deltas in ee frame, need to add the offset to gt and preds
-                    ee_frame = False
+                    ee_frame = True
                     if ee_frame:
                         # cartesian arm is (B, 14), xyz quat xyz quat, just take :3 and then 6:9
                         print(f"cartesian_arm: {cartesian_arm.shape}")
@@ -1282,6 +1282,11 @@ class HPT(Algo):
                         ac_type = "joints"
                     elif preds.shape[-1] == 3 or preds.shape[-1] == 6:
                         ac_type = "xyz"
+                    elif preds.shape[-1] == 34:
+                        # Handle 34D action space - likely high-dimensional joint space or multi-robot setup
+                        ac_type = "hand_joints"
+                        # skip drawing
+                        continue
                     else:
                         raise ValueError(
                             f"Unknown action type with shape {preds.shape}"

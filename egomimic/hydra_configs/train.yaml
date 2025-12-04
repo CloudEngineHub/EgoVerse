@@ -1,16 +1,16 @@
 defaults:
   - model: hpt_cotrain_flow_transformer
   - paths: default
-  - trainer: ddp 
+  - trainer: ddp
   - debug: null
-  - logger: wandb 
+  - logger: wandb
   - data: multi_data
   - callbacks: checkpoints
   - override hydra/launcher: submitit
   - _self_
 
-name: cup_camframe
-description: cup_camframe
+name: cup_lerobot_ee_frame
+description: cup_lerobot_ee_frame
 ckpt_path: null
 train: true
 eval: false
@@ -29,7 +29,7 @@ hydra:
     dir: ./logs/${name}/${description}_${now:%Y-%m-%d_%H-%M-%S}
 
 launch_params:
-  gpus_per_node: 1
+  gpus_per_node: 4
   nodes: 1
 
 data_schematic: # Dynamically fill in these shapes from the dataset

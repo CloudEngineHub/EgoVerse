@@ -54,10 +54,12 @@ train_datasets:
 
   dataset1:
     _target_: rldb.utils.RLDBDataset
-    repo_id: "objCont"
+    repo_id: "cupSauz"
     # root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/objectInContainer"
     # root: "${oc.env:TMPDIR}/cup_camframe" # remember to just directly use the folder
-    root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/cupOnSAUZZ/release/cup_on_saucer_camframe/cup_lerobot"
+    # root: "/capstor/store/cscs/swissai/a144/jiaqchen/data/EGOMIM/eth_lerobot/release/cup_lerobot_base_frame"
+    # root: "/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/debug/cup_lerobot_ee_frame"
+    root: "/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/release/cup_lerobot_ee_frame"
     local_files_only: true
     mode: "train"
 
@@ -112,10 +114,12 @@ valid_datasets:
 
   dataset1:
     _target_: rldb.utils.RLDBDataset
-    repo_id: "objCont"
+    repo_id: "cupSauz"
     # root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/objectInContainer"
     # root: "${oc.env:TMPDIR}/cup_camframe"
-    root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/cupOnSAUZZ/release/cup_on_saucer_camframe/cup_lerobot"
+    # root: "/capstor/store/cscs/swissai/a144/jiaqchen/data/EGOMIM/eth_lerobot/release/cup_lerobot_base_frame"
+    # root: "/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/debug/cup_lerobot_ee_frame"
+    root: "/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/release/cup_lerobot_ee_frame"
     local_files_only: true
     mode: "valid"
 

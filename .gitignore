@@ -29,3 +29,5 @@ emimic.egg-info/
 pyproject.bak
 egomimic/algo/pi_checkpoints/*
 egomimic/scripts/tsne/*
+slurm*.out
+slurm*.err
