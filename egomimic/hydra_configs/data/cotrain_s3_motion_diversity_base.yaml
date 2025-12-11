@@ -6,20 +6,17 @@ train_datasets:
     bucket_name: "rldb"
     mode: train
     embodiment: "eva_right_arm"
+    temp_root: "/coc/flash7/rpunamiya6/Projects/local_egoverse"
     filters: 
       task: "object in container"
     local_files_only: True
 
   dataset2:
-    _target_: egomimic.rldb.utils.MultiRLDBDataset
-    datasets:
-      indomain:
-        _target_: egomimic.rldb.utils.RLDBDataset
-        repo_id: "rpuns/oboo_indomain"
-        root: "/coc/flash7/rpunamiya6/Projects/object_in_container_indomain/lerobot_6dof"
-        local_files_only: True
-        mode: train
-        embodiment: "aria_right_arm"
+    _target_: egomimic.rldb.utils.RLDBDataset
+    repo_id: "rpuns/oboo_indomain"
+    root: "/coc/flash7/rpunamiya6/Projects/object_in_container_indomain/lerobot_6dof"
+    local_files_only: True
+    mode: train
     embodiment: "aria_right_arm"
 
 valid_datasets:
@@ -28,6 +25,7 @@ valid_datasets:
     bucket_name: "rldb"
     mode: valid
     embodiment: "eva_right_arm"
+    temp_root: "/coc/flash7/rpunamiya6/Projects/local_egoverse"
     filters: 
       task: "object in container"
     local_files_only: True
