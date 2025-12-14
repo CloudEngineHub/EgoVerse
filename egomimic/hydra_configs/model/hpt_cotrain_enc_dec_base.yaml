@@ -7,8 +7,8 @@ robomimic_model:
     intrinsics_key: "base" # change to base_half if using half res 
     extrinsics_key: "ariaJun7"
   ac_keys:
-    aria_bimanual: "actions_cartesian"
-    eve_bimanual: "actions_joints"
+    aria_bimanual: "actions_hp_human_actions"
+    ucsd_h1_bimanual: "actions_hp_human_actions"
   # auxiliary_ac_keys:
   #   eve_bimanual: ["actions_joints"]
   6dof: true
@@ -27,7 +27,7 @@ robomimic_model:
   multitask: false
   pretrained: false
   pretrained_checkpoint: null
-  domains: ["eve_bimanual", "aria_bimanual"]
+  domains: ["ucsd_h1_bimanual", "aria_bimanual"]
   shared_obs_keys: ["front_img_1"]
 
   shared_stem_specs:
@@ -47,9 +47,9 @@ robomimic_model:
   
   stem_specs:
     aria_bimanual:
-      state_ee_pose:
+      state_hp_human_states:
         _target_: egomimic.models.hpt_nets.MLPPolicyStem
-        input_dim: 12
+        input_dim: 128
         output_dim: 256
         widths: [256]
         specs:
@@ -61,10 +61,10 @@ robomimic_model:
             crossattn_modality_dropout: 0.1
             modality_embed_dim: 256
     
-    eve_bimanual:
-      state_joint_positions:
+    ucsd_h1_bimanual:
+      state_hp_human_states:
         _target_: egomimic.models.hpt_nets.MLPPolicyStem
-        input_dim: 14
+        input_dim: 128
         output_dim: 256
         widths: [256]
         specs:
@@ -75,20 +75,7 @@ robomimic_model:
             crossattn_dim_head: 64
             crossattn_modality_dropout: 0.1
             modality_embed_dim: 256
-      right_wrist_img:
-        _target_: egomimic.models.hpt_nets.MLPPolicyStem
-        input_dim: 256
-        output_dim: 256
-        widths: [256]
-        specs:
-          random_horizon_masking: false
-          cross_attn:
-            crossattn_latent: 16
-            crossattn_heads: 8
-            crossattn_dim_head: 64
-            crossattn_modality_dropout: 0.1
-            modality_embed_dim: 256
-      left_wrist_img:
+      front_img_2:
         _target_: egomimic.models.hpt_nets.MLPPolicyStem
         input_dim: 256
         output_dim: 256
@@ -101,11 +88,12 @@ robomimic_model:
             crossattn_dim_head: 64
             crossattn_modality_dropout: 0.1
             modality_embed_dim: 256
+
   head_specs:
     aria_bimanual:
       _target_: egomimic.models.hpt_nets.MultiBlockTransformerDecoder
       input_dim: 256
-      output_dim: 12
+      output_dim: 128
       action_horizon: 100
       latent_token_len: 8
       num_heads: 8
@@ -113,10 +101,10 @@ robomimic_model:
       dropout: 0.1
       num_layers: 8
       final_norm: true
-    eve_bimanual:
+    ucsd_h1_bimanual:
       _target_: egomimic.models.hpt_nets.MultiBlockTransformerDecoder
       input_dim: 256
-      output_dim: 14
+      output_dim: 128
       action_horizon: 100
       latent_token_len: 8
       num_heads: 8
@@ -124,19 +112,13 @@ robomimic_model:
       dropout: 0.1
       num_layers: 8
       final_norm: true
-    shared: null
-
 
   encoder_specs:
     front_img_1:
       _target_: egomimic.models.hpt_nets.ResNet
       output_dim: 256
       num_of_copy: 1
-    right_wrist_img:
-      _target_: egomimic.models.hpt_nets.ResNet
-      output_dim: 256
-      num_of_copy: 1
-    left_wrist_img:
+    front_img_2:
       _target_: egomimic.models.hpt_nets.ResNet
       output_dim: 256
       num_of_copy: 1

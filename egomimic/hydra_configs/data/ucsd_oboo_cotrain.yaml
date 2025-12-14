@@ -1,0 +1,108 @@
+_target_: egomimic.pl_utils.pl_data_utils.MultiDataModuleWrapper
+train_datasets:
+  dataset1:
+    _target_: rldb.utils.MultiRLDBDataset
+    datasets:
+      set1:
+        _target_: rldb.utils.RLDBDataset
+        # Uncomment or adjust paths as needed:
+        # parquet_path: /coc/flash9/skareer6/Projects/RLDB/rldb/export/oboo_robot
+        repo_id: "egoverse"
+        root: "/home/roger/EgoVerse/data/processed/g1/object_in_container_003/lerobot"
+        local_files_only: true
+        mode: "train"
+      set2:
+        _target_: rldb.utils.RLDBDataset
+        # Uncomment or adjust paths as needed:
+        # parquet_path: /coc/flash9/skareer6/Projects/RLDB/rldb/export/oboo_robot
+        repo_id: "egoverse"
+        root: "/home/roger/EgoVerse/data/processed/g1/object_in_container_004/lerobot"
+        local_files_only: true
+        mode: "train"
+      set3:
+        _target_: rldb.utils.RLDBDataset
+        # Uncomment or adjust paths as needed:
+        # parquet_path: /coc/flash9/skareer6/Projects/RLDB/rldb/export/oboo_robot
+        repo_id: "egoverse"
+        root: "/home/roger/EgoVerse/data/processed/g1/object_in_container_005/lerobot"
+        local_files_only: true
+        mode: "train"
+      set4:
+        _target_: rldb.utils.RLDBDataset
+        # Uncomment or adjust paths as needed:
+        # parquet_path: /coc/flash9/skareer6/Projects/RLDB/rldb/export/oboo_robot
+        repo_id: "egoverse"
+        root: "/home/roger/EgoVerse/data/processed/g1/object_in_container_006/lerobot"
+        local_files_only: true
+        mode: "train"
+      set5:
+        _target_: rldb.utils.RLDBDataset
+        # Uncomment or adjust paths as needed:
+        # parquet_path: /coc/flash9/skareer6/Projects/RLDB/rldb/export/oboo_robot
+        repo_id: "egoverse"
+        root: "/home/roger/EgoVerse/data/processed/g1/object_in_container_007/lerobot"
+        local_files_only: true
+        mode: "train"
+    embodiment: "ucsd_h1_bimanual"
+
+valid_datasets:
+  dataset1:
+    _target_: rldb.utils.MultiRLDBDataset
+    datasets:
+      set1:
+        _target_: rldb.utils.RLDBDataset
+        # Uncomment or adjust paths as needed:
+        # parquet_path: /coc/flash9/skareer6/Projects/RLDB/rldb/export/oboo_robot
+        repo_id: "egoverse"
+        root: "/home/roger/EgoVerse/data/processed/g1/object_in_container_003/lerobot"
+        local_files_only: true
+        mode: "valid"
+      set2:
+        _target_: rldb.utils.RLDBDataset
+        # Uncomment or adjust paths as needed:
+        # parquet_path: /coc/flash9/skareer6/Projects/RLDB/rldb/export/oboo_robot
+        repo_id: "egoverse"
+        root: "/home/roger/EgoVerse/data/processed/g1/object_in_container_004/lerobot"
+        local_files_only: true
+        mode: "valid"
+      set3:
+        _target_: rldb.utils.RLDBDataset
+        # Uncomment or adjust paths as needed:
+        # parquet_path: /coc/flash9/skareer6/Projects/RLDB/rldb/export/oboo_robot
+        repo_id: "egoverse"
+        root: "/home/roger/EgoVerse/data/processed/g1/object_in_container_005/lerobot"
+        local_files_only: true
+        mode: "valid"
+      set4:
+        _target_: rldb.utils.RLDBDataset
+        # Uncomment or adjust paths as needed:
+        # parquet_path: /coc/flash9/skareer6/Projects/RLDB/rldb/export/oboo_robot
+        repo_id: "egoverse"
+        root: "/home/roger/EgoVerse/data/processed/g1/object_in_container_006/lerobot"
+        local_files_only: true
+        mode: "valid"
+      set5:
+        _target_: rldb.utils.RLDBDataset
+        # Uncomment or adjust paths as needed:
+        # parquet_path: /coc/flash9/skareer6/Projects/RLDB/rldb/export/oboo_robot
+        repo_id: "egoverse"
+        root: "/home/roger/EgoVerse/data/processed/g1/object_in_container_007/lerobot"
+        local_files_only: true
+        mode: "valid"
+    embodiment: "ucsd_h1_bimanual"
+
+train_dataloader_params:
+  dataset1:
+    batch_size: 32
+    num_workers: 10
+  dataset2:
+    batch_size: 32
+    num_workers: 10
+
+valid_dataloader_params:
+  dataset1:
+    batch_size: 32
+    num_workers: 10
+  dataset2:
+    batch_size: 32
+    num_workers: 10
