@@ -23,13 +23,13 @@ from scipy.spatial.transform import Rotation as R
 from pytorch3d.transforms import rotation_6d_to_matrix, matrix_to_rotation_6d
 
 # TODO(roger): these constants should be better managed
-H1_HUMAN_SLOW_DOWN_FACTOR = 4
+H1_HUMAN_SLOW_DOWN_FACTOR = 1
 EPISODE_LENGTH = 1000
 HORIZON_DEFAULT = 20
 # UCSD H1 runs at 30 Hz
 FPS = 30
 H1_ARM_TYPE = "bimanual"
-CHUNK_LENGTH_ACT = 100
+CHUNK_LENGTH_ACT = 64
 
 RETARGETTING_INDICES = [0, 4, 9, 14, 19, 24]
 

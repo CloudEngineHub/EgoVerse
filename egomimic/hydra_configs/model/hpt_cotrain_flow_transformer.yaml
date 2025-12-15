@@ -8,7 +8,7 @@ robomimic_model:
     shared: null
     aria_bimanual: 
       _target_: egomimic.models.fm_policy.FMPolicy
-      action_horizon: 25
+      action_horizon: 64
       num_inference_steps: 10
       pooling: null
       time_dist: "beta"
@@ -20,7 +20,7 @@ robomimic_model:
         cond_dim: 256
         hidden_dim: 128
         act_dim: 128
-        act_seq: 25
+        act_seq: 64
         n_heads: 4
         dropout: 0.1
         mlp_layers: 4
@@ -28,7 +28,7 @@ robomimic_model:
 
     ucsd_h1_bimanual: 
       _target_: egomimic.models.fm_policy.FMPolicy
-      action_horizon: 25
+      action_horizon: 64
       num_inference_steps: 10
       pooling: null
       time_dist: "beta"
@@ -40,7 +40,7 @@ robomimic_model:
         cond_dim: 256
         hidden_dim: 128
         act_dim: 128
-        act_seq: 25
+        act_seq: 64
         n_heads: 4
         dropout: 0.1
         mlp_layers: 4 
