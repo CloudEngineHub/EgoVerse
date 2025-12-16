@@ -420,7 +420,16 @@ def draw_rotation_text(
     return image
 
 
-def draw_actions(im, type, color, actions, extrinsics, intrinsics, arm="both"):
+def draw_actions(
+    im,
+    type,
+    color,
+    actions,
+    extrinsics,
+    intrinsics,
+    arm="both",
+    chosen_frame: str = "base_frame",
+):
     """
     args:
         im: (H, W, C)
@@ -466,14 +475,24 @@ def draw_actions(im, type, color, actions, extrinsics, intrinsics, arm="both"):
             right_actions = actions[:, 3:6]
             actions_drawable = np.concatenate((left_actions, right_actions), axis=0)
 
-            base_frame = False # TODO: add this to the config
-            if base_frame:
-                left_extrinsics = np.linalg.inv(left_extrinsics) # Need to use T_cam_base, base2cam
-                right_extrinsics = np.linalg.inv(right_extrinsics) # Need to use T_cam_base, base2cam
-
+            # Transform based on the chosen frame
+            if chosen_frame == "base_frame" or chosen_frame == "ee_frame":
+                # base -> cam
+                left_extrinsics = np.linalg.inv(left_extrinsics)
+                right_extrinsics = np.linalg.inv(right_extrinsics)
                 left_actions_drawable = ee_pose_to_cam_frame(left_actions, left_extrinsics)
                 right_actions_drawable = ee_pose_to_cam_frame(right_actions, right_extrinsics)
-                actions_drawable = np.concatenate((left_actions_drawable, right_actions_drawable), axis=0)
+                actions_drawable = np.concatenate(
+                    (left_actions_drawable, right_actions_drawable), axis=0
+                )
+            elif chosen_frame == "cam_frame":
+                # already in camera frame; no transform needed
+                pass
+            # elif chosen_frame == "ee_frame":
+            #     # ee-frame deltas treated as-is for visualization
+            #     pass
+            else:
+                raise ValueError(f"Unsupported chosen_frame: {chosen_frame}")
         else:
             raise NotImplementedError(f"Arm {arm} not implemented")
         # left_actions_drawable = ee_pose_to_cam_frame(left_actions, extrinsics)
