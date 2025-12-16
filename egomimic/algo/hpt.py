@@ -823,6 +823,7 @@ class HPT(Algo):
         # ---------------------------
         **kwargs,
     ):
+        self.chosen_frame = kwargs.get("chosen_frame", "base_frame")
         self.nets = nn.ModuleDict()
         self.data_schematic = data_schematic
 
@@ -1267,12 +1268,10 @@ class HPT(Algo):
                     preds, preds_rot = self._extract_xyz(preds)
                 
                     # If we are using ee_frame, where gt and preds are deltas in ee frame, need to add the offset to gt and preds
-                    ee_frame = True
+                    ee_frame = self.chosen_frame == "ee_frame"
                     if ee_frame:
                         # cartesian arm is (B, 14), xyz quat xyz quat, just take :3 and then 6:9
-                        print(f"cartesian_arm: {cartesian_arm.shape}")
                         cartesian_arm = torch.cat([cartesian_arm[:, :3], cartesian_arm[:, 7:10]], dim=-1) # (B, 6)
-                        print(f"cartesian_arm: {cartesian_arm.shape}")
                         cartesian_arm = cartesian_arm.unsqueeze(1) # (B, 1, 6)
                         gt = gt + cartesian_arm
                         preds = preds + cartesian_arm
@@ -1305,6 +1304,7 @@ class HPT(Algo):
                         self.camera_transforms.extrinsics,
                         self.camera_transforms.intrinsics,
                         arm=arm,
+                        chosen_frame=self.chosen_frame,
                     )
                     ims[b] = draw_actions(
                         ims[b],
@@ -1314,6 +1314,7 @@ class HPT(Algo):
                         self.camera_transforms.extrinsics,
                         self.camera_transforms.intrinsics,
                         arm=arm,
+                        chosen_frame=self.chosen_frame,
                     )
 
                     if self.is_6dof and ac_key == "actions_cartesian":

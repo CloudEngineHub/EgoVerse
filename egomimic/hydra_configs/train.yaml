@@ -9,9 +9,10 @@ defaults:
   - override hydra/launcher: submitit
   - _self_
 
-name: cup_lerobot_ee_frame
-description: cup_lerobot_ee_frame
-ckpt_path: null
+name: null #cup_lerobot_ee_frame
+description: null #cup_lerobot_ee_frame
+chosen_frame: null #ee_frame # [ee_frame, base_frame, or cam_frame]
+ckpt_path: null #/iopsstor/scratch/cscs/jiaqchen/egomim_out/logs/cup_lerobot_ee_frame/cup_lerobot_ee_frame_2025-12-14_10-45-01/checkpoints/last.ckpt
 train: true
 eval: false
 

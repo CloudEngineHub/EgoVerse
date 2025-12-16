@@ -57,7 +57,6 @@ train_datasets:
     repo_id: "cupSauz"
     # root: "/cluster/work/cvg/jiaqchen/EGOMIM/data/objInBowl/objectInContainer"
     # root: "${oc.env:TMPDIR}/cup_camframe" # remember to just directly use the folder
-    # root: "/capstor/store/cscs/swissai/a144/jiaqchen/data/EGOMIM/eth_lerobot/release/cup_lerobot_base_frame"
     # root: "/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/debug/cup_lerobot_ee_frame"
     root: "/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/release/cup_lerobot_ee_frame"
     local_files_only: true
@@ -125,8 +124,8 @@ valid_datasets:
 
 train_dataloader_params:
   dataset1:
-    batch_size: 32
-    num_workers: 10
+    batch_size: 64
+    num_workers: 16
     prefetch_factor: 2  # Number of batches loaded in advance by each worker
   # dataset2:
   #   batch_size: 32
@@ -135,8 +134,8 @@ train_dataloader_params:
 
 valid_dataloader_params:
   dataset1:
-    batch_size: 32
-    num_workers: 10
+    batch_size: 64
+    num_workers: 16
     prefetch_factor: 2  # Number of batches loaded in advance by each worker
   # dataset2:
   #   batch_size: 32
