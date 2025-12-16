@@ -7,3 +7,6 @@ export HF_HOME=/iopsstor/scratch/cscs/jiaqchen/.hf_cache
 export HF_DATASETS_CACHE=$HF_HOME/hf_datasets_cache
 export TRANSFORMERS_CACHE=$HF_HOME/transformers_cache
 export HF_HUB_CACHE=$HF_HOME/hub_cache
+
+echo "HF_HOME: $HF_HOME"
+echo "DONE SOURCING"

@@ -1,20 +1,16 @@
 #!/bin/bash
-#SBATCH --job-name=egomimic_train
+#SBATCH --job-name=ego_ee
 #SBATCH --account=a144
-#SBATCH --output=slurm-%j.out
-#SBATCH --error=slurm-%j.err
-#SBATCH --time=9:00:00
+#SBATCH --output=slurm-ego_ee-%j.out
+#SBATCH --error=slurm-ego_ee-%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
-#SBATCH --cpus-per-task=16
 #SBATCH --gpus=4
-#SBATCH --gpus-per-task=1
-#SBATCH --mem=256G
+#SBATCH --time=12:00:00
 #SBATCH --partition=normal
 #SBATCH --environment=/users/jiaqchen/.edf/faive2lerobot.toml
 
-# Change to working directory
-cd /capstor/store/cscs/swissai/a144/jiaqchen/egoverse
+
 
 # Print job information
 echo "Job started at: $(date)"
@@ -49,9 +45,13 @@ nvidia-smi --query-gpu=memory.total --format=csv
 # Each process will source clariden.sh to activate venv and set up environment variables
 CMD="
 source /capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/eth_clariden/clariden.sh
+cd /iopsstor/scratch/cscs/jiaqchen/egomim_out
 python /capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/egomimic/trainHydra.py $@
 "
 srun bash -c "$CMD"
+
+# Copy the results to capstor
+
 
 # Print completion information
 echo "Job finished at: $(date)"
