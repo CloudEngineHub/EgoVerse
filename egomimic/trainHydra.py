@@ -1,3 +1,4 @@
+print("Starting trainHydra.py")
 from typing import Any, Dict, List, Optional, Tuple
 
 import hydra
@@ -31,6 +32,8 @@ torch.set_float32_matmul_precision("high")  # or "medium"
 # DEBUG
 # os.environ["HYDRA_FULL_ERROR"] = '1'
 
+print("Done importing")
+
 
 @task_wrapper
 def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
@@ -43,6 +46,9 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     :param cfg: A DictConfig configuration composed by Hydra.
     :return: A tuple with metrics and dict with all instantiated objects.
     """
+
+    print('SAVING OUTPUTS TO ', cfg.paths.output_dir)
+    
     # set seed for random number generators in pytorch, numpy and python.random
     if cfg.get("seed"):
         L.seed_everything(cfg.seed, workers=True)
@@ -95,11 +101,11 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     plugins = []
     if os.environ.get("SLURM_JOB_ID"):
         plugins.append(
-            SLURMEnvironment(requeue_signal=[signal.SIGUSR1, signal.SIGUSR2])
+            SLURMEnvironment(requeue_signal=signal.SIGUSR1)
         )
         print("SLURM REQUEUE ENABLED")
     trainer: Trainer = hydra.utils.instantiate(
-        cfg.trainer, callbacks=callbacks, logger=logger
+        cfg.trainer, callbacks=callbacks, logger=logger, plugins=plugins
     )
 
     object_dict = {
