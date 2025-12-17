@@ -1,0 +1,1116 @@
+_target_: egomimic.pl_utils.pl_data_utils.MultiDataModuleWrapper
+
+# df columns: 
+# ['episode_hash', 'operator', 'lab', 'num_frames', 'task',
+# 'task_description', 'scene', 'objects', 'processed_path', 'mp4_path',
+# 'is_deleted', 'embodiment', 'robot_name', 'is_eval', 'eval_score',
+# 'eval_success']
+
+valid_datasets:
+  op1_scene1_ep1: { _target_: egomimic.rldb.utils.S3RLDBDataset, bucket_name: "rldb", mode: total, embodiment: "aria_bimanual", local_files_only: True, 
+              temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity",
+              filters: {operator: "Elmo", lab: "rl2", scene: "1", task: "fold clothes", episode_hash: '2025-10-12-01-38-27-674000'} }
+  op1_scene1_ep2: { _target_: egomimic.rldb.utils.S3RLDBDataset, bucket_name: "rldb", mode: total, embodiment: "aria_bimanual", local_files_only: True, 
+              temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity",
+              filters: {operator: "Elmo", lab: "rl2", scene: "1", task: "fold clothes", episode_hash: '2025-11-11-22-46-39-752000'} }
+
+valid_dataloader_params:
+  op1_scene1:
+    batch_size: 32
+    num_workers: 10
+  op1_scene1_ep2:
+    batch_size: 32
+    num_workers: 10
+
+
+# 12 Operators, 3.75 min / scene, 8 scenes
+# Operator: [Elmo, Zhenyang, Xinchen, David, 
+#            Shuo, Rohan, Vaibhav, Mengying,
+#            Aniketh, Jenny, Baoyu, Pranav]
+
+# Base dataset template (removed anchor to avoid being passed as argument)
+# Base dataloader params template (removed anchor to avoid being passed as argument)
+
+train_datasets:
+  op1_scene1_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Elmo", lab: "rl2", scene: "1", task: "fold clothes", episode_hash: '2025-10-12-01-38-27-674000'}
+  op1_scene2_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Elmo", lab: "rl2", scene: "2", task: "fold clothes", episode_hash: '2025-10-12-01-39-29-633000'}
+  op1_scene3_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Elmo", lab: "rl2", scene: "3", task: "fold clothes", episode_hash: '2025-10-12-01-51-26-218000'}
+  op1_scene4_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Elmo", lab: "rl2", scene: "4", task: "fold clothes", episode_hash: "2025-10-12-01-50-21-394000"}
+  op1_scene5_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Elmo", lab: "rl2", scene: "5", task: "fold clothes", episode_hash: "2025-10-12-01-48-48-267000"}
+  op1_scene6_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Elmo", lab: "rl2", scene: "6", task: "fold clothes", episode_hash: "2025-10-13-03-59-26-539000"}
+  op1_scene7_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Elmo", lab: "rl2", scene: "7", task: "fold clothes", episode_hash: "2025-10-13-03-58-47-763000"}
+  op1_scene8_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Elmo", lab: "rl2", scene: "8", task: "fold clothes", episode_hash: "2025-10-13-03-55-42-588000"}
+  
+
+  op2_scene1_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Zhenyang", lab: "rl2", scene: "1", task: "fold clothes", episode_hash: '2025-09-21-20-44-10-000000'}
+  op2_scene2_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Zhenyang", lab: "rl2", scene: "2", task: "fold clothes", episode_hash: '2025-09-21-21-01-12-000000'}
+  op2_scene3_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Zhenyang", lab: "rl2", scene: "3", task: "fold clothes", episode_hash: '2025-09-21-21-35-21-000000'}
+  op2_scene4_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Zhenyang", lab: "rl2", scene: "4", task: "fold clothes", episode_hash: '2025-09-21-22-21-41-000000'}
+  op2_scene5_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Zhenyang", lab: "rl2", scene: "5", task: "fold clothes", episode_hash: '2025-09-22-02-02-19-000000'}
+  op2_scene6_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Zhenyang", lab: "rl2", scene: "6", task: "fold clothes", episode_hash: '2025-09-22-02-24-19-000000'}
+  op2_scene7_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Zhenyang", lab: "rl2", scene: "7", task: "fold clothes", episode_hash: '2025-09-22-02-36-16-000000'}
+  op2_scene8_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Zhenyang", lab: "rl2", scene: "8", task: "fold clothes", episode_hash: '2025-09-22-03-09-27-000000'}
+  
+
+  op3_scene1_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Xinchen", lab: "rl2", scene: "1", task: "fold clothes", episode_hash: '2025-09-24-13-50-23-000000'}
+  op3_scene2_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Xinchen", lab: "rl2", scene: "2", task: "fold clothes", episode_hash: '2025-09-24-14-11-01-000000'}
+  op3_scene3_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Xinchen", lab: "rl2", scene: "3", task: "fold clothes", episode_hash: '2025-09-24-14-42-14-000000'}
+  op3_scene4_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Xinchen", lab: "rl2", scene: "4", task: "fold clothes", episode_hash: '2025-09-24-16-28-59-000000'}
+  op3_scene5_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Xinchen", lab: "rl2", scene: "5", task: "fold clothes", episode_hash: '2025-09-24-15-01-42-000000'}
+  op3_scene6_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Xinchen", lab: "rl2", scene: "6", task: "fold clothes", episode_hash: '2025-09-24-15-16-29-000000'}
+  op3_scene7_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Xinchen", lab: "rl2", scene: "7", task: "fold clothes", episode_hash: '2025-09-24-15-44-35-000000'}
+  op3_scene8_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Xinchen", lab: "rl2", scene: "8", task: "fold clothes", episode_hash: '2025-09-24-16-08-35-000000'}
+  
+
+  op4_scene1_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "David", lab: "rl2", scene: "1", task: "fold clothes", episode_hash: '2025-09-26-17-40-42-000000'}
+  op4_scene2_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "David", lab: "rl2", scene: "2", task: "fold clothes", episode_hash: '2025-09-26-17-51-49-000000'}
+  op4_scene3_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "David", lab: "rl2", scene: "3", task: "fold clothes", episode_hash: '2025-09-26-18-47-40-000000'}
+  op4_scene4_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "David", lab: "rl2", scene: "4", task: "fold clothes", episode_hash: '2025-09-26-18-27-57-000000'}
+  op4_scene5_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "David", lab: "rl2", scene: "5", task: "fold clothes", episode_hash: '2025-09-26-19-08-33-000000'}
+  op4_scene6_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "David", lab: "rl2", scene: "6", task: "fold clothes", episode_hash: '2025-09-26-19-53-43-000000'}
+  op4_scene7_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "David", lab: "rl2", scene: "7", task: "fold clothes", episode_hash: '2025-09-26-20-13-41-000000'}
+  op4_scene8_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "David", lab: "rl2", scene: "8", task: "fold clothes", episode_hash: '2025-09-26-19-33-15-000000'}
+  
+
+  op5_scene1_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Shuo", lab: "rl2", scene: "1", task: "fold clothes", episode_hash: '2025-09-25-18-10-53-000000'}
+  op5_scene2_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Shuo", lab: "rl2", scene: "2", task: "fold clothes", episode_hash: '2025-09-25-18-42-13-000000'}
+  op5_scene3_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Shuo", lab: "rl2", scene: "3", task: "fold clothes", episode_hash: '2025-09-25-19-11-49-000000'}
+  op5_scene4_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Shuo", lab: "rl2", scene: "4", task: "fold clothes", episode_hash: '2025-09-25-19-27-43-000000'}
+  op5_scene5_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Shuo", lab: "rl2", scene: "5", task: "fold clothes", episode_hash: '2025-09-25-20-03-37-000000'}
+  op5_scene6_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Shuo", lab: "rl2", scene: "6", task: "fold clothes", episode_hash: '2025-09-25-21-05-37-000000'}
+  op5_scene7_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Shuo", lab: "rl2", scene: "7", task: "fold clothes", episode_hash: '2025-09-25-21-57-46-000000'}
+  op5_scene8_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Shuo", lab: "rl2", scene: "8", task: "fold clothes", episode_hash: '2025-09-25-22-44-19-000000'}
+  
+
+  op6_scene1_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Rohan", lab: "rl2", scene: "1", task: "fold clothes", episode_hash: '2025-09-27-20-29-18-000000'}
+  op6_scene2_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Rohan", lab: "rl2", scene: "2", task: "fold clothes", episode_hash: '2025-09-27-20-44-44-000000'}
+  # op6_scene3_ep1: 
+  #   _target_: egomimic.rldb.utils.S3RLDBDataset
+  #   bucket_name: "rldb"
+  #   mode: total
+  #   embodiment: "aria_bimanual"
+  #   local_files_only: True
+  #   temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+  #   filters: {operator: "Rohan", lab: "rl2", scene: "3", task: "fold clothes", episode_hash:}
+  op6_scene4_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Rohan", lab: "rl2", scene: "4", task: "fold clothes", episode_hash: '2025-09-27-21-42-08-000000'}
+  op6_scene5_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Rohan", lab: "rl2", scene: "5", task: "fold clothes", episode_hash: '2025-09-27-22-24-24-000000'}
+  op6_scene6_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Rohan", lab: "rl2", scene: "6", task: "fold clothes", episode_hash: '2025-10-03-17-09-59-000000'}
+  op6_scene7_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Rohan", lab: "rl2", scene: "7", task: "fold clothes", episode_hash: '2025-10-03-17-29-31-000000'}
+  op6_scene8_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Rohan", lab: "rl2", scene: "8", task: "fold clothes", episode_hash: '2025-09-27-22-01-47-000000'}
+  
+
+  op7_scene1_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Vaibhav", lab: "rl2", scene: "1", task: "fold clothes", episode_hash: '2025-09-26-18-36-44-000000'}
+  op7_scene2_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Vaibhav", lab: "rl2", scene: "2", task: "fold clothes", episode_hash: '2025-09-26-18-58-59-000000'}
+  op7_scene3_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Vaibhav", lab: "rl2", scene: "3", task: "fold clothes", episode_hash: '2025-09-26-19-47-50-000000'}
+  op7_scene4_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Vaibhav", lab: "rl2", scene: "4", task: "fold clothes", episode_hash: '2025-09-26-20-50-48-000000'}
+  op7_scene5_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Vaibhav", lab: "rl2", scene: "5", task: "fold clothes", episode_hash: '2025-09-26-20-17-33-000000'}
+  op7_scene6_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Vaibhav", lab: "rl2", scene: "6", task: "fold clothes", episode_hash: '2025-09-26-20-32-15-000000'}
+  op7_scene7_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Vaibhav", lab: "rl2", scene: "7", task: "fold clothes", episode_hash: '2025-10-03-17-06-02-000000'}
+  op7_scene8_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Vaibhav", lab: "rl2", scene: "8", task: "fold clothes", episode_hash: '2025-09-26-19-52-12-000000'}
+  
+
+  op8_scene1_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Mengying", lab: "rl2", scene: "1", task: "fold clothes", episode_hash: '2025-09-23-19-25-08-000000'}
+  op8_scene2_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Mengying", lab: "rl2", scene: "2", task: "fold clothes", episode_hash: '2025-09-23-19-32-44-000000'}
+  op8_scene3_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Mengying", lab: "rl2", scene: "3", task: "fold clothes", episode_hash: '2025-09-23-20-34-49-000000'}
+  op8_scene4_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Mengying", lab: "rl2", scene: "4", task: "fold clothes", episode_hash: '2025-09-23-21-58-00-000000'}
+  op8_scene5_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Mengying", lab: "rl2", scene: "5", task: "fold clothes", episode_hash: '2025-09-23-21-14-51-000000'}
+  op8_scene6_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Mengying", lab: "rl2", scene: "6", task: "fold clothes", episode_hash: '2025-09-23-20-19-39-000000'}
+  op8_scene7_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Mengying", lab: "rl2", scene: "7", task: "fold clothes", episode_hash: '2025-09-23-21-34-16-000000'}
+  op8_scene8_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Mengying", lab: "rl2", scene: "8", task: "fold clothes", episode_hash: '2025-09-23-22-43-03-000000'}
+  
+
+  op9_scene1_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Aniketh", lab: "rl2", scene: "1", task: "fold clothes", episode_hash: '2025-10-29-21-54-36-220000'}
+  op9_scene2_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Aniketh", lab: "rl2", scene: "2", task: "fold clothes", episode_hash: '2025-10-29-22-03-34-282000'}
+  op9_scene3_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Aniketh", lab: "rl2", scene: "3", task: "fold clothes", episode_hash: '2025-10-29-22-04-18-886000'}
+  op9_scene4_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Aniketh", lab: "rl2", scene: "4", task: "fold clothes", episode_hash: '2025-10-29-22-03-40-792000'}
+  op9_scene5_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Aniketh", lab: "rl2", scene: "5", task: "fold clothes", episode_hash: '2025-10-29-22-03-46-365000'}
+  op9_scene6_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Aniketh", lab: "rl2", scene: "6", task: "fold clothes", episode_hash: '2025-10-29-22-03-49-312000'}
+  op9_scene7_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Aniketh", lab: "rl2", scene: "7", task: "fold clothes", episode_hash: '2025-10-29-22-03-53-625000'}
+  op9_scene8_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Aniketh", lab: "rl2", scene: "8", task: "fold clothes", episode_hash: '2025-10-29-22-03-56-738000'}
+  
+
+  op10_scene1_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Jenny", lab: "rl2", scene: "1", task: "fold clothes", episode_hash: '2025-10-29-22-01-54-608000'}
+  op10_scene2_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Jenny", lab: "rl2", scene: "2", task: "fold clothes", episode_hash: '2025-10-29-22-01-58-834000'}
+  op10_scene3_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Jenny", lab: "rl2", scene: "3", task: "fold clothes", episode_hash: '2025-10-29-22-02-01-699000'}
+  op10_scene4_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Jenny", lab: "rl2", scene: "4", task: "fold clothes", episode_hash: '2025-10-29-22-02-04-385000'}
+  op10_scene5_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Jenny", lab: "rl2", scene: "5", task: "fold clothes", episode_hash: '2025-10-29-22-02-07-340000'}
+  op10_scene6_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Jenny", lab: "rl2", scene: "6", task: "fold clothes", episode_hash: '2025-10-29-22-02-10-145000'}
+  op10_scene7_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Jenny", lab: "rl2", scene: "7", task: "fold clothes", episode_hash: '2025-10-29-22-02-15-410000'}
+  op10_scene8_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Jenny", lab: "rl2", scene: "8", task: "fold clothes", episode_hash: '2025-10-29-22-02-20-323000'}
+  
+
+  op11_scene1_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Baoyu", lab: "rl2", scene: "1", task: "fold clothes", episode_hash: '2025-10-29-22-01-11-722000'}
+  op11_scene2_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Baoyu", lab: "rl2", scene: "2", task: "fold clothes", episode_hash: '2025-10-29-21-59-59-879000'}
+  op11_scene3_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Baoyu", lab: "rl2", scene: "3", task: "fold clothes", episode_hash: '2025-10-29-21-59-56-325000'}
+  op11_scene4_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Baoyu", lab: "rl2", scene: "4", task: "fold clothes", episode_hash: '2025-10-29-21-59-49-791000'}
+  op11_scene5_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Baoyu", lab: "rl2", scene: "5", task: "fold clothes", episode_hash: '2025-10-29-21-59-44-346000'}
+  op11_scene6_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Baoyu", lab: "rl2", scene: "6", task: "fold clothes", episode_hash: '2025-10-29-21-59-41-062000'}
+  op11_scene7_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Baoyu", lab: "rl2", scene: "7", task: "fold clothes", episode_hash: '2025-10-29-21-59-28-866000'}
+  op11_scene8_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Baoyu", lab: "rl2", scene: "8", task: "fold clothes", episode_hash: '2025-10-13-17-49-55-711000'}
+  
+  
+  op12_scene1_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Pranav", lab: "rl2", scene: "1", task: "fold clothes", episode_hash: '2025-10-29-22-06-00-432000'}
+  op12_scene2_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Pranav", lab: "rl2", scene: "2", task: "fold clothes", episode_hash: '2025-10-29-22-06-00-431000'}
+  op12_scene3_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Pranav", lab: "rl2", scene: "3", task: "fold clothes", episode_hash: '2025-10-29-22-06-00-415000'}
+  op12_scene4_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Pranav", lab: "rl2", scene: "4", task: "fold clothes", episode_hash: '2025-10-29-22-06-00-425000'}
+  op12_scene5_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Pranav", lab: "rl2", scene: "5", task: "fold clothes", episode_hash: '2025-10-29-22-06-00-424000'}
+  op12_scene6_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Pranav", lab: "rl2", scene: "6", task: "fold clothes", episode_hash: '2025-10-29-22-06-00-423000'}
+  op12_scene7_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Pranav", lab: "rl2", scene: "7", task: "fold clothes", episode_hash: '2025-10-29-22-06-00-419000'}
+  op12_scene8_ep1: 
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "aria_bimanual"
+    local_files_only: True
+    temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+    filters: {operator: "Pranav", lab: "rl2", scene: "8", task: "fold clothes", episode_hash: '2025-10-29-22-06-00-416000'}
+
+
+
+train_dataloader_params:
+  op1_scene1_ep1:
+    batch_size: 32
+    num_workers: 10
+  op1_scene2_ep1:
+    batch_size: 32
+    num_workers: 10
+  op1_scene3_ep1:
+    batch_size: 32
+    num_workers: 10
+  op1_scene4_ep1:
+    batch_size: 32
+    num_workers: 10
+  op1_scene5_ep1:
+    batch_size: 32
+    num_workers: 10
+  op1_scene6_ep1:
+    batch_size: 32
+    num_workers: 10
+  op1_scene7_ep1:
+    batch_size: 32
+    num_workers: 10
+  op1_scene8_ep1:
+    batch_size: 32
+    num_workers: 10
+  op2_scene1_ep1:
+    batch_size: 32
+    num_workers: 10
+  op2_scene2_ep1:
+    batch_size: 32
+    num_workers: 10
+  op2_scene3_ep1:
+    batch_size: 32
+    num_workers: 10
+  op2_scene4_ep1:
+    batch_size: 32
+    num_workers: 10
+  op2_scene5_ep1:
+    batch_size: 32
+    num_workers: 10
+  op2_scene6_ep1:
+    batch_size: 32
+    num_workers: 10
+  op2_scene7_ep1:
+    batch_size: 32
+    num_workers: 10
+  op2_scene8_ep1:
+    batch_size: 32
+    num_workers: 10
+  op3_scene1_ep1:
+    batch_size: 32
+    num_workers: 10
+  op3_scene2_ep1:
+    batch_size: 32
+    num_workers: 10
+  op3_scene3_ep1:
+    batch_size: 32
+    num_workers: 10
+  op3_scene4_ep1:
+    batch_size: 32
+    num_workers: 10
+  op3_scene5_ep1:
+    batch_size: 32
+    num_workers: 10
+  op3_scene6_ep1:
+    batch_size: 32
+    num_workers: 10
+  op3_scene7_ep1:
+    batch_size: 32
+    num_workers: 10
+  op3_scene8_ep1:
+    batch_size: 32
+    num_workers: 10
+  op4_scene1_ep1:
+    batch_size: 32
+    num_workers: 10
+  op4_scene2_ep1:
+    batch_size: 32
+    num_workers: 10
+  op4_scene3_ep1:
+    batch_size: 32
+    num_workers: 10
+  op4_scene4_ep1:
+    batch_size: 32
+    num_workers: 10
+  op4_scene5_ep1:
+    batch_size: 32
+    num_workers: 10
+  op4_scene6_ep1:
+    batch_size: 32
+    num_workers: 10
+  op4_scene7_ep1:
+    batch_size: 32
+    num_workers: 10
+  op4_scene8_ep1:
+    batch_size: 32
+    num_workers: 10
+  op5_scene1_ep1:
+    batch_size: 32
+    num_workers: 10
+  op5_scene2_ep1:
+    batch_size: 32
+    num_workers: 10
+  op5_scene3_ep1:
+    batch_size: 32
+    num_workers: 10
+  op5_scene4_ep1:
+    batch_size: 32
+    num_workers: 10
+  op5_scene5_ep1:
+    batch_size: 32
+    num_workers: 10
+  op5_scene6_ep1:
+    batch_size: 32
+    num_workers: 10
+  op5_scene7_ep1:
+    batch_size: 32
+    num_workers: 10
+  op5_scene8_ep1:
+    batch_size: 32
+    num_workers: 10
+  op6_scene1_ep1:
+    batch_size: 32
+    num_workers: 10
+  op6_scene2_ep1:
+    batch_size: 32
+    num_workers: 10
+  op6_scene4_ep1:
+    batch_size: 32
+    num_workers: 10
+  op6_scene5_ep1:
+    batch_size: 32
+    num_workers: 10
+  op6_scene6_ep1:
+    batch_size: 32
+    num_workers: 10
+  op6_scene7_ep1:
+    batch_size: 32
+    num_workers: 10
+  op6_scene8_ep1:
+    batch_size: 32
+    num_workers: 10
+  op7_scene1_ep1:
+    batch_size: 32
+    num_workers: 10
+  op7_scene2_ep1:
+    batch_size: 32
+    num_workers: 10
+  op7_scene3_ep1:
+    batch_size: 32
+    num_workers: 10
+  op7_scene4_ep1:
+    batch_size: 32
+    num_workers: 10
+  op7_scene5_ep1:
+    batch_size: 32
+    num_workers: 10
+  op7_scene6_ep1:
+    batch_size: 32
+    num_workers: 10
+  op7_scene7_ep1:
+    batch_size: 32
+    num_workers: 10
+  op7_scene8_ep1:
+    batch_size: 32
+    num_workers: 10
+  op8_scene1_ep1:
+    batch_size: 32
+    num_workers: 10
+  op8_scene2_ep1:
+    batch_size: 32
+    num_workers: 10
+  op8_scene3_ep1:
+    batch_size: 32
+    num_workers: 10
+  op8_scene4_ep1:
+    batch_size: 32
+    num_workers: 10
+  op8_scene5_ep1:
+    batch_size: 32
+    num_workers: 10
+  op8_scene6_ep1:
+    batch_size: 32
+    num_workers: 10
+  op8_scene7_ep1:
+    batch_size: 32
+    num_workers: 10
+  op8_scene8_ep1:
+    batch_size: 32
+    num_workers: 10
+  op9_scene1_ep1:
+    batch_size: 32
+    num_workers: 10
+  op9_scene2_ep1:
+    batch_size: 32
+    num_workers: 10
+  op9_scene3_ep1:
+    batch_size: 32
+    num_workers: 10
+  op9_scene4_ep1:
+    batch_size: 32
+    num_workers: 10
+  op9_scene5_ep1:
+    batch_size: 32
+    num_workers: 10
+  op9_scene6_ep1:
+    batch_size: 32
+    num_workers: 10
+  op9_scene7_ep1:
+    batch_size: 32
+    num_workers: 10
+  op9_scene8_ep1:
+    batch_size: 32
+    num_workers: 10
+  op10_scene1_ep1:
+    batch_size: 32
+    num_workers: 10
+  op10_scene2_ep1:
+    batch_size: 32
+    num_workers: 10
+  op10_scene3_ep1:
+    batch_size: 32
+    num_workers: 10
+  op10_scene4_ep1:
+    batch_size: 32
+    num_workers: 10
+  op10_scene5_ep1:
+    batch_size: 32
+    num_workers: 10
+  op10_scene6_ep1:
+    batch_size: 32
+    num_workers: 10
+  op10_scene7_ep1:
+    batch_size: 32
+    num_workers: 10
+  op10_scene8_ep1:
+    batch_size: 32
+    num_workers: 10
+  op11_scene1_ep1:
+    batch_size: 32
+    num_workers: 10
+  op11_scene2_ep1:
+    batch_size: 32
+    num_workers: 10
+  op11_scene3_ep1:
+    batch_size: 32
+    num_workers: 10
+  op11_scene4_ep1:
+    batch_size: 32
+    num_workers: 10
+  op11_scene5_ep1:
+    batch_size: 32
+    num_workers: 10
+  op11_scene6_ep1:
+    batch_size: 32
+    num_workers: 10
+  op11_scene7_ep1:
+    batch_size: 32
+    num_workers: 10
+  op11_scene8_ep1:
+    batch_size: 32
+    num_workers: 10
+  op12_scene1_ep1:
+    batch_size: 32
+    num_workers: 10
+  op12_scene2_ep1:
+    batch_size: 32
+    num_workers: 10
+  op12_scene3_ep1:
+    batch_size: 32
+    num_workers: 10
+  op12_scene4_ep1:
+    batch_size: 32
+    num_workers: 10
+  op12_scene5_ep1:
+    batch_size: 32
+    num_workers: 10
+  op12_scene6_ep1:
+    batch_size: 32
+    num_workers: 10
+  op12_scene7_ep1:
+    batch_size: 32
+    num_workers: 10
+  op12_scene8_ep1:
+    batch_size: 32
+    num_workers: 10
+
+
+

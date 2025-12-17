@@ -1,5 +1,5 @@
 defaults:
-  - model: hpt_cotrain_bimanual
+  - model: hpt_bc_flow_aria
   - paths: default
   - trainer: ddp
   - debug: null
@@ -76,6 +76,6 @@ data_schematic: # Dynamically fill in these shapes from the dataset
         lerobot_key: metadata.embodiment
   viz_img_key: 
     eve_bimanual:
-      front_img_1
+      base_0_rgb
     aria_bimanual:
-      front_img_1
+      base_0_rgb

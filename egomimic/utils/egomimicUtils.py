@@ -166,6 +166,16 @@ EXTRINSICS = {
        [-0.99959782, -0.02698416, -0.00872107, -0.23221381],
        [ 0.02504862, -0.69596148, -0.7176421 ,  0.57323278],
        [ 0.        ,  0.        ,  0.        ,  1.        ]])
+    },
+    "x5Dec13_2": {
+            "left": np.array([[ 0.01329544, -0.71757193,  0.69635749, -0.04409191],
+           [-0.99959782, -0.02698416, -0.00872107, -0.23221381],
+           [ 0.02504862, -0.69596148, -0.7176421 ,  0.57323278],
+           [ 0.        ,  0.        ,  0.        ,  1.        ]]),
+            "right": np.array([[-0.04733948, -0.76631195,  0.64072222, -0.01998031],
+           [-0.9983006 ,  0.05811952, -0.00424732,  0.32539554],
+           [-0.0339837 , -0.63983444, -0.76776103,  0.64809634],
+           [ 0.        ,  0.        ,  0.        ,  1.        ]])
     }
 }
 
@@ -442,7 +452,7 @@ def draw_actions(im, type, color, actions, extrinsics, intrinsics, arm="both", k
             left_actions_drawable = ee_pose_to_cam_frame(left_actions, extrinsics["left"])
             actions_drawable = np.concatenate((left_actions_drawable, right_actions_drawable), axis=0)
         elif arm == "right":
-            right_actions = kinematics_solver.fk_pos(actions[:, :6])
+            right_actions = kinematics_solver.fk_pos(actions[:, 7:13])
             right_actions_drawable = ee_pose_to_cam_frame(right_actions, extrinsics["right"])
             actions_drawable = right_actions_drawable
         elif arm == "left":
