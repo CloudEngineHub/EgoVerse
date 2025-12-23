@@ -460,13 +460,65 @@ def draw_rotation_text(
 
     return image
 
-def draw_actions(im, type, color, actions, extrinsics, intrinsics, arm="both", kinematics_solver=None):
+def wrist_delta_to_cam_frame(pose_cam: np.ndarray, wrist_actions: np.ndarray) -> np.ndarray:
+    """
+    Single-arm
+
+    pose_cam:      (B, 6)  absolute EE pose in CAMERA frame at reference t
+                  [x,y,z,yaw,pitch,roll]
+    wrist_actions: (B, T, 6) wrist-relative actions in EE/wrist frame
+                  [dx,dy,dz, dyaw,dpitch,droll]
+
+    returns:       (B, T, 6) absolute future EE poses in CAMERA frame
+    """
+    if pose_cam.ndim != 2 or pose_cam.shape[1] != 6:
+        raise ValueError(f"pose_cam must be (B,6), got {pose_cam.shape}")
+    if wrist_actions.ndim != 3 or wrist_actions.shape[2] != 6:
+        raise ValueError(f"wrist_actions must be (B,T,6), got {wrist_actions.shape}")
+    if pose_cam.shape[0] != wrist_actions.shape[0]:
+        raise ValueError("Batch size mismatch")
+
+    B = pose_cam.shape[0]
+    T = wrist_actions.shape[1]
+
+    pose_cam = pose_cam.astype(np.float32)
+    wrist_actions = wrist_actions.astype(np.float32)
+
+    xyz0 = pose_cam[:, :3]      # (B,3)
+    ypr0 = pose_cam[:, 3:6]     # (B,3)
+    R0 = Rotation.from_euler("zyx", ypr0, degrees=False).as_matrix()  # (B,3,3)
+
+    T0 = np.zeros((B, 4, 4), dtype=np.float32)
+    T0[:, :3, :3] = R0
+    T0[:, :3, 3] = xyz0
+    T0[:, 3, 3] = 1.0
+
+    dxyz = wrist_actions[..., :3]     # (B,T,3)
+    dypr = wrist_actions[..., 3:6]    # (B,T,3)
+
+    Rrel = Rotation.from_euler("zyx", dypr.reshape(-1, 3), degrees=False).as_matrix()
+    Rrel = Rrel.reshape(B, T, 3, 3)
+
+    Trel = np.zeros((B, T, 4, 4), dtype=np.float32)
+    Trel[..., :3, :3] = Rrel
+    Trel[..., :3, 3] = dxyz
+    Trel[..., 3, 3] = 1.0
+
+    Tfuture = T0[:, None, :, :] @ Trel  # (B,T,4,4)
+
+    xyz = Tfuture[..., :3, 3]  # (B,T,3)
+    ypr = Rotation.from_matrix(Tfuture[..., :3, :3].reshape(-1, 3, 3)).as_euler("zyx", degrees=False)
+    ypr = ypr.reshape(B, T, 3)
+
+    return np.concatenate([xyz, ypr], axis=-1)  # (B,T,6)
+
+def draw_actions(im, type, color, actions, extrinsics, intrinsics, arm="both", kinematics_solver=None, pose=None):
     """
     args:
         im: (H, W, C)
-        type: "joints" or "xyz"
+        type: "joints" or "xyz" or "xyz_wrist"
         color: ex) "Purples", "Blues", "Greens"
-        actions: (N, 6) or (N, 3) if type is "xyz" or (N, 7) or (N, 14) if type is "joints"
+        actions: (N, 6) or (N, 3) if type is "xyz" or (N, 7) or (N, 14) if type is "joints" or "xyz_wrist"
         extrinsics: dict with keys "left" and "right" with values (4, 4)
         intrinsics: (3, 4)
         arm: "both", "left", "right"
@@ -475,6 +527,10 @@ def draw_actions(im, type, color, actions, extrinsics, intrinsics, arm="both", k
     """
     if type == "joints" and kinematics_solver is None:
         raise ValueError("kinematics_solver is required for joints actions")
+    
+    if type == "xyz_wrist" and pose is None:
+        raise ValueError("passing pose is required for wrist relative actions")
+    
     if type == "joints": 
         if arm == "both":
             right_actions = kinematics_solver.fk_pos(actions[:, 7:13])
@@ -490,9 +546,22 @@ def draw_actions(im, type, color, actions, extrinsics, intrinsics, arm="both", k
             left_actions = kinematics_solver.fk_pos(actions[:, :6])
             left_actions_drawable = ee_pose_to_cam_frame(left_actions, extrinsics["left"])
             actions_drawable = left_actions_drawable
-    else:
+    elif type == "xyz":
         actions = actions.reshape(-1, 3)
         actions_drawable = actions
+    elif type == "xyz_wrist":
+        if arm == "both":
+            left_pose = pose[..., :6][None, :]
+            right_pose = pose[..., 6:][None, :]
+            left_actions = actions[..., :6][None, :]
+            right_actions = actions[..., 6:][None, :]
+            left_actions_drawable = wrist_delta_to_cam_frame(left_pose, left_actions)[..., :3]
+            right_actions_drawable = wrist_delta_to_cam_frame(right_pose, right_actions)[..., 6:9]
+            actions_drawable = np.concatenate((left_actions_drawable, right_actions_drawable), axis=0)
+            actions_drawable = actions_drawable.reshape(-1, 3)
+        else:
+            actions_drawable = wrist_delta_to_cam_frame(pose[None, :], actions[None, :])
+            actions_drawable = actions_drawable.reshape(-1, 3)
 
     actions_drawable = cam_frame_to_cam_pixels(actions_drawable, intrinsics)
     im = draw_dot_on_frame(im, actions_drawable, show=False, palette=color)

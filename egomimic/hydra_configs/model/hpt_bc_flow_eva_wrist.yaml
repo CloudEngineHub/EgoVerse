@@ -1,0 +1,8 @@
+defaults:
+  - hpt_bc_flow_eva
+
+robomimic_model:
+  wrist_actions: true
+
+  ac_keys:
+    eva_right_arm: "actions_eef_cartesian"

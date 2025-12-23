@@ -844,6 +844,8 @@ class HPT(Algo):
         self.is_6dof = kwargs.get("6dof", False)
         self.kinematics_solver = kwargs.get("kinematics_solver", None)
 
+        self.wrist_actions = kwargs.get("wrist_actions", False)
+        
         model = HPTModel(**trunk)
         model.auxiliary_ac_keys = self.auxiliary_ac_keys
 
@@ -1259,13 +1261,39 @@ class HPT(Algo):
             if f"{embodiment_name}_{key}" in predictions:
                 preds = predictions[f"{embodiment_name}_{key}"]
                 gt = batch[key]
-
+                pose = None
+                
                 if self.is_6dof and ac_key == "actions_cartesian":
                     gt, gt_rot = self._extract_xyz(gt)
                     preds, preds_rot = self._extract_xyz(preds)
+                    
+                if self.wrist_actions and ac_key == "actions_eef_cartesian":
+                    pose = batch['ee_pose']
+                    
+                    D = preds.shape[-1]
 
+                    if D == 7:
+                        # single-arm: drop gripper
+                        preds = preds[..., :6]
+                        gt = gt[..., :6]
+                        pose = pose[..., :6]
+
+                    elif D == 14:
+                        # bimanual: drop grippers at indices 6 and 13
+                        preds = np.concatenate(
+                            [preds[..., :6], preds[..., 7:13]], axis=-1
+                        )
+                        gt = np.concatenate(
+                            [gt[..., :6], gt[..., 7:13]], axis=-1
+                        )
+                        pose = np.concatenate(
+                            [pose[..., :6], pose[..., 7:13]], axis=-1
+                        )
+                    
                 for b in range(ims.shape[0]):
-                    if preds.shape[-1] == 7 or preds.shape[-1] == 14:
+                    if self.wrist_actions and preds.shape[-1] in (7, 14, 6, 12):
+                        ac_type = "xyz_wrist"
+                    elif preds.shape[-1] == 7 or preds.shape[-1] == 14:
                         ac_type = "joints"
                     elif preds.shape[-1] == 3 or preds.shape[-1] == 6:
                         ac_type = "xyz"
@@ -1283,8 +1311,8 @@ class HPT(Algo):
                         arm = "right"
                     else:
                         raise ValueError(f"Unknown embodiment name: {embodiment_name}")
-                    ims[b] = draw_actions(ims[b], ac_type, "Purples", preds[b].cpu().numpy(), self.camera_transforms.extrinsics, self.camera_transforms.intrinsics, arm=arm, kinematics_solver=self.kinematics_solver)
-                    ims[b] = draw_actions(ims[b], ac_type, "Greens", gt[b].cpu().numpy(), self.camera_transforms.extrinsics, self.camera_transforms.intrinsics, arm=arm, kinematics_solver=self.kinematics_solver)
+                    ims[b] = draw_actions(ims[b], ac_type, "Purples", preds[b].cpu().numpy(), self.camera_transforms.extrinsics, self.camera_transforms.intrinsics, arm=arm, kinematics_solver=self.kinematics_solver, pose=pose[b].cpu().numpy())
+                    ims[b] = draw_actions(ims[b], ac_type, "Greens", gt[b].cpu().numpy(), self.camera_transforms.extrinsics, self.camera_transforms.intrinsics, arm=arm, kinematics_solver=self.kinematics_solver, pose=pose[b].cpu().numpy())
                     
                     if self.is_6dof and ac_key == "actions_cartesian":
                         ims[b] = draw_rotation_text(
