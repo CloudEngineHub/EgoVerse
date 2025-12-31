@@ -86,12 +86,13 @@ class ModelWrapper(LightningModule):
         my_policy_wrapper.policy.eval().to('cuda') 
 
         batch_trace = {k: v[0:1] for k, v in batch[6].items()}
-        traced_path = os.path.join('/xiongyi/EgoVerse/trace_test', f"epoch_{self.trainer.current_epoch}", f'policy_traced.pt')
-        if not os.path.exists(traced_path):
-            os.makedirs(os.path.dirname(traced_path), exist_ok=True)
-            traced_policy = torch.jit.trace(my_policy_wrapper, batch_trace, strict=False)
-            traced_policy.save(traced_path)
-            del traced_policy
+        # import pdb; pdb.set_trace()
+        # traced_path = os.path.join('/data2/rogerqiu/EgoVerse/trace_test', f"epoch_{self.trainer.current_epoch}", f'policy_traced.pt')
+        # if not os.path.exists(traced_path):
+        #    os.makedirs(os.path.dirname(traced_path), exist_ok=True)
+        #    traced_policy = torch.jit.trace(my_policy_wrapper, batch_trace, strict=False)
+        #    traced_policy.save(traced_path)
+        #    del traced_policy
         
         # loaded_policy = torch.jit.load(traced_path)
         # torch.random.manual_seed(0)

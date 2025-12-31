@@ -1104,8 +1104,8 @@ class HPT(Algo):
                 metrics[f"Valid/{pred_key}_frechet_gauss_min"] = fd.min().item()
                 metrics[f"Valid/{pred_key}_frechet_gauss_max"] = fd.max().item()
             
-            ims = self.visualize_preds(preds, _batch)
-            images_dict[embodiment_id] = ims
+            # ims = self.visualize_preds(preds, _batch)
+            # images_dict[embodiment_id] = ims
 
         return metrics, images_dict
     @override
