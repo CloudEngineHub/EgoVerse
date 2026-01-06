@@ -121,21 +121,32 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         log.info("Logging hyperparameters!")
         log_hyperparameters(object_dict)
 
-    if (
-        os.environ.get("SLURM_JOB_ID")
-        and os.environ.get("SLURM_RESTART_COUNT", "0") != "0"
-    ):
-        last_ckpt_path = os.path.join(
-            trainer.default_root_dir, "checkpoints", "last.ckpt"
-        )
-        log.info("Detected SLURM requeue — resuming from 'last.ckpt'")
-        cfg.ckpt_path = last_ckpt_path
+    # Determine checkpoint path for resuming
+    import glob
+    hpc_ckpts = glob.glob(os.path.join(trainer.default_root_dir, "hpc_ckpt_*.ckpt"))
+    if hpc_ckpts:
+        # Use Lightning's HPC resume (picks latest hpc_ckpt_*.ckpt)
+        resume_ckpt_path = "hpc"
+        log.info(f"Found HPC checkpoint(s), resuming with ckpt_path='hpc'")
+    elif cfg.get("ckpt_path") and cfg.get("ckpt_path") != "null":
+        # Use explicitly provided checkpoint if it exists
+        provided_path = cfg.get("ckpt_path")
+        if os.path.isfile(provided_path):
+            resume_ckpt_path = provided_path
+            log.info(f"Resuming from provided ckpt_path: {resume_ckpt_path}")
+        else:
+            log.warning(f"Provided ckpt_path does not exist: {provided_path}, starting fresh")
+            resume_ckpt_path = None
+    else:
+        # Fresh start
+        resume_ckpt_path = None
+        log.info("No checkpoint found, starting fresh")
 
     os.makedirs(os.path.join(trainer.default_root_dir, "videos"), exist_ok=True)
 
     if cfg.get("train"):
         log.info("Starting training!")
-        trainer.fit(model=model, datamodule=datamodule, ckpt_path="hpc") #cfg.get("ckpt_path"))
+        trainer.fit(model=model, datamodule=datamodule, ckpt_path=resume_ckpt_path)
 
     if cfg.get("eval"):
         eval: Eval = hydra.utils.instantiate(
