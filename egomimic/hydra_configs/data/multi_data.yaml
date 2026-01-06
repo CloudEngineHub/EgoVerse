@@ -62,6 +62,12 @@ train_datasets:
     local_files_only: true
     mode: "train"
 
+  # dataset2:
+  #   _target_: rldb.utils.S3RLDBDataset
+  #   bucket_name: "rldb"
+  #   mode: train
+  #   embodiment: ""
+
 valid_datasets:
   # dataset1:
   #   _target_: rldb.utils.MultiRLDBDataset

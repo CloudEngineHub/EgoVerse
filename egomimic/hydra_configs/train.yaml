@@ -19,7 +19,7 @@ eval: false
 eval_class:
   _target_ : egomimic.scripts.evaluation.Eve
   mode: real
-  arm: both
+  arm: right
   eval_path: "./logs/eval/${name}_${now:%Y-%m-%d_%H-%M-%S}"
 
 hydra:
@@ -50,7 +50,7 @@ data_schematic: # Dynamically fill in these shapes from the dataset
     #   embodiment:
     #     key_type: metadata_keys
     #     lerobot_key: metadata.embodiment
-    eve_bimanual:
+    eve_right_arm:
       front_img_1:
         key_type: camera_keys
         lerobot_key: observations.images.aria_rgb_cam
@@ -75,5 +75,5 @@ data_schematic: # Dynamically fill in these shapes from the dataset
   viz_img_key: 
     # aria_right_arm:
     #   front_img_1
-    eve_bimanual:
+    eve_right_arm:
       front_img_1
