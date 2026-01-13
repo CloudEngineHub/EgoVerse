@@ -35,14 +35,25 @@ def get_simple_response_dict_egocentric(task_id: str) -> Optional[Dict[str, str]
             "annotations_url": resp["annotations"]["url"],
             "sfs_url": resp["full_recording"]["sfs_url"],
         }
-
-        for video in resp["full_recording"]["video_urls"]:
-            sensor_id = video["sensor_id"]
-            for key, value in video.items():
-                if key != "sensor_id":
-                    response_dict[f"{sensor_id}_{key}"] = value
         
+        for video in resp["full_recording"]["video_urls"]:
+            print(video)
+            if video["sensor_id"] == "left":
+                response_dict["left_rectified"] = video["rgb_url"]
+            else:
+                response_dict["right_rectified"] = video["rgb_url"]
+            # #sensor_id = video["sensor_id"]
+            # for key, value in video.items():
+            #     if key == "sensor_id":
+            #         if value == "left":
+
+            #     if "left" in key:
+            #         response_dict["left_rectified"] = value
+            #     elif "right" in key:
+            #         response_dict["right_rectified"] = value
+    
         return response_dict
+    
     except Exception as e:
         print(f"Error retrieving task {task_id}: {e}")
         return None

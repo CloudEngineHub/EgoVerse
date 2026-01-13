@@ -394,6 +394,9 @@ class EgoverseDatasetWriter:
             'actions_head_cartesian_world': [],
             'observations.state.ee_pose_cam': [],
         }
+        self.next_index = 0
+        #assuming that we don't need kinematics so setting accordingly. I'm not sure what this should actually be
+        self.metadata_embodiment = 6
     
     def process_and_write_episode(self, frames: List[FrameData], intrinsics: Dict[str, float], source_info: Dict[str, Any]) -> int:
         valid_frames = len(frames) - ACTION_CHUNK_LENGTH
@@ -406,7 +409,7 @@ class EgoverseDatasetWriter:
         
         rows = []
         for t in tqdm(range(valid_frames), desc="Processing frames"):
-            row = self._create_parquet_row(frames, t)
+            row = self._create_parquet_row(frames, t, task_index)
             if row is not None:
                 rows.append(row)
         
@@ -423,14 +426,13 @@ class EgoverseDatasetWriter:
                 continue
             
             episode_idx = len(self.episodes)
-            self._write_parquet(episode_idx, subepisode_rows)
+            self._write_parquet(episode_idx, subepisode_rows, task_index)
             self._write_annotations_csv(episode_idx, frames[start_idx:end_idx])
             
             self.episodes.append({
                 'episode_index': episode_idx,
-                'task_index': task_index,
+                'tasks': [task_desc],
                 'length': len(subepisode_rows),
-                'source_task_id': source_info.get('task_id', ''),
             })
             self._accumulate_stats(subepisode_rows)
             num_subepisodes += 1
@@ -452,7 +454,7 @@ class EgoverseDatasetWriter:
         self.tasks.append({'task_index': task_index, 'task': task_desc})
         return task_index
     
-    def _create_parquet_row(self, frames: List[FrameData], t: int) -> Optional[Dict[str, Any]]:
+    def _create_parquet_row(self, frames: List[FrameData], t: int, task_index: int) -> Optional[Dict[str, Any]]:
         frame_t = frames[t]
         camera_pose_t = frame_t.camera_pose
         
@@ -512,11 +514,19 @@ class EgoverseDatasetWriter:
             'observations.images.front_img_1': image_chw.astype(np.uint8),
             'observations.state.ee_pose_cam': obs_ee_pose.astype(np.float32),
             'timestamp': timestamp_ns,
-            'frame_index': t,
+            'frame_index': int(frame_t.frame_index),
+            'task_index': int(task_index),
         }
     
-    def _write_parquet(self, episode_idx: int, rows: List[Dict[str, Any]]):
+    def _write_parquet(self, episode_idx: int, rows: List[Dict[str, Any]], task_index: int):
         filepath = self.data_dir / f"episode_{episode_idx:06d}.parquet"
+        
+        for row in rows:
+            row['episode_index'] = int(episode_idx)
+            row['task_index'] = int(task_index)
+            row['index'] = int(self.next_index)
+            row['metadata.embodiment'] = int(self.metadata_embodiment)
+            self.next_index += 1
         
         columns = {}
         for key in rows[0].keys():
@@ -567,14 +577,99 @@ class EgoverseDatasetWriter:
                 f.write(json.dumps(task) + '\n')
         
         # info.json
-        info = {
-            'camera_intrinsics': intrinsics,
-            'num_episodes': len(self.episodes),
-            'sub_episode_length': SUB_EPISODE_LENGTH,
-            'action_chunk_length': ACTION_CHUNK_LENGTH,
-            'task_id': self.task_id,
+        total_frames = int(sum(ep.get('length', 0) for ep in self.episodes))
+        chunk_dirs = sorted(self.data_dir.parent.glob("chunk-*"))
+        total_chunks = len(chunk_dirs) if chunk_dirs else 1
+
+        train_split = [ep['episode_index'] for ep in self.episodes]
+        valid_split = []
+        if len(train_split) > 1:
+            valid_split = [train_split[-1]]
+            train_split = train_split[:-1]
+
+        image_height = int(intrinsics.get('height', 1200)) if intrinsics else 1200
+        image_width = int(intrinsics.get('width', 1920)) if intrinsics else 1920
+
+        feature_spec = {
+            'observations.images.front_img_1': {
+                'dtype': 'image',
+                'shape': [3, image_height, image_width],
+                'names': ['channel', 'height', 'width'],
+            },
+            'actions_ee_cartesian_cam': {
+                'dtype': 'prestacked_float32',
+                'shape': [ACTION_CHUNK_LENGTH, 12],
+                'names': ['chunk_length', 'action_dim'],
+            },
+            'actions_ee_keypoints_world': {
+                'dtype': 'prestacked_float32',
+                'shape': [ACTION_CHUNK_LENGTH, 126],
+                'names': ['chunk_length', 'keypoint_dim'],
+            },
+            'actions_head_cartesian_world': {
+                'dtype': 'float32',
+                'shape': [10],
+                'names': ['dim_0'],
+            },
+            'observations.state.ee_pose_cam': {
+                'dtype': 'float32',
+                'shape': [12],
+                'names': ['dim_0'],
+            },
+            'timestamp': {
+                'dtype': 'float32',
+                'shape': [1],
+                'names': None,
+            },
+            'frame_index': {
+                'dtype': 'int64',
+                'shape': [1],
+                'names': None,
+            },
+            'episode_index': {
+                'dtype': 'int64',
+                'shape': [1],
+                'names': None,
+            },
+            'index': {
+                'dtype': 'int64',
+                'shape': [1],
+                'names': None,
+            },
+            'task_index': {
+                'dtype': 'int64',
+                'shape': [1],
+                'names': None,
+            },
+            'metadata.embodiment': {
+                'dtype': 'int32',
+                'shape': [1],
+                'names': ['dim_0'],
+            },
         }
-        
+
+        info = {
+            'codebase_version': 'v2.0',
+            'robot_type': 'aria_bimanual',
+            'total_episodes': len(self.episodes),
+            'total_frames': total_frames,
+            'total_tasks': len(self.tasks),
+            'total_videos': 0,
+            'total_chunks': total_chunks,
+            'chunks_size': 1000,
+            'fps': 30,
+            'splits': {
+                'train': train_split,
+                'valid': valid_split,
+            },
+            'data_path': 'data/chunk-{episode_chunk:03d}/episode_{episode_index:06d}.parquet',
+            'video_path': 'videos/chunk-{episode_chunk:03d}/{video_key}/episode_{episode_index:06d}.mp4',
+            'features': feature_spec,
+        }
+
+        if intrinsics:
+            info['camera_intrinsics'] = intrinsics
+
         if demonstration_metadata:
             info['demonstration'] = {
                 'rating': demonstration_metadata.get('Demonstration Rating', ''),
@@ -585,10 +680,10 @@ class EgoverseDatasetWriter:
                 'lighting_conditions': demonstration_metadata.get('Lighting Conditions', ''),
                 'is_good_video': demonstration_metadata.get('Is Good Video?', ''),
             }
-        
+
         if additional_info:
             info.update(additional_info)
-        
+
         with open(self.meta_dir / "info.json", 'w') as f:
             json.dump(info, f, indent=2)
         
