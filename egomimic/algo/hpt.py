@@ -971,8 +971,30 @@ class HPT(Algo):
                 embodiment: torch.Size([])
         """
         processed_batch = {}
+        
+        # Get set of configured embodiment IDs to filter out unconfigured ones
+        configured_embodiment_ids = {get_embodiment_id(domain) for domain in self.domains}
 
         for embodiment_id, _batch in batch.items():
+            # Skip embodiment_ids that are not in the configured domains
+            if embodiment_id not in configured_embodiment_ids:
+                continue
+            
+            # Skip if ac_keys[embodiment_id] was not set during initialization
+            # This can happen if the action key doesn't match or data_schematic doesn't have the key
+            if embodiment_id not in self.ac_keys:
+                # Log a warning and skip this batch
+                import warnings
+                embodiment_name = get_embodiment(embodiment_id)
+                warnings.warn(
+                    f"embodiment_id {embodiment_id} ({embodiment_name}) is in configured domains "
+                    f"but ac_keys[{embodiment_id}] was not set during initialization. "
+                    f"This usually means the action key in the config doesn't match the dataset. "
+                    f"Skipping this batch.",
+                    UserWarning
+                )
+                continue
+                
             processed_batch[embodiment_id] = {}
             for key, value in _batch.items():
                 key_name = self.data_schematic.lerobot_key_to_keyname(

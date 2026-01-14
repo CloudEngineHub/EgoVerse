@@ -431,20 +431,19 @@ class ACT(Algo):
         gt = batch[self.data_schematic.action_keys()[0]]
 
         for b in range(ims.shape[0]):
-            if preds.shape[-1] == 7 or preds.shape[-1] == 14:
-                ac_type = "joints"
-            elif preds.shape[-1] == 3 or preds.shape[-1] == 6:
+            if preds.shape[-1] == 3 or preds.shape[-1] == 6:
                 ac_type = "xyz"
-            elif preds.shape[-1] == 34:
+            elif preds.shape[-1] == 34 or preds.shape[-1] == 17:
                 # Handle 34D action space - likely high-dimensional joint space or multi-robot setup
                 # For visualization, we'll treat this as a joint-based action
                 ac_type = "joints"
+                continue # skip drawing for now, TODO: need to implement drawing for hand joints
             else:
                 # For unknown action dimensions, skip visualization instead of crashing
                 print(f"Warning: Unknown action type with shape {preds.shape}, skipping visualization")
                 continue
 
-            arm = "right" if preds.shape[-1] == 7 or preds.shape[-1] == 3 else "both"
+            arm = "right" if preds.shape[-1] == 17 or preds.shape[-1] == 3 else "both"
             ims[b] = draw_actions(
                 ims[b],
                 ac_type,

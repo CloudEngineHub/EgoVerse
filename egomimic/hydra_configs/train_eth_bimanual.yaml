@@ -1,5 +1,5 @@
 defaults:
-  - model: hpt_cotrain_flow_transformer
+  - model: hpt_cotrain_flow_transformer_eth_bimanual
   - paths: default
   - trainer: ddp
   - debug: null
@@ -19,7 +19,7 @@ eval: false
 eval_class:
   _target_ : egomimic.scripts.evaluation.Eve
   mode: real
-  arm: right
+  arm: both
   eval_path: "./logs/eval/${name}_${now:%Y-%m-%d_%H-%M-%S}"
 
 hydra:

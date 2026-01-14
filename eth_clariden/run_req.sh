@@ -1,19 +1,25 @@
 #!/bin/bash
-#SBATCH --job-name=fold_clothes
+#SBATCH --job-name=T_utensils_50hz
 #SBATCH --account=a144
-#SBATCH --output=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_slurm_out/50hz/fold_clothes/slurm-fold_clothes-%j-%t.out
-#SBATCH --error=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_slurm_out/50hz/fold_clothes/slurm-fold_clothes-%j-%t.err
-#SBATCH --nodes=2
+#SBATCH --output=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_slurm_out_v2/50hz/utensils/slurm-utensilstrain-%j.out
+#SBATCH --error=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_slurm_out_v2/50hz/utensils/slurm-utensilstrain-%j.err
+#SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
-#SBATCH --time=00:30:00
+#SBATCH --time=10:00:00
 #SBATCH --partition=normal
 #SBATCH --environment=/users/jiaqchen/.edf/faive2lerobot.toml
 #SBATCH --requeue
-#SBATCH --signal=SIGUSR1@600
+#SBATCH --signal=USR1@600
 
 # Stop the script if a command fails or if an undefined variable is used
 set -eo pipefail
+
+echo $PG # POINT_GAP_ACT
+echo $CL # CHUNK_LENGTH_ACT, need to change action horizon
+export UTENSILS_EXP=pg${PG}_cl${CL}
+echo $UTENSILS_EXP
+
 
 # The sbatch script is executed by only one node.
 echo "[sbatch-master] running on $(hostname)"
@@ -28,6 +34,7 @@ echo "[sbatch-master] define some env vars that will be passed to the compute no
 export MASTER_ADDR=$(scontrol show hostname "$SLURM_NODELIST" | head -n1)  
 export MASTER_PORT=12345   # Choose an unused port
 export WORLD_SIZE=$(( SLURM_NNODES * SLURM_NTASKS_PER_NODE ))
+export NCCL_NET="AWS Libfabric"
 
 
 # Print job information
@@ -42,21 +49,43 @@ nvidia-smi --query-gpu=memory.total --format=csv
 
 # Lightning will automatically requeue the job if it crashes, so following is unnecessary: On SIGUSR1, request requeue and exit gracefully
 # trap 'echo "$(date -Ins) SIGUSR1 received; requeuing..."; scontrol requeue "$SLURM_JOB_ID"; exit 0' USR1
+# Trap and send to all children processes
+# trap 'echo "USR1 trapped"; kill -USR1 -- -$$' USR1
 
-export task=fold_clothes
+##################### SET THESE VARIABLES #####################
+export task=utensils
 export frame_type=base_frame
-export domain=eve_bimanual
-export hydra_run_dir=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node/50hz/${task}/${task}_${frame_type}
+export arm=right_arm
+export debug=false
+###############################################################
+
+##################### MAYBE CHANGE THIS PATH #####################
+export hydra_run_dir=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_v2/50hz/${UTENSILS_EXP}/${task}/${task}_${frame_type}
+export dataset_root=/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/release_2_0/50hz/${UTENSILS_EXP}/${task}_lerobot_${frame_type}
+# export dataset_root=/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/debug_2_0/${task}_lerobot_${frame_type}_1_debug
+##################################################################
+
+if [ "$debug" = true ]; then
+    export trainer=debug
+    export logger=debug
+else
+    export trainer=ddp
+    export logger=wandb
+fi
+
+export config_name=train_eth_${arm}
 export ckpt_path=${hydra_run_dir}/checkpoints/last.ckpt
 ckpt_path=$( [[ -f "$ckpt_path" ]] && echo "$ckpt_path" || echo null )
 echo "CHECKPOINT PATH! ckpt_path: $ckpt_path"
 
-export dataset_root=/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/release_2_0/${task}_lerobot_${frame_type}
 
 CMD="
 source /capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/eth_clariden/clariden.sh
 cd /iopsstor/scratch/cscs/jiaqchen/egomim_out
-exec python /capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/egomimic/trainHydra.py \
+python /capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/egomimic/trainHydra.py \
+    --config-name=${config_name} \
+    trainer=${trainer} \
+    logger=${logger} \
     name=${task}_${frame_type} \
     description=${task}_${frame_type} \
     chosen_frame=${frame_type} \
@@ -65,8 +94,12 @@ exec python /capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/egomimic
     trainer.num_nodes=$SLURM_NNODES \
     data.train_datasets.dataset1.root=$dataset_root \
     data.valid_datasets.dataset1.root=$dataset_root \
-    model.robomimic_model.domains=[$domain] $@
+    model.robomimic_model.head_specs.eve_${arm}.action_horizon=$CL \
+    model.robomimic_model.head_specs.eve_${arm}.model.act_seq=$CL \
+    model.robomimic_model.head_specs.eve_${arm}_actions_joints.action_horizon=$CL \
+    model.robomimic_model.head_specs.eve_${arm}_actions_joints.model.act_seq=$CL \
+    $@
 "
-srun --signal=SIGUSR1@600 bash -c "$CMD"
+srun bash -lc "$CMD"
 
 echo "Job finished at: $(date)"

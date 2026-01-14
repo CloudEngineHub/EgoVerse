@@ -1,9 +1,9 @@
 defaults:
-  - hpt_cotrain_enc_dec_base
+  - hpt_cotrain_enc_dec_base_eth_right_arm
 
 robomimic_model:
   # domains: ["aria_bimanual", "aria_right_arm", "eve_right_arm"]
-  domains: ["eve_bimanual"]
+  domains: ["eve_right_arm"]
   diffusion: true 
   head_specs:
     shared: null
@@ -27,80 +27,40 @@ robomimic_model:
     #     mlp_layers: 4
     #     mlp_ratio: 4
 
-    # eve_right_arm: 
-    #   _target_: egomimic.models.fm_policy.FMPolicy
-    #   action_horizon: 100
-    #   num_inference_steps: 50
-    #   pooling: null
-    #   time_dist: "beta"
-    #   infer_ac_dims:
-    #     eve_right_arm: 6
-    #   model:
-    #     _target_: egomimic.models.denoising_nets.CrossTransformer
-    #     nblocks: 6
-    #     cond_dim: 256
-    #     hidden_dim: 128
-    #     act_dim: 6
-    #     act_seq: 100
-    #     n_heads: 4
-    #     dropout: 0.1
-    #     mlp_layers: 4 
-    #     mlp_ratio: 4
-
-    # eve_right_arm_actions_joints:
-    #   _target_: egomimic.models.fm_policy.FMPolicy
-    #   action_horizon: 100
-    #   num_inference_steps: 50
-    #   pooling: null
-    #   time_dist: "beta"
-    #   infer_ac_dims:
-    #     eve_right_arm: 17
-    #   model:
-    #     _target_: egomimic.models.denoising_nets.CrossTransformer
-    #     nblocks: 6
-    #     cond_dim: 256
-    #     hidden_dim: 128
-    #     act_dim: 17
-    #     act_seq: 100
-    #     n_heads: 4
-    #     dropout: 0.1
-    #     mlp_layers: 4
-    #     mlp_ratio: 4
-
-    eve_bimanual: 
+    eve_right_arm: 
       _target_: egomimic.models.fm_policy.FMPolicy
       action_horizon: 100
       num_inference_steps: 50
       pooling: null
       time_dist: "beta"
       infer_ac_dims:
-        eve_bimanual: 12
+        eve_right_arm: 6
       model:
         _target_: egomimic.models.denoising_nets.CrossTransformer
         nblocks: 6
         cond_dim: 256
         hidden_dim: 128
-        act_dim: 12
+        act_dim: 6
         act_seq: 100
         n_heads: 4
         dropout: 0.1
         mlp_layers: 4 
         mlp_ratio: 4
 
-    eve_bimanual_actions_joints:
+    eve_right_arm_actions_joints:
       _target_: egomimic.models.fm_policy.FMPolicy
       action_horizon: 100
       num_inference_steps: 50
       pooling: null
       time_dist: "beta"
       infer_ac_dims:
-        eve_bimanual: 34
+        eve_right_arm: 17
       model:
         _target_: egomimic.models.denoising_nets.CrossTransformer
         nblocks: 6
         cond_dim: 256
         hidden_dim: 128
-        act_dim: 34
+        act_dim: 17
         act_seq: 100
         n_heads: 4
         dropout: 0.1

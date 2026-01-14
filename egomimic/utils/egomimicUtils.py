@@ -445,64 +445,58 @@ def draw_actions(
     left_extrinsics = extrinsics["left_cam"]
     right_extrinsics = extrinsics["right_cam"] # aria_to_base_2 is only for right arm
     aloha_fk = AlohaFK()
-    if type == "joints":
-        if arm == "both":
-            right_actions = aloha_fk.fk(actions[:, 7:13])
-            right_actions_drawable = ee_pose_to_cam_frame(right_actions, right_extrinsics)
-            left_actions = aloha_fk.fk(actions[:, :6])
-            left_actions_drawable = ee_pose_to_cam_frame(left_actions, left_extrinsics)
-            actions_drawable = np.concatenate((left_actions_drawable, right_actions_drawable), axis=0)
-        elif arm == "right":
-            right_actions = aloha_fk.fk(actions[:, :6])
-            right_actions_drawable = ee_pose_to_cam_frame(right_actions, right_extrinsics)
-            actions_drawable = right_actions_drawable
-        elif arm == "left":
-            left_actions = aloha_fk.fk(actions[:, :6])
-            left_actions_drawable = ee_pose_to_cam_frame(left_actions, left_extrinsics)
-            actions_drawable = left_actions_drawable
-    else:
-        # draw left and right arm separately
-        if arm == "right":
-            if actions.ndim == 1:
-                actions = actions.reshape(1, -1)
-            right_actions = actions[:, :3]
-            right_actions_drawable = ee_pose_to_cam_frame(right_actions, right_extrinsics)
-            actions_drawable = right_actions_drawable
-        elif arm == "both":
-            if actions.ndim == 1:
-                actions = actions.reshape(1, -1)
-            left_actions = actions[:, :3]
-            right_actions = actions[:, 3:6]
-            actions_drawable = np.concatenate((left_actions, right_actions), axis=0)
 
-            # Transform based on the chosen frame
-            if chosen_frame == "base_frame" or chosen_frame == "ee_frame":
-                # base -> cam
-                left_extrinsics = np.linalg.inv(left_extrinsics)
-                right_extrinsics = np.linalg.inv(right_extrinsics)
-                left_actions_drawable = ee_pose_to_cam_frame(left_actions, left_extrinsics)
-                right_actions_drawable = ee_pose_to_cam_frame(right_actions, right_extrinsics)
-                actions_drawable = np.concatenate(
-                    (left_actions_drawable, right_actions_drawable), axis=0
-                )
-            elif chosen_frame == "cam_frame":
-                # already in camera frame; no transform needed
-                pass
-            # elif chosen_frame == "ee_frame":
-            #     # ee-frame deltas treated as-is for visualization
-            #     pass
-            else:
-                raise ValueError(f"Unsupported chosen_frame: {chosen_frame}")
+    # draw left and right arm separately
+    if arm == "right":
+        if actions.ndim == 1:
+            actions = actions.reshape(1, -1)
+        right_actions = actions[:, :3]
+        right_actions_drawable = right_actions
+
+        if chosen_frame == "base_frame" or chosen_frame == "ee_frame":
+            right_extrinsics = np.linalg.inv(right_extrinsics)
+            right_actions_drawable = ee_pose_to_cam_frame(right_actions, right_extrinsics)
+        elif chosen_frame == "cam_frame":
+            pass # already in camera frame; no transform needed
         else:
-            raise NotImplementedError(f"Arm {arm} not implemented")
-        # left_actions_drawable = ee_pose_to_cam_frame(left_actions, extrinsics)
-        # right_actions_drawable = ee_pose_to_cam_frame(right_actions, right_extrinsics)
+            raise ValueError(f"Unsupported chosen_frame: {chosen_frame}")
+            
+        actions_drawable = right_actions_drawable
+    elif arm == "both":
+        if actions.ndim == 1:
+            actions = actions.reshape(1, -1)
+        left_actions = actions[:, :3]
+        right_actions = actions[:, 3:6]
+        actions_drawable = np.concatenate((left_actions, right_actions), axis=0)
 
-        # actions = actions.reshape(-1, 3)
-        # actions_drawable = actions
+        # Transform based on the chosen frame
+        if chosen_frame == "base_frame" or chosen_frame == "ee_frame":
+            # base -> cam
+            left_extrinsics = np.linalg.inv(left_extrinsics)
+            right_extrinsics = np.linalg.inv(right_extrinsics)
+            left_actions_drawable = ee_pose_to_cam_frame(left_actions, left_extrinsics)
+            right_actions_drawable = ee_pose_to_cam_frame(right_actions, right_extrinsics)
+            actions_drawable = np.concatenate(
+                (left_actions_drawable, right_actions_drawable), axis=0
+            )
+        elif chosen_frame == "cam_frame":
+            # already in camera frame; no transform needed
+            pass
+        # elif chosen_frame == "ee_frame":
+        #     # ee-frame deltas treated as-is for visualization
+        #     pass
+        else:
+            raise ValueError(f"Unsupported chosen_frame: {chosen_frame}")
+    else:
+        raise NotImplementedError(f"Arm {arm} not implemented")
+    # left_actions_drawable = ee_pose_to_cam_frame(left_actions, extrinsics)
+    # right_actions_drawable = ee_pose_to_cam_frame(right_actions, right_extrinsics)
 
-        # actions_drawable = np.concatenate((left_actions, right_actions), axis=0)
-        # actions_drawable = actions_drawable
+    # actions = actions.reshape(-1, 3)
+    # actions_drawable = actions
+
+    # actions_drawable = np.concatenate((left_actions, right_actions), axis=0)
+    # actions_drawable = actions_drawable
     
     actions_drawable = cam_frame_to_cam_pixels(actions_drawable, intrinsics)
     im = draw_dot_on_frame(im, actions_drawable, show=False, palette=color)

@@ -1,5 +1,5 @@
 defaults:
-  - model: hpt_cotrain_flow_transformer
+  - model: hpt_cotrain_flow_transformer_eth_right_arm
   - paths: default
   - trainer: ddp
   - debug: null
@@ -51,7 +51,7 @@ data_schematic: # Dynamically fill in these shapes from the dataset
     #     key_type: metadata_keys
     #     lerobot_key: metadata.embodiment
 
-    eve_bimanual:
+    eve_right_arm:
       front_img_1:
         key_type: camera_keys
         lerobot_key: observations.images.aria_rgb_cam
@@ -77,5 +77,5 @@ data_schematic: # Dynamically fill in these shapes from the dataset
     # aria_right_arm:
     #   front_img_1
 
-    eve_bimanual:
+    eve_right_arm:
       front_img_1
