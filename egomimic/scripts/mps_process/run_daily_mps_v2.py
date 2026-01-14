@@ -28,13 +28,14 @@ TOKEN = (
 MPS_INI_CONTENT = """[DEFAULT]
 log_dir = /tmp/logs/projectaria/mps/ # Path to log directory
 status_check_interval = 30 # Status check interval in seconds
+concurrent_processing = 25 # Maximum number of recordings being processed concurrently
 
 [HASH]
-concurrent_hashes = 16 # Maximum number of recordings whose hashes will be calculated concurrently
+concurrent_hashes = 4 # Maximum number of recordings whose hashes will be calculated concurrently
 chunk_size = 10485760 # 10 * 2**20 (10MB)
 
 [HEALTH_CHECK]
-concurrent_health_checks = 2  # Maximum number of checks that can run concurrently
+concurrent_health_checks = 4  # Maximum number of checks that can run concurrently
 
 [ENCRYPTION]
 chunk_size = 52428800 # 50 * 2**20 (50MB)
@@ -43,7 +44,7 @@ delete_encrypted_files = true # Delete encrypted files after upload is done
 
 [UPLOAD]
 backoff = 1.5 # Backoff factor for retries
-concurrent_uploads = 16 # Maximum number of concurrent uploads
+concurrent_uploads = 4 # Maximum number of concurrent uploads
 interval = 20 # Interval between runs
 max_chunk_size = 104857600 # 100 * 2**20 (100 MB)
 min_chunk_size = 5242880 # 5 * 2**20 (5MB)

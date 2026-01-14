@@ -32,6 +32,7 @@ from sqlalchemy import (
     text,
 )
 from torch.utils.data import Subset
+from collections.abc import Sequence
 
 from egomimic.utils.aws.aws_sql import (
     TableRow,
@@ -46,8 +47,14 @@ from egomimic.utils.aws.aws_sql import (
 
 logger = logging.getLogger(__name__)
 
+logging.getLogger("huggingface_hub._snapshot_download").setLevel(logging.ERROR)
 
-# NOTE: To add a new key register, embodiment here. I hope Nadun, Vaibhav you guys have a more principled way of doing this thanks :) - R
+import torch.nn.functional as F
+
+from egomimic.rldb.data_utils import _ypr_to_quat, _slerp, _quat_to_ypr, _slow_down_slerp_quat
+import traceback
+import time
+
 class EMBODIMENT(Enum):
     EVE_RIGHT_ARM = 0
     EVE_LEFT_ARM = 1
@@ -58,7 +65,9 @@ class EMBODIMENT(Enum):
     EVA_RIGHT_ARM = 6
     EVA_LEFT_ARM = 7
     EVA_BIMANUAL = 8
-
+    MECKA_BIMANUAL = 9
+    MECKA_RIGHT_ARM = 10
+    MECKA_LEFT_ARM = 11
 
 SEED = 42
 
@@ -66,6 +75,35 @@ EMBODIMENT_ID_TO_KEY = {
     member.value: key for key, member in EMBODIMENT.__members__.items()
 }
 
+def split_dataset_names(dataset_names, valid_ratio=0.2, seed=SEED):
+    """
+    Split a list of dataset names into train/valid sets.
+
+    Args:
+        dataset_names (Iterable[str])
+        valid_ratio (float): fraction of datasets to put in valid.
+        seed (int): for deterministic shuffling.
+
+    Returns:
+        train_set (set[str]), valid_set (set[str])
+    """
+    names = sorted(dataset_names)
+    if not names:
+        return set(), set()
+
+    rng = random.Random(seed)
+    rng.shuffle(names)
+
+    if not (0.0 <= valid_ratio <= 1.0):
+        raise ValueError(f"valid_ratio must be in [0,1], got {valid_ratio}")
+
+    n_valid = int(len(names) * valid_ratio)
+    if valid_ratio > 0.0:
+        n_valid = max(1, n_valid)
+
+    valid = set(names[:n_valid])
+    train = set(names[n_valid:])
+    return train, valid
 
 def get_embodiment(index):
     return EMBODIMENT_ID_TO_KEY.get(index, None)
@@ -137,6 +175,53 @@ class RLDBDataset(LeRobotDataset):
         if self.use_task_string:
             self.task_string = kwargs.get("task_string", "")
 
+        self.slow_down_factor = float(kwargs.get("slow_down_factor", 1.0))
+        raw_keys = kwargs.get("slow_down_ac_keys", None)
+        raw_rot_specs = kwargs.get("slow_down_rot_specs", None)
+        
+        if raw_rot_specs is None:
+            self.slow_down_rot_specs = {}
+        else:
+            self.slow_down_rot_specs = dict(raw_rot_specs)
+            
+        for k, v in self.slow_down_rot_specs.items():
+            # v should be a 2-tuple-like: (rot_type, index_ranges)
+            if not (isinstance(v, Sequence) and not isinstance(v, (str, bytes)) and len(v) == 2):
+                raise ValueError(
+                    f"slow_down_rot_specs['{k}'] must be (rot_type, index_ranges), got {type(v)} with value {v}"
+                )
+
+            rot_type, ranges = v
+
+            if rot_type not in ("quat_wxyz", "ypr"):
+                raise ValueError(
+                    f"Rotation type for key '{k}' must be 'quat_wxyz' or 'ypr', got {rot_type}"
+                )
+
+            if not (isinstance(ranges, Sequence) and not isinstance(ranges, (str, bytes))):
+                raise ValueError(
+                    f"Index ranges for slow_down_rot_specs['{k}'] must be a sequence of (start, end) pairs, got {type(ranges)}"
+                )
+
+            for pair in ranges:
+                if not (isinstance(pair, Sequence) and not isinstance(pair, (str, bytes)) and len(pair) == 2):
+                    raise ValueError(
+                        f"Each index range for slow_down_rot_specs['{k}'] must be a (start, end) sequence, got {pair}"
+                    )
+        
+        if raw_keys is None:
+            self.slow_down_ac_keys = []
+        elif isinstance(raw_keys, str):
+            # single key as string
+            self.slow_down_ac_keys = [raw_keys]
+        elif isinstance(raw_keys, Sequence) and not isinstance(raw_keys, (str, bytes)):
+            # list, tuple, Hydra ListConfig, etc.
+            self.slow_down_ac_keys = list(raw_keys)
+        else:
+            raise ValueError(
+                f"slow_down_ac_keys must be str, sequence, or None; got {type(raw_keys)}"
+            )
+        
         if mode == "train":
             super().__init__(
                 repo_id=repo_id,
@@ -204,13 +289,90 @@ class RLDBDataset(LeRobotDataset):
         if self.use_task_string:
             item["high_level_language_prompt"] = self.task_string
 
+        if self.slow_down_ac_keys and self.slow_down_factor > 1.0:
+            for key in self.slow_down_ac_keys:
+                if key in item:
+                    rot_spec = self.slow_down_rot_specs.get(key, None)
+                    item[key] = self._slow_down_sequence(item[key], rot_spec=rot_spec)
         return item
 
+    def _slow_down_sequence(self, seq, rot_spec=None):
+        """
+        Slow down a sequence of shape (S, D) along the time dimension S.
 
-# TODO(Ryan) : Override individual dataset valid ratios and train modes
+        - S: time steps
+        - D: feature dimension, with any rotation sub-blocks living in slices
+             along D (e.g., [:, 0:4] for quats, [:, 3:6] for ypr).
 
+        Steps:
+        1. Take first S / slow_down_factor steps (shortened trajectory).
+        2. Linearly upsample back to length S.
+        3. For any rotation slices specified in rot_spec, overwrite the
+           linearly interpolated slices with SLERP-based interpolation.
+        """
+        alpha = self.slow_down_factor
+        if alpha is None or alpha <= 1.0:  # no-op
+            return seq
 
+        if seq.ndim != 2:
+            raise ValueError(
+                f"_slow_down_sequence expects seq of shape (S, D). "
+                f"Got shape {seq.shape} with dim={seq.ndim}"
+            )
+
+        S, D = seq.shape
+        S_short = max(1, min(S, int(S / alpha)))
+
+        if S_short == S:
+            return seq  # nothing to do
+
+        # Base: linear interpolation over full feature dimension
+        seq_short = seq[:S_short]  # (S_short, D)
+
+        x = seq_short.transpose(0, 1).unsqueeze(0)  # (1, D, S_short)
+        x_interp = F.interpolate(
+            x, size=S, mode="linear", align_corners=True
+        )  # (1, D, S)
+        out = x_interp.squeeze(0).transpose(0, 1)  # (S, D)
+
+        # If we have rotation specs, overwrite specified feature slices with SLERP output
+        if rot_spec is not None:
+            rot_type, index_ranges = rot_spec
+
+            for (start, end) in index_ranges:
+                if not (0 <= start < end <= D):
+                    raise ValueError(
+                        f"Invalid rotation slice [{start}:{end}] for seq with D={D}"
+                    )
+
+                rot_short = seq_short[:, start:end]  # (S_short, k)
+                k = end - start
+
+                if rot_type == "quat_wxyz":
+                    if k != 4:
+                        raise ValueError(
+                            f"quat slice must have length 4, got {k} for slice [{start}:{end}]"
+                        )
+                    rot_interp = _slow_down_slerp_quat(rot_short, S)  # (S, 4)
+                    out[:, start:end] = rot_interp
+
+                elif rot_type == "ypr":
+                    if k != 3:
+                        raise ValueError(
+                            f"ypr slice must have length 3, got {k} for slice [{start}:{end}]"
+                        )
+                    # ypr -> quat -> slerp -> ypr
+                    quat_short = _ypr_to_quat(rot_short)                # (S_short, 4)
+                    quat_interp = _slow_down_slerp_quat(quat_short, S)  # (S, 4)
+                    ypr_interp = _quat_to_ypr(quat_interp)              # (S, 3)
+                    out[:, start:end] = ypr_interp
+                else:
+                    raise ValueError(f"Unknown rotation type: {rot_type}")
+
+        return out
+        
 class MultiRLDBDataset(torch.utils.data.Dataset):
+    
     def __init__(self, datasets, embodiment, key_map=None):
         self.datasets = datasets
         self.key_map = key_map
@@ -380,9 +542,10 @@ class S3RLDBDataset(MultiRLDBDataset):
         valid_ratio=0.2,
         temp_root="/coc/cedarp-dxu345-0/datasets/egoverse",  # "/coc/flash7/scratch/rldb_temp"
         filters={},
+        **kwargs,
     ):
         temp_root += "/S3_rldb_data"
-        filters["embodiment"] = embodiment
+        filters["robot_name"] = embodiment
 
         if temp_root[0] != "/":
             temp_root = "/" + temp_root
@@ -395,7 +558,6 @@ class S3RLDBDataset(MultiRLDBDataset):
 
         datasets = {}
         skipped = []
-
         filtered_paths = self._get_processed_path(filters)
 
         s3_prefix = f"{main_prefix}/{embodiment.strip('/')}/"
@@ -431,16 +593,17 @@ class S3RLDBDataset(MultiRLDBDataset):
                 )
                 skipped.append(collection_path.name)
                 continue
-
+                    
             try:
                 repo_id = collection_path.name
                 dataset = RLDBDataset(
                     repo_id=repo_id,
                     root=collection_path,
                     local_files_only=local_files_only,
-                    mode=mode,
+                    mode="total",
                     percent=percent,
                     valid_ratio=valid_ratio,
+                    **kwargs,
                 )
 
                 if dataset.embodiment != get_embodiment_id(embodiment):
@@ -455,8 +618,32 @@ class S3RLDBDataset(MultiRLDBDataset):
             except Exception as e:
                 logger.error(f"Failed to load {repo_id} as RLDBDataset: {e}")
                 skipped.append(repo_id)
-
         assert datasets, "No valid RLDB datasets found! Check your S3 path and filters."
+        
+        self.train_collections, self.valid_collections = split_dataset_names(
+            datasets.keys(), valid_ratio=valid_ratio, seed=SEED
+        )
+
+        if mode == "train":
+            chosen = self.train_collections
+        elif mode == "valid":
+            chosen = self.valid_collections
+        elif mode == "total":
+            chosen = set(datasets.keys())
+        elif mode == "percent":
+            all_names = sorted(datasets.keys())
+            rng = random.Random(SEED)
+            rng.shuffle(all_names)
+
+            n_keep = int(len(all_names) * percent)
+            if percent > 0.0:
+                n_keep = max(1, n_keep)
+            chosen = set(all_names[:n_keep])
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
+
+        datasets = {rid: ds for rid, ds in datasets.items() if rid in chosen}
+        assert datasets, "No datasets left after applying mode split."
 
         key_map_per_dataset = (
             {repo_id: key_map for repo_id in datasets} if key_map else None
@@ -470,12 +657,11 @@ class S3RLDBDataset(MultiRLDBDataset):
 
         if skipped:
             logger.warning(f"Skipped {len(skipped)} datasets: {skipped}")
-
+            
     @staticmethod
     def _get_processed_path(filters):
         engine = create_default_engine()
         df = episode_table_to_df(engine)
-
         series = pd.Series(filters)
 
         output = df.loc[
@@ -573,7 +759,7 @@ class S3RLDBDataset(MultiRLDBDataset):
                 s3_full_path = folder.rstrip("/") + "/" + s3sub
 
                 localsub.mkdir(parents=True, exist_ok=True)
-                print(f"Created local directory: {localsub}")
+                # print(f"Created local directory: {localsub}")
 
                 if not any(localsub.iterdir()):
                     print(f"Downloading from S3 path: {s3_full_path}")
@@ -581,10 +767,7 @@ class S3RLDBDataset(MultiRLDBDataset):
                     logger.info(
                         f"Downloaded data files from {s3_full_path} to {localsub}"
                     )
-                else:
-                    logger.info(
-                        f"Data files already exist at {localsub}, skipping download"
-                    )
+
 
         if skipped:
             logger.warning(f"Skipped {len(skipped)} S3 prefixes during sync: {skipped}")
@@ -711,13 +894,6 @@ class DataSchematic(object):
         """
         dataset: huggingface dataset backed by pyarrow
         returns: dictionary of means and stds for proprio and action keys
-            {
-                embodiment_id: {
-                    key_name: {
-                        mean: np.array (feature_dim),
-                        std: np.array (feature_dim),
-                    },
-                }
         """
         norm_columns = []
 
@@ -726,30 +902,50 @@ class DataSchematic(object):
         norm_columns.extend(self.keys_of_type("proprio_keys"))
         norm_columns.extend(self.keys_of_type("action_keys"))
 
-        for column in norm_columns:
-            if self.is_key_with_embodiment(column, embodiment):
-                column_name = self.keyname_to_lerobot_key(column, embodiment)
-                column_data = np.array(
-                    dataset.hf_dataset._data[column_name].to_pylist()
-                )
-                if len(column_data.shape) != 2 and len(column_data.shape) != 3:
-                    raise ValueError(
-                        f"Column {column} has shape {column_data.shape}, expected 2 (num_examples_in_dataset, feature_dim) or 3 (num_examples_in_dataset, sequence_length, feature_dim)"
-                    )
+        logger.info(
+            f"[NormStats] Starting norm inference for embodiment={embodiment}, "
+            f"{len(norm_columns)} columns"
+        )
 
-                self.norm_stats[embodiment][column] = {
-                    "mean": torch.from_numpy(np.mean(column_data, axis=0)).float(),
-                    "std": torch.from_numpy(np.std(column_data, axis=0)).float(),
-                    "min": torch.from_numpy(np.min(column_data, axis=0)).float(),
-                    "max": torch.from_numpy(np.max(column_data, axis=0)).float(),
-                    "median": torch.from_numpy(np.median(column_data, axis=0)).float(),
-                    "quantile_1": torch.from_numpy(
-                        np.percentile(column_data, 1, axis=0)
-                    ).float(),
-                    "quantile_99": torch.from_numpy(
-                        np.percentile(column_data, 99, axis=0)
-                    ).float(),
-                }
+        for column in norm_columns:
+            if not self.is_key_with_embodiment(column, embodiment):
+                continue
+
+            column_name = self.keyname_to_lerobot_key(column, embodiment)
+            logger.info(f"[NormStats] Processing column={column_name}")
+
+            # Arrow → NumPy (fast path, preserves shape)
+            column_data = (
+                dataset.hf_dataset
+                .with_format("numpy", columns=[column_name])[:][column_name]
+            )
+
+            if column_data.ndim not in (2, 3):
+                raise ValueError(
+                    f"Column {column} has shape {column_data.shape}, "
+                    "expected 2 or 3 dims"
+                )
+
+            mean = np.mean(column_data, axis=0)
+            std = np.std(column_data, axis=0)
+            minv = np.min(column_data, axis=0)
+            maxv = np.max(column_data, axis=0)
+            median = np.median(column_data, axis=0)
+            q1 = np.percentile(column_data, 1, axis=0)
+            q99 = np.percentile(column_data, 99, axis=0)
+
+            self.norm_stats[embodiment][column] = {
+                "mean": torch.from_numpy(mean).float(),
+                "std": torch.from_numpy(std).float(),
+                "min": torch.from_numpy(minv).float(),
+                "max": torch.from_numpy(maxv).float(),
+                "median": torch.from_numpy(median).float(),
+                "quantile_1": torch.from_numpy(q1).float(),
+                "quantile_99": torch.from_numpy(q99).float(),
+            }
+
+        logger.info("[NormStats] Finished norm inference")
+
 
     def viz_img_key(self):
         """

@@ -38,6 +38,22 @@ ARIA_INTRINSICS_HALF = np.array(
     ]
 )
 
+w0, h0 = float(1920), float(1080)
+fx0, fy0 = float(752.4707352849115), float(753.0015979987369)
+cx0, cy0 = float(961.8249427694457),  float(553.245895705989)
+k1 = float(0.053237960122440905)
+k2 = float(-0.030832938752312588)
+p1 = float(0.007216253952233802)
+p2 = float(0.0002335266971733548)
+
+sx = 640 / w0
+sy = 360 / h0
+fx, fy = fx0 * sx, fy0 * sy
+cx, cy = cx0 * sx, cy0 * sy
+
+MECKA_INTRINSICS = np.array([[fx, 0.0, cx, 0],
+              [0.0, fy, cy, 0],
+              [0.0, 0.0, 1.0, 0]], dtype=np.float64)
 
 # Cam to base extrinsics
 EXTRINSICS = {
@@ -130,6 +146,16 @@ EXTRINSICS = {
         ),
     },
     "ariaOct18_arx": {
+        "right" : np.array([[ 0.92889757,  0.36039153, -0.08524815,  0.30147348],
+       [-0.32558192,  0.68501478, -0.65172936,  0.06826981],
+       [-0.1764815 ,  0.63314508,  0.75364554,  0.61726764],
+       [ 0.        ,  0.        ,  0.        ,  1.        ]]),
+        "left" : np.array([[ 0.67106869,  0.09057156,  0.73584211,  0.37354573],
+       [ 0.01770855,  0.99026867, -0.13803754,  0.22691753],
+       [-0.74118367,  0.10566337,  0.66293441,  0.72137284],
+       [ 0.        ,  0.        ,  0.        ,  1.        ]])
+    },
+    "x5Nov15_2": {
         "right": np.array(
             [
                 [0.92889757, 0.36039153, -0.08524815, 0.30147348],
@@ -138,14 +164,24 @@ EXTRINSICS = {
                 [0.0, 0.0, 0.0, 1.0],
             ]
         ),
-        "left": np.array(
+       "left": np. array([[-0.03286194, -0.79989118,  0.59924469,  0.03464527],
+       [-0.9994423 ,  0.02274144, -0.02445234, -0.25152234],
+       [ 0.00593152, -0.59971404, -0.80019241,  0.5092148 ],
+       [ 0.        ,  0.        ,  0.        ,  1.        ]]),
+    },
+    "x5Nov18_3": {
+        "right": np.array(
             [
-                [0.67106869, 0.09057156, 0.73584211, 0.37354573],
-                [0.01770855, 0.99026867, -0.13803754, 0.22691753],
-                [-0.74118367, 0.10566337, 0.66293441, 0.72137284],
+                [0.92889757, 0.36039153, -0.08524815, 0.30147348],
+                [-0.32558192, 0.68501478, -0.65172936, 0.06826981],
+                [-0.1764815, 0.63314508, 0.75364554, 0.61726764],
                 [0.0, 0.0, 0.0, 1.0],
             ]
         ),
+        "left": np.array([[ 0.01329544, -0.71757193,  0.69635749, -0.04409191],
+       [-0.99959782, -0.02698416, -0.00872107, -0.23221381],
+       [ 0.02504862, -0.69596148, -0.7176421 ,  0.57323278],
+       [ 0.        ,  0.        ,  0.        ,  1.        ]])
     },
     "ethSep18": {
         "aria_to_base_1": np.array([[ 4.16025427e-05, -4.99073078e-01,  8.66559901e-01,  1.99337047e-01],
@@ -169,7 +205,7 @@ EXTRINSICS = {
     }
 }
 
-INTRINSICS = {"base": ARIA_INTRINSICS, "base_half": ARIA_INTRINSICS_HALF}
+INTRINSICS = {"base": ARIA_INTRINSICS, "base_half": ARIA_INTRINSICS_HALF, "mecka": MECKA_INTRINSICS}
 
 
 class CameraTransforms:
@@ -597,6 +633,39 @@ def ee_pose_to_cam_frame(ee_pose_base, T_cam_base):
     ee_pose_grip_cam = T_cam_base @ ee_pose_base.T
     return ee_pose_grip_cam.T[:, :3]
 
+def base_frame_to_cam_frame(base_frame, T_cam_base):
+    """
+    base_frame: (N, 6) (x, y, z, yaw, pitch, roll)
+    T_cam_base: (4, 4)
+
+    returns cam_frame: (N, 6) (x, y, z, yaw, pitch, roll)
+    """
+    N, _ = base_frame.shape
+    se3 = np.zeros((N, 4, 4))
+    se3[:, :3, :3] = Rotation.from_euler('ZYX', base_frame[:, 3:6]).as_matrix()
+    se3[:, :3, 3] = base_frame[:, :3]
+    se3[:, 3, 3] = 1
+    cam_frame = np.linalg.inv(T_cam_base) @ se3
+    xyz = cam_frame[:, :3, 3]
+    ypr = Rotation.from_matrix(cam_frame[:, :3, :3]).as_euler('ZYX', degrees=False)
+    return np.concatenate([xyz, ypr], axis=1)
+
+def cam_frame_to_base_frame(cam_frame, T_cam_base):
+    """
+    cam_frame: (N, 6) (x, y, z, yaw, pitch, roll)
+    T_cam_base: (4, 4)
+
+    returns base_frame: (N, 6) (x, y, z, yaw, pitch, roll)
+    """
+    N, _ = cam_frame.shape
+    se3 = np.zeros((N, 4, 4))
+    se3[:, :3, :3] = Rotation.from_euler('ZYX', cam_frame[:, 3:6]).as_matrix()
+    se3[:, :3, 3] = cam_frame[:, :3]
+    se3[:, 3, 3] = 1
+    base_frame = T_cam_base @ se3
+    xyz = base_frame[:, :3, 3]
+    ypr = Rotation.from_matrix(base_frame[:, :3, :3]).as_euler('ZYX', degrees=False)
+    return np.concatenate([xyz, ypr], axis=1)
 
 def ee_orientation_to_cam_frame(ee_orientation_base, T_cam_base):
     """
@@ -637,9 +706,7 @@ def batched_rotation_matrices_to_euler_angles(batch_R):
     # reshaped_R = batch_R.view(-1, 3, 3).cpu().numpy()
     # Use scipy's Rotation to convert rotation matrices to Euler angles
     rotation_objects = Rotation.from_matrix(reshaped_R)
-    euler_angles = rotation_objects.as_euler(
-        "zyx", degrees=False
-    )  # Shape [batch_size * seq_len, 3]
+    euler_angles = rotation_objects.as_euler('ZYX', degrees=False)  # Shape [batch_size * seq_len, 3]
     # Convert back to torch and reshape to original batch dimensions
     euler_angles = torch.tensor(euler_angles, device=batch_R.device)
     euler_angles = euler_angles.view(batch_size, 3)
@@ -920,31 +987,33 @@ def transformation_matrix_to_pose(T):
     pose_array = np.concatenate((p, rotation_quaternion))
     return pose_array
 
-
 def interpolate_arr_euler(v: np.ndarray, seq_length: int) -> np.ndarray:
     """
-    Interpolate 6DoF poses (translation + Euler angles in radians) along the time axis.
-    If any values in a sequence are >= 1e9 (used as a NaN sentinel), skip interpolation and return filled value.
-    """
-    assert v.ndim == 3 and v.shape[2] == 6, "Input v must be of shape (B, T, 6)"
-    B, T, _ = v.shape
+    Interpolate 6DoF poses (translation + Euler angles in radians),
+    optionally with a 7th gripper dimension, along the time axis.
 
-    translations_interp = []
-    rotations_interp = []
+    v: (B, T, 6) or (B, T, 7)
+        [x, y, z, yaw, pitch, roll, (optional) gripper]
+    """
+    assert (
+        v.ndim == 3 and v.shape[2] in (6, 7)
+    ), "Input v must be of shape (B, T, 6) or (B, T, 7)"
+    B, T, D = v.shape
 
     new_time = np.linspace(0, 1, seq_length)
     old_time = np.linspace(0, 1, T)
 
+    outputs = []
+
     for i in range(B):
-        seq = v[i]
+        seq = v[i]  # (T, D)
+
         if np.any(seq >= 1e8):
-            # Invalid sequence — fill with dummy values
-            translations_interp.append(np.full((seq_length, 3), 1e9))
-            rotations_interp.append(np.full((seq_length, 3), 1e9))
+            outputs.append(np.full((seq_length, D), 1e9))
             continue
 
-        trans_seq = seq[:, :3]
-        rot_seq = seq[:, 3:]
+        trans_seq = seq[:, :3]      # x, y, z
+        rot_seq = seq[:, 3:6]       # yaw, pitch, roll
 
         # Avoid discontinuities in angle interpolation
         rot_seq_unwrapped = np.unwrap(rot_seq, axis=0)
@@ -956,27 +1025,46 @@ def interpolate_arr_euler(v: np.ndarray, seq_length: int) -> np.ndarray:
             old_time, rot_seq_unwrapped, axis=0, kind="linear"
         )
 
-        trans_interp = trans_interp_func(new_time)
-        rot_interp = rot_interp_func(new_time)
+        trans_interp = trans_interp_func(new_time)  # (seq_length, 3)
+        rot_interp = rot_interp_func(new_time)      # (seq_length, 3)
+
+        # Wrap back to [-pi, pi)
         rot_interp = (rot_interp + np.pi) % (2 * np.pi) - np.pi
 
-        translations_interp.append(trans_interp)
-        rotations_interp.append(rot_interp)
+        if D == 6:
+            out_seq = np.concatenate([trans_interp, rot_interp], axis=-1)
+        else:
+            grip_seq = seq[:, 6:7]  # (T, 1)
+            grip_interp_func = scipy.interpolate.interp1d(
+                old_time, grip_seq, axis=0, kind="linear"
+            )
+            grip_interp = grip_interp_func(new_time)  # (seq_length, 1)
+            out_seq = np.concatenate(
+                [trans_interp, rot_interp, grip_interp], axis=-1
+            )
 
-    translations_interp = np.array(translations_interp)
-    rotations_interp = np.array(rotations_interp)
+        outputs.append(out_seq)
 
-    return np.concatenate([translations_interp, rotations_interp], axis=-1)
-
+    return np.stack(outputs, axis=0)  # (B, seq_length, D)
 
 class AlohaFK:
-    def __init__(self):
-        urdf_path = os.path.join(
-            os.path.dirname(egomimic.__file__), "resources/model_aloha.urdf"
-        )
-        self.chain = pk.build_serial_chain_from_urdf(
-            open(urdf_path).read(), "vx300s/ee_gripper_link"
-        )
+    def __init__(self, robot="arx"):
+        if robot == "aloha":
+            urdf_path = os.path.join(
+                os.path.dirname(egomimic.__file__), "resources/model_eve.urdf"
+            )
+            self.chain = pk.build_serial_chain_from_urdf(
+                open(urdf_path).read(), "vx300s/ee_gripper_link"
+            )
+        elif robot == "arx":
+            urdf_path = Path(os.path.join(
+                os.path.dirname(egomimic.__file__), "resources/model_arx.urdf"
+            ))
+            xml_bytes = urdf_path.read_bytes()
+                
+            self.chain = pk.build_serial_chain_from_urdf(
+                xml_bytes, "link6"
+            )
 
     def fk(self, qpos):
         if isinstance(qpos, np.ndarray):
@@ -1093,7 +1181,7 @@ def interpolate_keys(obs, keys, seq_length):
 
 
 def ypr_to_matrix(ypr):
-    """Convert yaw-pitch-roll (zyx) to rotation matrix. ypr: (..., 3) → (..., 3, 3)"""
+    """Convert yaw-pitch-roll (ZYX) to rotation matrix. ypr: (..., 3) → (..., 3, 3)"""
     yaw, pitch, roll = ypr.unbind(-1)
 
     cy = torch.cos(yaw)
@@ -1148,7 +1236,7 @@ def ypr_to_matrix(ypr):
 
 
 def matrix_to_ypr(R):
-    """Convert rotation matrix to yaw-pitch-roll (zyx). R: (..., 3, 3) → (..., 3)"""
+    """Convert rotation matrix to yaw-pitch-roll (ZYX). R: (..., 3, 3) → (..., 3)"""
     # Safe conversion for all angles
     pitch = torch.asin(-R[..., 2, 0])
     cos_pitch = torch.cos(pitch)

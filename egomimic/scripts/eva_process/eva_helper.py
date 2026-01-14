@@ -11,7 +11,7 @@ def lerobot_job(
     dataset_name: str,
     arm: str,
     description: str = "",
-    extrinsics_key: str = "ariaOct18_arx",
+    extrinsics_key: str = "x5Dec13_2",
 ) -> None:
     raw_path = Path(raw_path).expanduser().resolve()
     output_dir = Path(output_dir).expanduser().resolve()

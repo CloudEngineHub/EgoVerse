@@ -12,7 +12,6 @@ from torchmetrics import MeanSquaredError
 
 from egomimic.models.hpt_nets import *
 from egomimic.algo.algo import Algo
-from egomimic.utils.egomimicUtils import draw_actions
 
 from egomimic.utils.egomimicUtils import (
     get_sinusoid_encoding_table,
@@ -844,6 +843,7 @@ class HPT(Algo):
         self.auxiliary_ac_keys = auxiliary_ac_keys.copy()
         self.shared_ac_key = kwargs.get("shared_ac_key", None)
         self.is_6dof = kwargs.get("6dof", False)
+        self.kinematics_solver = kwargs.get("kinematics_solver", None)
 
         model = HPTModel(**trunk)
         model.auxiliary_ac_keys = self.auxiliary_ac_keys
@@ -1083,7 +1083,7 @@ class HPT(Algo):
         unnorm_preds = {}
         for embodiment_id, _batch in batch.items():
             cam_keys = self.camera_keys[embodiment_id]
-            proprio_keys = self.proprio_keys[embodiment_id]
+            proprio_keys = self.proprio_keys[embodiment_id] 
             lang_keys = self.lang_keys[embodiment_id]
             ac_key = self.ac_keys[embodiment_id]
             embodiment_name = get_embodiment(embodiment_id).lower()
@@ -1147,7 +1147,7 @@ class HPT(Algo):
             _batch = self.data_schematic.unnormalize_data(_batch, embodiment_id)
             embodiment_name = get_embodiment(embodiment_id).lower()
             ac_key = self.ac_keys[embodiment_id]
-            if f"{embodiment_name}_{ac_key}" in preds:
+            if f"{embodiment_name}_{ac_key}" in preds and ac_key != self.shared_ac_key:
                 metrics[f"Valid/{embodiment_name}_{ac_key}_paired_mse_avg"] = mse(
                     (preds[f"{embodiment_name}_{ac_key}"]).cpu(), _batch[ac_key].cpu()
                 )
@@ -1220,7 +1220,7 @@ class HPT(Algo):
                 }
                 rkl_targets = []
 
-                if f"{embodiment_name}_{ac_key}" in preds:
+                if f"{embodiment_name}_{ac_key}" in preds and ac_key != self.shared_ac_key:
                     rkl_targets.append(
                         (
                             f"{embodiment_name}_{ac_key}",

@@ -1,7 +1,7 @@
 defaults:
   - model: hpt_cotrain_flow_transformer
   - paths: default
-  - trainer: ddp
+  - trainer: debug
   - debug: null
   - logger: wandb
   - data: multi_data
@@ -34,7 +34,7 @@ launch_params:
   nodes: 1
 
 data_schematic: # Dynamically fill in these shapes from the dataset
-  _target_: rldb.utils.DataSchematic
+  _target_: egomimic.rldb.utils.DataSchematic
   norm_mode: quantile
   schematic_dict:
     # aria_right_arm:
@@ -70,6 +70,25 @@ data_schematic: # Dynamically fill in these shapes from the dataset
       actions_joints:
         key_type: action_keys
         lerobot_key: actions_joints
+      embodiment:
+        key_type: metadata_keys
+        lerobot_key: metadata.embodiment
+    mecka_bimanual:
+      base_0_rgb:
+        key_type: camera_keys
+        lerobot_key: observations.images.front_img_1
+      ee_pose:
+        key_type: proprio_keys
+        lerobot_key: observations.state.ee_pose_cam
+      actions_cartesian:
+        key_type: action_keys
+        lerobot_key: actions_ee_cartesian_cam
+      actions_keypoints:
+        key_type: action_keys
+        lerobot_key: actions_ee_keypoints_world
+      actions_head_cartesian:
+        key_type: action_keys
+        lerobot_key: actions_head_cartesian_world
       embodiment:
         key_type: metadata_keys
         lerobot_key: metadata.embodiment

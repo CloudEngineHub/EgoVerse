@@ -15,11 +15,11 @@ from egomimic.utils.egomimicUtils import (
     EXTRINSICS,
     str2bool,
     ee_orientation_to_cam_frame,
+    interpolate_arr,
+    interpolate_arr_euler,
 )
 
-from egomimic.robot.eva.eva_kinematics import (
-    EvaMinkKinematicsSolver as EvaKinematicsSolver,
-)
+from egomimic.robot.eva.eva_kinematics import EvaMinkKinematicsSolver
 from egomimic.rldb.utils import EMBODIMENT
 
 from typing import Union
@@ -37,6 +37,7 @@ import torch.nn.functional as F
 from scipy.spatial.transform import Rotation as R
 
 from enum import Enum
+import errno
 
 ## CHANGE THIS TO YOUR DESIRED CACHE FOR HF
 os.environ["HF_HOME"] = "~/.cache/huggingface"
@@ -52,11 +53,33 @@ EVA_XML_PATH = os.path.join(
     os.path.dirname(egomimic.__file__), "resources/model_x5.xml"
 )
 
-POINT_GAP_ACT = 2
-CHUNK_LENGTH_ACT = 100
+HORIZON_BASE = 45   # horizon in real timesteps
+CHUNK_LENGTH_BASE = 100  # number of interpolated points per chunk
 
 Array2D = Union[np.ndarray, torch.Tensor]
 
+def rmtree_with_wait(path: Path, tries: int = 10, base_sleep: float = 0.05):
+    path = Path(path)
+    if not path.exists():
+        return
+    for i in range(tries):
+        try:
+            shutil.rmtree(path)
+            return
+        except OSError as e:
+            if e.errno in (errno.ENOTEMPTY, errno.EBUSY, errno.EPERM):
+                time.sleep(base_sleep * (2 ** i))
+                continue
+            raise
+    shutil.rmtree(path)
+    
+def _to_numpy(x):
+    """Convert torch / numpy / anything array-like to np.ndarray."""
+    if isinstance(x, np.ndarray):
+        return x
+    if isinstance(x, torch.Tensor):
+        return x.detach().cpu().numpy()
+    return np.asarray(x)
 
 def _as_rotation(x):
     """Return a scipy Rotation from either Rotation or 3x3 ndarray."""
@@ -74,9 +97,275 @@ def _row_to_numpy(x: Array2D, i: int) -> np.ndarray:
         return x[i]
     return x[i].detach().cpu().numpy()
 
+def _wrap_to_pi(x: np.ndarray) -> np.ndarray:
+    return (x + np.pi) % (2 * np.pi) - np.pi
+def assert_fk_matches_eepose(
+    actions_base_cartesian: np.ndarray,
+    actions_eepose: np.ndarray,
+    *,
+    arm: str = "both",
+    atol_pose: float = 2e-4,
+    rtol_pose: float = 0.0,
+    mismatch_frac_threshold: float = 0.01,
+    skip_first: int = 1,
+    zero_eps: float = 1e-12,
+):
+    # prestack handling
+    base0 = (
+        actions_base_cartesian[:, 0]
+        if actions_base_cartesian.ndim == 3
+        else actions_base_cartesian
+    )
+    eep = actions_eepose
 
+    if eep.ndim != 2 or eep.shape[1] != 14:
+        print(f"[FK WARNING] Expected eepose (T,14), got {eep.shape}")
+        return
+
+    if base0.ndim != 2:
+        print(f"[FK WARNING] Expected base_cartesian 2D, got {base0.shape}")
+        return
+
+    if base0.shape[0] != eep.shape[0]:
+        print(f"[FK WARNING] T mismatch: base={base0.shape}, eepose={eep.shape}")
+        return
+
+    T = eep.shape[0]
+    idx_all = np.arange(T)
+
+    # --------------------------------------------------
+    # dimension layout
+    # --------------------------------------------------
+    # base_cartesian:
+    #   arm=left/right : (T,7)  -> [x y z yaw pitch roll g]
+    #   arm=both       : (T,14) -> [L pose g | R pose g]
+    #
+    # eepose (always):
+    #   [L xyz ypr g | R xyz ypr g]
+    # --------------------------------------------------
+
+    if arm == "left":
+        b_pos = [0, 1, 2]
+        b_ang = [3, 4, 5]
+        e_pos = [0, 1, 2]
+        e_ang = [3, 4, 5]
+        arm_name = "left"
+
+        if base0.shape[1] != 7:
+            print(f"[FK WARNING] base_cartesian expected (T,7) for left, got {base0.shape}")
+            return
+
+    elif arm == "right":
+        b_pos = [0, 1, 2]
+        b_ang = [3, 4, 5]
+        e_pos = [7, 8, 9]
+        e_ang = [10, 11, 12]
+        arm_name = "right"
+
+        if base0.shape[1] != 7:
+            print(f"[FK WARNING] base_cartesian expected (T,7) for right, got {base0.shape}")
+            return
+
+    elif arm == "both":
+        b_pos = [0, 1, 2, 7, 8, 9]
+        b_ang = [3, 4, 5, 10, 11, 12]
+        e_pos = [0, 1, 2, 7, 8, 9]
+        e_ang = [3, 4, 5, 10, 11, 12]
+        arm_name = "both"
+
+        if base0.shape[1] != 14:
+            print(f"[FK WARNING] base_cartesian expected (T,14) for both, got {base0.shape}")
+            return
+
+    else:
+        print(f"[FK WARNING] Unknown arm='{arm}'")
+        return
+
+    # --------------------------------------------------
+    # validity mask (eepose only)
+    # --------------------------------------------------
+    pose_dims_e = e_pos + e_ang
+    valid = (np.abs(eep[:, pose_dims_e]) > zero_eps).any(axis=1)
+    if skip_first > 0:
+        valid[:skip_first] = False
+
+    if not valid.any():
+        return
+
+    b = base0[valid]
+    a = eep[valid]
+    v_idx = idx_all[valid]
+
+    # --------------------------------------------------
+    # position diff
+    # --------------------------------------------------
+    dpos = b[:, b_pos] - a[:, e_pos]
+    tolpos = atol_pose + rtol_pose * np.abs(a[:, e_pos])
+    viol = (np.abs(dpos) > tolpos).any(axis=1)
+
+    # --------------------------------------------------
+    # angle diff (inline wrap)
+    # --------------------------------------------------
+    dang = b[:, b_ang] - a[:, e_ang]
+    dang = (dang + np.pi) % (2 * np.pi) - np.pi
+    tolang = atol_pose + rtol_pose * np.abs(a[:, e_ang])
+    viol |= (np.abs(dang) > tolang).any(axis=1)
+
+    mismatch_frac = float(viol.mean())
+    if mismatch_frac <= mismatch_frac_threshold:
+        return
+
+    bad_ts = v_idx[viol]
+    show = bad_ts[:20].tolist()
+    extra = "" if bad_ts.size <= 20 else f" ... (+{bad_ts.size - 20} more)"
+
+    print(
+        f"[FK WARNING] ({arm_name}) FK/eepose mismatch rate "
+        f"{mismatch_frac*100:.3f}% "
+        f"({int(viol.sum())}/{int(viol.size)} rows). "
+        f"First bad timesteps: {show}{extra}. "
+        f"(atol={atol_pose}, rtol={rtol_pose}, skip_first={skip_first})"
+    )
+    
+def print_fk_eepose_diffs(
+    actions_base_cartesian: np.ndarray,
+    actions_eepose: np.ndarray,
+    *,
+    atol: float = 2e-4,
+    rtol: float = 0.0,
+    skip_first: int = 1,
+    zero_eps: float = 1e-12,
+    max_rows: int = 50,
+    max_cols: int = 20,
+    with_angles: bool = True,
+):
+    """
+    Print all diffs (per timestep, per dim) where FK(base0) != eepose beyond tolerance.
+
+    - If base is (T,S,D), compares base[:,0,:] against eepose.
+    - Drops gripper dims by default via dim selection based on D.
+    - For angles, compares wrapped diff into [-pi,pi].
+    - Masks out padded all-zero eepose rows in pose dims and also skips first `skip_first`.
+
+    Prints:
+      - summary stats
+      - list of violating timesteps
+      - for each violating timestep: FK, EE, DIFF for selected dims
+    """
+    base0 = actions_base_cartesian[:, 0] if actions_base_cartesian.ndim == 3 else actions_base_cartesian
+    eep = actions_eepose
+
+    if base0.shape != eep.shape:
+        raise ValueError(f"Shape mismatch: base0={base0.shape} vs eepose={eep.shape}")
+
+    T, D = base0.shape
+
+    if D == 14:
+        pos_dims = [0, 1, 2, 7, 8, 9]
+        ang_dims = [3, 4, 5, 10, 11, 12] if with_angles else []
+        dim_names = (
+            ["Lx","Ly","Lz","L_yaw","L_pitch","L_roll","L_g",
+             "Rx","Ry","Rz","R_yaw","R_pitch","R_roll","R_g"]
+        )
+    elif D == 7:
+        pos_dims = [0, 1, 2]
+        ang_dims = [3, 4, 5] if with_angles else []
+        dim_names = ["x","y","z","yaw","pitch","roll","g"]
+    else:
+        pos_dims = list(range(0, min(3, D)))
+        ang_dims = list(range(3, min(6, D))) if with_angles else []
+        dim_names = [f"d{i}" for i in range(D)]
+
+    pose_dims = pos_dims + ang_dims
+
+    # mask padded all-zero-ish rows (in pose dims) + skip_first
+    nonzero_row = (np.abs(eep[:, pose_dims]) > zero_eps).any(axis=1)
+    mask = nonzero_row.copy()
+    if skip_first > 0:
+        mask[:skip_first] = False
+
+    idx_all = np.arange(T)
+    valid_idx = idx_all[mask]
+    if valid_idx.size == 0:
+        print(f"[diff] No valid rows after masking. skip_first={skip_first}, zero_eps={zero_eps}")
+        return
+
+    b = base0[mask]
+    a = eep[mask]
+
+    # build a "diff" array for pose dims: pos direct, angles wrapped
+    diff_pose = np.zeros((b.shape[0], len(pose_dims)), dtype=np.float64)
+    # positions
+    diff_pose[:, :len(pos_dims)] = (b[:, pos_dims] - a[:, pos_dims])
+
+    # angles
+    if ang_dims:
+        diff_pose[:, len(pos_dims):] = _wrap_to_pi(b[:, ang_dims] - a[:, ang_dims])
+
+    # tolerance per-element
+    # elementwise allowed = atol + rtol * abs(desired)
+    desired_pose = a[:, pose_dims]
+    tol = atol + rtol * np.abs(desired_pose)
+    viol = np.abs(diff_pose) > tol
+
+    viol_rows = np.where(viol.any(axis=1))[0]
+    if viol_rows.size == 0:
+        print(f"[diff] ✅ No violations. compared_rows={b.shape[0]} masked_out={(~mask).sum()}")
+        return
+
+    # summary
+    abs_diff = np.abs(diff_pose)
+    print(f"[diff] compared_rows={b.shape[0]} masked_out={(~mask).sum()}  atol={atol} rtol={rtol}")
+    print(f"[diff] violations: {viol_rows.size} / {b.shape[0]} rows ({100*viol_rows.size/b.shape[0]:.3f}%)")
+    print(f"[diff] max_abs_over_pose_dims={abs_diff[viol].max():.6g}")
+    # per-dim summary
+    mean_abs_per_dim = abs_diff.mean(axis=0)
+    max_abs_per_dim = abs_diff.max(axis=0)
+    dim_labels = [dim_names[d] if d < len(dim_names) else str(d) for d in pose_dims]
+    print("[diff] per-dim mean_abs:", dict(zip(dim_labels, mean_abs_per_dim)))
+    print("[diff] per-dim max_abs :", dict(zip(dim_labels, max_abs_per_dim)))
+
+    # print violating timesteps + detailed diffs
+    print("\n[diff] Violating timesteps (original t indices):")
+    ts = valid_idx[viol_rows]
+    print(ts.tolist()[:max_rows], ("..." if ts.size > max_rows else ""))
+
+    to_show = min(max_rows, viol_rows.size)
+    for k in range(to_show):
+        r = viol_rows[k]
+        t = valid_idx[r]  # original timestep
+        cols = np.where(viol[r])[0]
+        cols = cols[:max_cols]
+
+        fk_vals = b[r, pose_dims]
+        ee_vals = a[r, pose_dims]
+        dvals  = diff_pose[r]
+
+        print(f"\n--- t={t} (valid_row_idx={r}) ---")
+        for c in cols:
+            name = dim_labels[c]
+            fk_v = fk_vals[c]
+            ee_v = ee_vals[c]
+            dv   = dvals[c]
+            allowed = tol[r, c]
+            print(f"{name:>8s}: fk={fk_v:+.6f}  ee={ee_v:+.6f}  diff={dv:+.6f}  |diff|>{allowed:.6g}")
+
+    if viol_rows.size > max_rows:
+        print(f"\n[diff] (only first {max_rows} violating rows printed; set max_rows larger to see all)")
+
+    return {
+        "valid_idx": valid_idx,
+        "viol_valid_rows": viol_rows,
+        "viol_timesteps": valid_idx[viol_rows],
+        "pose_dims": pose_dims,
+        "pos_dims": pos_dims,
+        "ang_dims": ang_dims,
+        "diff_pose": diff_pose,
+        "viol_mask": viol,
+    }
+    
 def fk_xyz(
-    joints_2d: Array2D, eva_fk: EvaKinematicsSolver, *, dtype=torch.float32, device=None
+    joints_2d: Array2D, eva_fk: EvaMinkKinematicsSolver, *, dtype=torch.float32, device=None
 ) -> torch.Tensor:
     """
     Eva FK positions for a sequence of joint vectors.
@@ -90,9 +379,8 @@ def fk_xyz(
         out[i] = torch.as_tensor(pos, dtype=dtype, device=device)
     return out
 
-
 def fk_SE3(
-    joints_2d: Array2D, eva_fk: EvaKinematicsSolver, *, dtype=torch.float32, device=None
+    joints_2d: Array2D, eva_fk: EvaMinkKinematicsSolver, *, dtype=torch.float32, device=None
 ) -> torch.Tensor:
     """
     Eva FK full SE(3) for a sequence of joint vectors.
@@ -110,36 +398,28 @@ def fk_SE3(
         out[i, :3, 3] = torch.as_tensor(pos, dtype=dtype, device=device)
     return out
 
-
-def get_future_points(arr, POINT_GAP=POINT_GAP_ACT, CHUNK_LENGTH=CHUNK_LENGTH_ACT):
-    """
-    arr: (T, ACTION_DIM)
-    POINT_GAP: how many timesteps to skip
-    CHUNK_LENGTH: how many future points to collect
-    given an array arr, prepack the future points into each timestep.  return an array of size (T, CHUNK_LENGTH, ACTION_DIM).  If there are not enough future points, pad with the last point.
-    do it purely vectorized
-    """
-    T, ACTION_DIM = arr.shape
-    result = np.zeros((T, CHUNK_LENGTH, ACTION_DIM))
-
+def build_future_windows(arr: np.ndarray, horizon: int) -> np.ndarray:
+    arr = np.asarray(arr)
+    T, D = arr.shape
+    out = np.empty((T, horizon, D), dtype=arr.dtype)
     for t in range(T):
-        future_indices = np.arange(t, t + POINT_GAP * (CHUNK_LENGTH), POINT_GAP)
-        future_indices = np.clip(future_indices, 0, T - 1)
-        result[t] = arr[future_indices]
-    return result
+        end = min(t + horizon, T)
+        length = end - t
+        out[t, :length, :] = arr[t:end]
+        out[t, length:, :] = arr[end - 1]
+    return out
 
-
-def sample_interval_points(arr, POINT_GAP=POINT_GAP_ACT, CHUNK_LENGTH=CHUNK_LENGTH_ACT):
-    """
-    arr: (T, ACTION_DIM)
-    Returns an array of points sampled at intervals of POINT_GAP * CHUNK_LENGTH.
-    """
-    num_samples, T, ACTION_DIM = arr.shape
-    interval = T / 10
-    indices = np.arange(0, T, interval).astype(int)
-    sampled_points = arr[:, indices, :]
-    return sampled_points
-
+def prestack_with_mode(
+    arr: np.ndarray,
+    horizon: int,
+    chunk_length: int,
+    mode: str = "linear",
+) -> np.ndarray:
+    windows = build_future_windows(arr, horizon)
+    if mode == "euler":
+        return interpolate_arr_euler(windows, chunk_length)
+    else:
+        return interpolate_arr(windows, chunk_length)
 
 def joint_to_pose(pose, arm, left_extrinsics=None, right_extrinsics=None, no_rot=False):
     """
@@ -148,7 +428,7 @@ def joint_to_pose(pose, arm, left_extrinsics=None, right_extrinsics=None, no_rot
     left_extrinsics: the left camera extrinsics
     right_extrinsics: the right camera extrinsics
     """
-    eva_fk = EvaKinematicsSolver(model_path=str(EVA_XML_PATH))
+    eva_fk = EvaMinkKinematicsSolver(model_path=str(EVA_XML_PATH))
 
     if arm == "both":
         joint_start = 0
@@ -173,6 +453,12 @@ def joint_to_pose(pose, arm, left_extrinsics=None, right_extrinsics=None, no_rot
             fk_right_positions = fk_xyz(
                 pose[:, joint_right_start : joint_right_end - 1], eva_fk
             )
+            
+            fk_left_positions = _to_numpy(fk_left_positions)
+            fk_right_positions = _to_numpy(fk_right_positions)
+
+            base_fk_positions = np.concatenate([fk_left_positions, fk_right_positions], axis=1)
+
             fk_left_positions = ee_pose_to_cam_frame(fk_left_positions, left_extrinsics)
             fk_right_positions = ee_pose_to_cam_frame(
                 fk_right_positions, right_extrinsics
@@ -183,6 +469,9 @@ def joint_to_pose(pose, arm, left_extrinsics=None, right_extrinsics=None, no_rot
         else:
             fk_positions = fk_xyz(pose[:, joint_start : joint_end - 1], eva_fk)
             extrinsics = left_extrinsics if arm == "left" else right_extrinsics
+            
+            base_fk_positions = fk_positions
+            
             fk_positions = ee_pose_to_cam_frame(fk_positions, extrinsics)
 
     else:
@@ -197,6 +486,22 @@ def joint_to_pose(pose, arm, left_extrinsics=None, right_extrinsics=None, no_rot
 
             left_gripper = pose[:, joint_left_end - 1].reshape(-1, 1)
             right_gripper = pose[:, joint_right_end - 1].reshape(-1, 1)
+            
+            
+            left_ypr_base = R.from_matrix(fk_left_orientations).as_euler("ZYX", degrees=False)
+            right_ypr_base = R.from_matrix(fk_right_orientations).as_euler("ZYX", degrees=False)
+
+            base_fk_positions = np.concatenate(
+                [
+                    fk_left_positions,
+                    left_ypr_base,
+                    left_gripper,
+                    fk_right_positions,
+                    right_ypr_base,
+                    right_gripper,
+                ],
+                axis=1,
+            )
 
             fk_left_positions = ee_pose_to_cam_frame(fk_left_positions, left_extrinsics)
             fk_right_positions = ee_pose_to_cam_frame(
@@ -229,6 +534,9 @@ def joint_to_pose(pose, arm, left_extrinsics=None, right_extrinsics=None, no_rot
             fk_orientations = fk[:, :3, :3]
 
             gripper = pose[:, joint_end - 1].reshape(-1, 1)
+            
+            ypr_base = R.from_matrix(fk_orientations).as_euler("ZYX", degrees=False)
+            base_fk_positions = np.concatenate([fk_positions, ypr_base, gripper], axis=1)
 
             extrinsics = left_extrinsics if arm == "left" else right_extrinsics
             fk_positions = ee_pose_to_cam_frame(fk_positions, extrinsics)
@@ -238,7 +546,7 @@ def joint_to_pose(pose, arm, left_extrinsics=None, right_extrinsics=None, no_rot
 
             fk_positions = np.concatenate([fk_positions, fk_ypr, gripper], axis=1)
 
-    return fk_positions
+    return fk_positions, base_fk_positions
 
 
 class EvaHD5Extractor:
@@ -348,20 +656,36 @@ class EvaHD5Extractor:
             )
 
             # actions
-            joint_actions, cartesian_actions = EvaHD5Extractor.get_action(
+            joint_actions, cartesian_actions, base_cartesian_actions = EvaHD5Extractor.get_action(
                 episode["action"][:],
                 arm=arm,
                 prestack=prestack,
-                POINT_GAP=POINT_GAP_ACT,
-                CHUNK_LENGTH=CHUNK_LENGTH_ACT,
+                HORIZON=HORIZON_BASE,
+                CHUNK_LENGTH=CHUNK_LENGTH_BASE,
                 left_extrinsics=left_extrinsics,
                 right_extrinsics=right_extrinsics,
                 no_rot=no_rot,
             )
+            # dbg = print_fk_eepose_diffs(
+            #     base_cartesian_actions,
+            #     episode["actions"]["eepose"][:],
+            #     atol=2e-4,
+            #     rtol=0.0,
+            #     skip_first=1,
+            #     max_rows=500,   # set huge if you truly want “all”
+            # )
+            assert_fk_matches_eepose(base_cartesian_actions, episode["actions"]["eepose"][:], arm=arm)
 
             episode_feats["actions_joints"] = joint_actions
             episode_feats["actions_cartesian"] = cartesian_actions
+            episode_feats["actions_base_cartesian"] = base_cartesian_actions
 
+            episode_feats["actions_eef_cartesian"] = EvaHD5Extractor.get_eef_action(
+                actions_cartesian_base=base_cartesian_actions,
+                arm=arm,
+                ref_index=0,
+            )
+            
             episode_feats["observations"][f"state.joint_positions"] = episode_feats[
                 "observations"
             ][f"state.joint_positions"][:, joint_start:joint_end]
@@ -390,39 +714,13 @@ class EvaHD5Extractor:
     def get_action(
         actions: np.array,
         arm: str,
-        prestack=False,
-        POINT_GAP=2,
-        CHUNK_LENGTH=100,
+        prestack: bool = False,
+        HORIZON: int = HORIZON_BASE,
+        CHUNK_LENGTH: int = CHUNK_LENGTH_BASE,
         left_extrinsics=None,
         right_extrinsics=None,
-        no_rot=False,
+        no_rot: bool = False,
     ):
-        """
-        Uses FK to calculate ee pose from joints
-        Parameters
-        ----------
-        pose : np.array
-            array containing joint actions
-        arm : str
-            arm to convert data for
-        prestack : bool
-            whether or not to precompute action chunks
-        POINT_GAP : int
-            interpolation for timesteps
-        CHUNK_LENGTH : int
-            action chunk length
-        left_extrinsics :
-            camera extrinsics
-        right_extrinsics :
-            camera_extrinsics
-        no_rot: bool
-            calculate full 6dof trajectory or not
-        Returns
-        -------
-        actions : tuple of np.array
-            (joint actions, cartesian actions)
-        """
-
         joint_actions = actions
 
         if arm == "left":
@@ -435,7 +733,7 @@ class EvaHD5Extractor:
             joint_start = 0
             joint_end = 14
 
-        cartesian_actions = joint_to_pose(
+        cartesian_actions, base_cartesian_actions = joint_to_pose(
             pose=joint_actions,
             arm=arm,
             left_extrinsics=left_extrinsics,
@@ -446,22 +744,126 @@ class EvaHD5Extractor:
         joint_actions = joint_actions[:, joint_start:joint_end]
 
         if prestack:
-            joint_actions = get_future_points(
-                joint_actions, POINT_GAP=POINT_GAP, CHUNK_LENGTH=CHUNK_LENGTH
-            )
-            joint_actions_sampled = sample_interval_points(
-                joint_actions, POINT_GAP=POINT_GAP, CHUNK_LENGTH=CHUNK_LENGTH
-            )
-            cartesian_actions = get_future_points(
-                cartesian_actions, POINT_GAP=POINT_GAP, CHUNK_LENGTH=CHUNK_LENGTH
-            )
-            cartesian_actions_sampled = sample_interval_points(
-                cartesian_actions, POINT_GAP=POINT_GAP, CHUNK_LENGTH=CHUNK_LENGTH
+            horizon = HORIZON
+
+            joint_actions = prestack_with_mode(
+                np.asarray(joint_actions),
+                horizon=horizon,
+                chunk_length=CHUNK_LENGTH,
+                mode="linear",
             )
 
-        # TODO: fix saving the sampled
-        return (joint_actions, cartesian_actions)
+            cart_np = np.asarray(cartesian_actions)
+            base_np = np.asarray(base_cartesian_actions)
 
+            if arm == "both":
+                left_base = base_np[:, :7]
+                right_base = base_np[:, 7:14]
+                left_cam = cart_np[:, :7]
+                right_cam = cart_np[:, 7:14]
+
+                left_base = prestack_with_mode(
+                    left_base,
+                    horizon=horizon,
+                    chunk_length=CHUNK_LENGTH,
+                    mode="euler",
+                )
+                right_base = prestack_with_mode(
+                    right_base,
+                    horizon=horizon,
+                    chunk_length=CHUNK_LENGTH,
+                    mode="euler",
+                )
+                left_cam = prestack_with_mode(
+                    left_cam,
+                    horizon=horizon,
+                    chunk_length=CHUNK_LENGTH,
+                    mode="euler",
+                )
+                right_cam = prestack_with_mode(
+                    right_cam,
+                    horizon=horizon,
+                    chunk_length=CHUNK_LENGTH,
+                    mode="euler",
+                )
+
+                base_cartesian_actions = np.concatenate(
+                    [left_base, right_base], axis=-1
+                )
+                cartesian_actions = np.concatenate(
+                    [left_cam, right_cam], axis=-1
+                )
+            else:
+                base_cartesian_actions = prestack_with_mode(
+                    base_np,
+                    horizon=horizon,
+                    chunk_length=CHUNK_LENGTH,
+                    mode="euler",
+                )
+                cartesian_actions = prestack_with_mode(
+                    cart_np,
+                    horizon=horizon,
+                    chunk_length=CHUNK_LENGTH,
+                    mode="euler",
+                )
+
+        return (joint_actions, cartesian_actions, base_cartesian_actions)
+    
+    @staticmethod
+    def get_eef_action(
+        actions_cartesian_base: np.ndarray,
+        arm: str,
+        ref_index: int = 0,
+    ) -> np.ndarray:
+        
+        if arm == "both":
+            left_base = actions_cartesian_base[..., :7]
+            right_base = actions_cartesian_base[..., 7:14]
+
+            left_rel = EvaHD5Extractor.get_eef_action(
+                left_base, arm="left", ref_index=ref_index
+            )
+            right_rel = EvaHD5Extractor.get_eef_action(
+                right_base, arm="right", ref_index=ref_index
+            )
+            return np.concatenate([left_rel, right_rel], axis=-1)
+        
+        N, S, D = actions_cartesian_base.shape
+
+        p = actions_cartesian_base[..., :3]     # (N, S, 3)
+        ypr = actions_cartesian_base[..., 3:6]  # (N, S, 3)
+        g = actions_cartesian_base[..., 6:7]    # (N, S, 1)
+        
+        T = p.shape[0]
+        
+        ypr_flat = ypr.reshape(-1, 3)               # (N*S, 3)
+        R_flat = R.from_euler("ZYX", ypr_flat, degrees=False).as_matrix()  # (N*S, 3, 3)
+        R_seq = R_flat.reshape(N, S, 3, 3)          # (N, S, 3, 3)
+
+        T_seq = np.zeros((N, S, 4, 4), dtype=np.float32)
+        T_seq[..., :3, :3] = R_seq
+        T_seq[..., :3, 3] = p
+        T_seq[..., 3, 3] = 1.0
+
+        T0 = T_seq[:, ref_index, :, :]          # (N, 4, 4)
+        T0_inv = np.linalg.inv(T0)              # (N, 4, 4)
+            
+        T_rel = T0_inv[:, None, :, :] @ T_seq   # (N, S, 4, 4)
+        
+        p_rel = T_rel[..., :3, 3]          # (T, 3)
+        R_rel = T_rel[..., :3, :3]         # (T, 3, 3)
+        
+        R_rel_flat = R_rel.reshape(-1, 3, 3)    # (N*S, 3, 3)
+        ypr_rel_flat = R.from_matrix(R_rel_flat).as_euler("ZYX", degrees=False)  # (N*S, 3)
+        ypr_rel = ypr_rel_flat.reshape(N, S, 3) # (N, S, 3)
+        
+        actions_rel = np.empty_like(actions_cartesian_base)
+        actions_rel[..., :3] = p_rel
+        actions_rel[..., 3:6] = ypr_rel
+        actions_rel[..., 6:7] = g  # keep gripper as-is
+
+        return actions_rel
+    
     @staticmethod
     def get_ee_pose(
         qpos: np.array,
@@ -490,7 +892,7 @@ class EvaHD5Extractor:
             ee_pose SE{3}
         """
 
-        ee_pose = joint_to_pose(
+        ee_pose, _ = joint_to_pose(
             qpos, arm, left_extrinsics, right_extrinsics, no_rot=no_rot
         )
 
@@ -562,9 +964,8 @@ class EvaHD5Extractor:
             )
         for episode_path in episode_list:
             with h5py.File(episode_path, "r") as data:
-                if not all(
-                    key in data for key in ["/action", "/observations/joint_positions"]
-                ):
+                # Check for required keys - h5py requires checking without leading slash or using get()
+                if "action" not in data or "observations" not in data or "joint_positions" not in data["observations"]:
                     raise ValueError(
                         "Missing required keys in the hdf5 file. Make sure the keys '/action' and '/observations/joint_positions' are present."
                     )
@@ -934,8 +1335,6 @@ class DatasetConverter:
                 align_corners=False,
             ).squeeze(0)  # (C,outH,outW)
 
-            # BGR -> RGB, then (H,W,C)
-            t_resized = t_resized[[2, 1, 0], ...]  # (3,H,W) RGB
             hwc = t_resized.permute(1, 2, 0).contiguous()  # (H,W,3), uint8
             rgb_frames.append(hwc)
 
@@ -1141,7 +1540,7 @@ class DatasetConverter:
         """
         # Clean the cache if the dataset already exists
         if os.path.exists(output_dir / name):
-            shutil.rmtree(output_dir / name)
+            rmtree_with_wait(output_dir / name)
 
         self._out_base = Path(output_dir)
 
@@ -1184,58 +1583,15 @@ def argument_parse():
     )
 
     # Optional arguments
-    parser.add_argument(
-        "--description",
-        type=str,
-        default="Eva recorded dataset.",
-        help="Description of the dataset.",
-    )
-    parser.add_argument(
-        "--arm",
-        type=str,
-        choices=["left", "right", "both"],
-        default="both",
-        help="Specify the arm for processing.",
-    )
-    parser.add_argument(
-        "--extrinsics-key",
-        type=str,
-        default="ariaOct18_arx",
-        help="Key to look up camera extrinsics.",
-    )
-    parser.add_argument(
-        "--private",
-        type=str2bool,
-        default=False,
-        help="Set to True to make the dataset private.",
-    )
-    parser.add_argument(
-        "--push",
-        type=str2bool,
-        default=True,
-        help="Set to True to push videos to the hub.",
-    )
-    parser.add_argument(
-        "--license", type=str, default="apache-2.0", help="License for the dataset."
-    )
-    parser.add_argument(
-        "--image-compressed",
-        type=str2bool,
-        default=True,
-        help="Set to True if the images are compressed.",
-    )
-    parser.add_argument(
-        "--video-encoding",
-        type=str2bool,
-        default=True,
-        help="Set to True to encode images as videos.",
-    )
-    parser.add_argument(
-        "--prestack",
-        type=str2bool,
-        default=True,
-        help="Set to True to precompute action chunks.",
-    )
+    parser.add_argument("--description", type=str, default="Eva recorded dataset.", help="Description of the dataset.")
+    parser.add_argument("--arm", type=str, choices=["left", "right", "both"], default="both", help="Specify the arm for processing.")
+    parser.add_argument("--extrinsics-key", type=str, default="x5Dec13_2", help="Key to look up camera extrinsics.")
+    parser.add_argument("--private", type=str2bool, default=False, help="Set to True to make the dataset private.")
+    parser.add_argument("--push", type=str2bool, default=True, help="Set to True to push videos to the hub.")
+    parser.add_argument("--license", type=str, default="apache-2.0", help="License for the dataset.")
+    parser.add_argument("--image-compressed", type=str2bool, default=True, help="Set to True if the images are compressed.")
+    parser.add_argument("--video-encoding", type=str2bool, default=True, help="Set to True to encode images as videos.")
+    parser.add_argument("--prestack", type=str2bool, default=True, help="Set to True to precompute action chunks.")
 
     # Performance tuning arguments
     parser.add_argument(

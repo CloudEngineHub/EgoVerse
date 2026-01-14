@@ -37,9 +37,10 @@ def lerobot_job(
         save_mp4=True,
         private=False,
         license="apache-2.0",
-        nproc=10,
+        nproc=16,
         nthreads=2,
         debug=False,
+        benchmark=False
     )
 
     aria_main(args)

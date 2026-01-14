@@ -28,7 +28,7 @@ PROCESSED_ROOT = Path("/mnt/processed")
 PROCESSED_LOCAL_ROOT = Path(os.environ.get("PROCESSED_LOCAL_ROOT", "/mnt/processed")).resolve()
 PROCESSED_REMOTE_PREFIX = os.environ.get("PROCESSED_REMOTE_PREFIX", "rldb:/processed_v2/eva").rstrip("/")
 
-DEFAULT_EXTRINSICS_KEY = "ariaOct18_arx"
+DEFAULT_EXTRINSICS_KEY = "x5Dec13_2"
 
 
 def ensure_path_ready(p: str | Path, retries: int = 30) -> bool:
@@ -101,7 +101,7 @@ def _load_episode_key(name: str) -> str | None:
         return name
 
 
-@ray.remote(num_cpus=24, memory=48 * 1024**3)
+@ray.remote(num_cpus=8)
 def convert_one_bundle(
     data_h5: str,
     out_dir: str,
@@ -240,9 +240,11 @@ def launch(dry: bool = False, skip_if_done: bool = False):
         if row.num_frames > 0:
             row.processed_path = _map_processed_local_to_remote(ds_path)
             row.mp4_path = _map_processed_local_to_remote(mp4_path)
+            row.processing_error = ""
         else:
             row.processed_path = ""
             row.mp4_path = ""
+            row.processing_error = "Zero Frames"
 
         try:
             update_episode(engine, row)

@@ -33,7 +33,7 @@ pandas
 overrides
 zarr
 tabulate
-transformers
+transformers==4.57.3
 timm
 boto3
 cloudpathlib
@@ -49,3 +49,4 @@ typing_extensions
 pyarrow==19.0.1
 simplejpeg
 prettytable
+datasets==4.0.0

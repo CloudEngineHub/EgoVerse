@@ -31,3 +31,8 @@ egomimic/algo/pi_checkpoints/*
 egomimic/scripts/tsne/*
 slurm*.out
 slurm*.err
+lerobot_test/
+**/lerobot_test/
+**/lerobot_test/**
+**/robot/models/**
+**/robot/models/
