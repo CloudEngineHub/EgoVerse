@@ -38,6 +38,12 @@ ARIA_INTRINSICS_HALF = np.array(
     ]
 )
 
+SCALE_INTRINSICS = np.array([
+    [638.103, 0.0, 935.525, 0],
+    [0.0, 637.272, 626.204, 0],
+    [0.0, 0.0, 1.0, 0]
+])
+
 w0, h0 = float(1920), float(1080)
 fx0, fy0 = float(752.4707352849115), float(753.0015979987369)
 cx0, cy0 = float(961.8249427694457),  float(553.245895705989)
@@ -218,10 +224,14 @@ EXTRINSICS = {
            [-0.9983006 ,  0.05811952, -0.00424732,  0.32539554],
            [-0.0339837 , -0.63983444, -0.76776103,  0.64809634],
            [ 0.        ,  0.        ,  0.        ,  1.        ]])
+    },
+    "scale": {
+        "left": np.eye(4),
+        "right": np.eye(4),
     }
 }
 
-INTRINSICS = {"base": ARIA_INTRINSICS, "base_half": ARIA_INTRINSICS_HALF, "mecka": MECKA_INTRINSICS}
+INTRINSICS = {"base": ARIA_INTRINSICS, "base_half": ARIA_INTRINSICS_HALF, "mecka": MECKA_INTRINSICS, "scale": SCALE_INTRINSICS}
 
 
 class CameraTransforms:

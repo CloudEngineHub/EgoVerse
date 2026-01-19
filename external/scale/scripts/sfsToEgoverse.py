@@ -28,7 +28,7 @@ Parquet Columns:
     - actions_head_cartesian_world: (10,) head pose
     - observations.images.front_img_1: (C, H, W) RGB image
     - observations.state.ee_pose_cam: (12,) current palm pose
-    - timestamp: nanoseconds
+    - timestamp: seconds
     - frame_index: int
 """
 
@@ -289,7 +289,7 @@ class SFSDataExtractor:
             pose = self.pose_values[i]
             
             ret, frame = cap.read()
-            image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB) if ret else None
+            image = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).copy() if ret else None
             
             frames.append(FrameData(
                 frame_index=i,
@@ -458,6 +458,11 @@ class EgoverseDatasetWriter:
         frame_t = frames[t]
         camera_pose_t = frame_t.camera_pose
         
+        # Filter out frames with "Inactive Time" in collector_issue
+        if frame_t.collector_issue is not None and frame_t.collector_issue.get('issue_type') == 'Inactive Time':
+            #print("found")
+            return None
+        
         # Actions: EE Cartesian in Camera Frame (100, 12)
         actions_ee_cartesian = []
         for offset in range(ACTION_CHUNK_LENGTH):
@@ -500,8 +505,10 @@ class EgoverseDatasetWriter:
         if frame_t.image is None:
             return None
         
-        image_chw = np.transpose(frame_t.image, (2, 0, 1))
-        timestamp_ns = frame_t.timestamp_us * 1000
+        # Normalize image to 0-1 range for proper visualization
+        image_normalized = frame_t.image.astype(np.float32) / 255.0
+        image_chw = np.transpose(image_normalized, (2, 0, 1))
+        timestamp_s = frame_t.timestamp_us/ 1000000
         
         # Filter frames with too many invalid values
         if np.sum(actions_ee_cartesian >= INVALID_VALUE - 1) > actions_ee_cartesian.size * 0.5:
@@ -511,9 +518,9 @@ class EgoverseDatasetWriter:
             'actions_ee_cartesian_cam': actions_ee_cartesian.astype(np.float32),
             'actions_ee_keypoints_world': actions_ee_keypoints.astype(np.float32),
             'actions_head_cartesian_world': actions_head.astype(np.float32),
-            'observations.images.front_img_1': image_chw.astype(np.uint8),
+            'observations.images.front_img_1': image_chw.astype(np.float32),
             'observations.state.ee_pose_cam': obs_ee_pose.astype(np.float32),
-            'timestamp': timestamp_ns,
+            'timestamp': timestamp_s,
             'frame_index': int(frame_t.frame_index),
             'task_index': int(task_index),
         }
@@ -528,12 +535,18 @@ class EgoverseDatasetWriter:
             row['metadata.embodiment'] = int(self.metadata_embodiment)
             self.next_index += 1
         
-        columns = {}
+        # Build PyArrow arrays directly to properly handle nested arrays
+        arrays = {}
         for key in rows[0].keys():
-            values = [row[key] for row in rows]
-            columns[key] = [v.tobytes() if isinstance(v, np.ndarray) else v for v in values]
+            # Convert to list immediately to avoid shared memory issues
+            if isinstance(rows[0][key], np.ndarray):
+                values = [row[key].tolist() for row in rows]
+                arrays[key] = pa.array(values)
+            else:
+                values = [row[key] for row in rows]
+                arrays[key] = pa.array(values)
         
-        table = pa.Table.from_pandas(pd.DataFrame(columns))
+        table = pa.table(arrays)
         pq.write_table(table, filepath)
         print(f"Wrote {len(rows)} frames to {filepath}")
     

@@ -94,6 +94,9 @@ class EMBODIMENT(Enum):
     MECKA_BIMANUAL = 9
     MECKA_RIGHT_ARM = 10
     MECKA_LEFT_ARM = 11
+    SCALE_BIMANUAL = 12
+    SCALE_RIGHT_ARM = 13
+    SCALE_LEFT_ARM = 14
 
 
 SEED = 42
@@ -190,6 +193,7 @@ class RLDBDataset(LeRobotDataset):
         percent=0.1,
         mode="train",
         valid_ratio: float = 0.2,
+        tolerance_s: float = 5e-2,
         **kwargs,
     ):
         dataset_meta = LeRobotDatasetMetadata(
@@ -199,7 +203,7 @@ class RLDBDataset(LeRobotDataset):
 
         dataset_splits = dataset_meta.info["splits"]
         train_indices = dataset_splits["train"]
-
+        self.tolerance_s = tolerance_s
         self.embodiment = get_embodiment_id(dataset_meta.robot_type)
         self.sampled_indices = None
 
@@ -278,6 +282,7 @@ class RLDBDataset(LeRobotDataset):
                 root=root,
                 local_files_only=local_files_only,
                 episodes=train_indices,
+                tolerance_s=self.tolerance_s,
             )
 
         elif mode == "valid":
@@ -291,6 +296,7 @@ class RLDBDataset(LeRobotDataset):
                 root=root,
                 local_files_only=local_files_only,
                 episodes=valid_indices,
+                tolerance_s=self.tolerance_s,
             )
 
         elif mode == "sample" and episodes is not None:
@@ -299,6 +305,7 @@ class RLDBDataset(LeRobotDataset):
                 root=root,
                 local_files_only=local_files_only,
                 episodes=episodes,
+                tolerance_s=self.tolerance_s,
             )
 
         elif mode == "percent" and percent is not None:
@@ -310,6 +317,7 @@ class RLDBDataset(LeRobotDataset):
                 root=root,
                 local_files_only=local_files_only,
                 episodes=train_indices,
+                tolerance_s=self.tolerance_s,
             )
 
             # Sample a percentage of frames
@@ -321,7 +329,7 @@ class RLDBDataset(LeRobotDataset):
 
         else:
             super().__init__(
-                repo_id=repo_id, root=root, local_files_only=local_files_only
+                repo_id=repo_id, root=root, local_files_only=local_files_only, tolerance_s=self.tolerance_s,
             )
 
     def __len__(self):

@@ -3,6 +3,7 @@ _target_: egomimic.pl_utils.pl_data_utils.MultiDataModuleWrapper
 train_datasets:
   dataset1:
     _target_: rldb.utils.RLDBDataset
+    repo_id: "scale_test"
     mode: train
     embodiment: "scale_bimanual"
     root: "/nethome/agao81/flash/EgoVerse/external/scale/scripts/dataset"
@@ -11,9 +12,10 @@ train_datasets:
 valid_datasets:
   dataset1:
     _target_: rldb.utils.RLDBDataset
+    repo_id: "scale_test"
     mode: valid
     embodiment: "scale_bimanual"
-    root: "/nethome/Sagao81/flash/EgoVerse/external/scale/scripts/dataset"
+    root: "/nethome/agao81/flash/EgoVerse/external/scale/scripts/dataset"
     local_files_only: True
 
 train_dataloader_params:
