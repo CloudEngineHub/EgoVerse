@@ -30,3 +30,4 @@ pyproject.bak
 egomimic/algo/pi_checkpoints/*
 egomimic/scripts/tsne/*
 sbatch_logs/*
+results/

@@ -688,7 +688,7 @@ class S3RLDBDataset(MultiRLDBDataset):
         print(f"Paths: {paths}")
         
         # # save to log files
-        # log_file = "s3_rldb_dataset.log"
+        # log_file = "results/s3_rldb_dataset.log"
         # with open(log_file, "a") as f:
         #     f.write(f"Found {len(paths)} S3 paths matching filters {filters}\n")
         #     for p in paths:

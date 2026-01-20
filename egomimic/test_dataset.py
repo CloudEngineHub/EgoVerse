@@ -40,13 +40,13 @@ def test_dataset(cfg: DictConfig):
             cfg.data.train_datasets[dataset_name]
         )
     
-    valid_datasets = {}
-    for dataset_name in cfg.data.valid_datasets:
-        valid_datasets[dataset_name] = hydra.utils.instantiate(
-            cfg.data.valid_datasets[dataset_name]
-        )
+    # valid_datasets = {}
+    # for dataset_name in cfg.data.valid_datasets:
+    #     valid_datasets[dataset_name] = hydra.utils.instantiate(
+    #         cfg.data.valid_datasets[dataset_name]
+    #     )
     
-    import pdb; pdb.set_trace()
+    # import pdb; pdb.set_trace()
     
     cprint("=========Finish=========", "green", attrs=["bold"])
 
