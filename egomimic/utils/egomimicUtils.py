@@ -19,6 +19,7 @@ import huggingface_hub
 import math
 import argparse
 from scipy.spatial.transform import Rotation as R
+from pathlib import Path
 
 STD_SCALE = 0.02
 

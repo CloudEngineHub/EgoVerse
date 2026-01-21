@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=T_ut_50hz
+#SBATCH --job-name=T_cup_50hz_1
 #SBATCH --account=a144
-#SBATCH --output=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_slurm_out_v2/50hz/utensils_correct_extrinsics/slurm-utensilstrain-%j.out
-#SBATCH --error=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_slurm_out_v2/50hz/utensils_correct_extrinsics/slurm-utensilstrain-%j.err
+#SBATCH --output=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_slurm_out_v2/50hz/cup/slurm-cup-%j.out
+#SBATCH --error=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_slurm_out_v2/50hz/cup/slurm-cup-%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
@@ -15,11 +15,17 @@
 # Stop the script if a command fails or if an undefined variable is used
 set -eo pipefail
 
+ulimit -c 0
+
 echo $PG # POINT_GAP_ACT
 echo $CL # CHUNK_LENGTH_ACT, need to change action horizon
-export UTENSILS_EXP=pg${PG}_cl${CL}
-echo $UTENSILS_EXP
-
+echo $CL_OUT # CHUNK_LENGTH_ACT_OUT, need to change action horizon
+if [ "$CL_OUT" = "None" ]; then
+    export EXPERIMENT=pg${PG}_cl${CL}
+else
+    export EXPERIMENT=pg${PG}_cl${CL}_clout${CL_OUT}
+fi
+echo $EXPERIMENT
 
 # The sbatch script is executed by only one node.
 echo "[sbatch-master] running on $(hostname)"
@@ -53,15 +59,15 @@ nvidia-smi --query-gpu=memory.total --format=csv
 # trap 'echo "USR1 trapped"; kill -USR1 -- -$$' USR1
 
 ##################### SET THESE VARIABLES #####################
-export task=utensils
+export task=cup
 export frame_type=base_frame
-export arm=right_arm
+export arm=bimanual
 export debug=false
 ###############################################################
 
 ##################### MAYBE CHANGE THIS PATH #####################
-export hydra_run_dir=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_v2/50hz/${UTENSILS_EXP}/correct_extrinsics/${task}/${task}_${frame_type}
-export dataset_root=/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/release_2_0/50hz/${UTENSILS_EXP}/${task}_lerobot_${frame_type}
+export hydra_run_dir=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_v2/50hz/${EXPERIMENT}/${task}/${task}_${frame_type}
+export dataset_root=/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/release_2_0/50hz/${EXPERIMENT}/${task}_lerobot_${frame_type}
 # export dataset_root=/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/debug_2_0/${task}_lerobot_${frame_type}_1_debug
 ##################################################################
 
@@ -78,6 +84,11 @@ export ckpt_path=${hydra_run_dir}/checkpoints/last.ckpt
 ckpt_path=$( [[ -f "$ckpt_path" ]] && echo "$ckpt_path" || echo null )
 echo "CHECKPOINT PATH! ckpt_path: $ckpt_path"
 
+if [ "$CL_OUT" = "None" ]; then
+    export CL_param=${CL}
+else
+    export CL_param=${CL_OUT}
+fi
 
 CMD="
 source /capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/eth_clariden/clariden.sh
@@ -94,10 +105,10 @@ python /capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/egomimic/trai
     trainer.num_nodes=$SLURM_NNODES \
     data.train_datasets.dataset1.root=$dataset_root \
     data.valid_datasets.dataset1.root=$dataset_root \
-    model.robomimic_model.head_specs.eve_${arm}.action_horizon=$CL \
-    model.robomimic_model.head_specs.eve_${arm}.model.act_seq=$CL \
-    model.robomimic_model.head_specs.eve_${arm}_actions_joints.action_horizon=$CL \
-    model.robomimic_model.head_specs.eve_${arm}_actions_joints.model.act_seq=$CL \
+    model.robomimic_model.head_specs.eve_${arm}.action_horizon=$CL_param \
+    model.robomimic_model.head_specs.eve_${arm}.model.act_seq=$CL_param \
+    model.robomimic_model.head_specs.eve_${arm}_actions_joints.action_horizon=$CL_param \
+    model.robomimic_model.head_specs.eve_${arm}_actions_joints.model.act_seq=$CL_param \
     $@
 "
 srun bash -lc "$CMD"
