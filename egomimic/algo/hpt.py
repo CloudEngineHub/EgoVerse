@@ -888,6 +888,7 @@ class HPT(Algo):
             for key in key_list:
                 domain_key = f"{domain}_{key}"
                 model.init_domain_head(domain_key, self.head_specs[domain_key])
+                cprint(f"Initialized auxiliary head: {domain_key}", "green")
 
         for modality, encoder_cfg in self.encoders.items():
             model.init_encoder(modality, encoder_cfg)
