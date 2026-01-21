@@ -236,7 +236,7 @@ class SFSDataExtractor:
         for sg in self.subgoal_annotations:
             if sg['start_ts'] <= timestamp <= sg['end_ts']:
                 return sg
-            return None
+        return None
         
     def get_collector_issue_at_timestamp(self, timestamp: int) -> Optional[Dict[str, Any]]:
         for issue in self.collector_issues:
