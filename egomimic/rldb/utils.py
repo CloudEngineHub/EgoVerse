@@ -680,21 +680,7 @@ class S3RLDBDataset(MultiRLDBDataset):
             output = output[:recordings]
 
         paths = list(output.itertuples(index=False, name=None))
-<<<<<<< HEAD
-        cprint(f"Found {len(paths)} S3 paths matching filters {filters}", "yellow")
-        print(f"Paths: {paths}")
-        
-        # # save to log files
-        # log_file = "results/s3_rldb_dataset.log"
-        # with open(log_file, "a") as f:
-        #     f.write(f"Found {len(paths)} S3 paths matching filters {filters}\n")
-        #     for p in paths:
-        #         f.write(f"{p}\n")
-        #     f.write("\n")
-        
-=======
         logger.info(f"Paths: {paths}")
->>>>>>> 4ff3fd6458be283254c6103621feb429c5e371c8
         return paths
 
     @staticmethod

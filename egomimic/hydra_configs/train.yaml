@@ -91,15 +91,9 @@ data_schematic: # Dynamically fill in these shapes from the dataset
         key_type: metadata_keys
         lerobot_key: metadata.embodiment
   viz_img_key: 
-<<<<<<< HEAD
-    eve_bimanual:
-      base_0_rgb
-    aria_bimanual:
-=======
     eva_bimanual:
       front_img_1
     aria_bimanual:
       front_img_1
     mecka_bimanual:
->>>>>>> 4ff3fd6458be283254c6103621feb429c5e371c8
       base_0_rgb
