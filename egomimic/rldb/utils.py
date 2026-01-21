@@ -10,6 +10,7 @@ from multiprocessing.dummy import connection
 from pathlib import Path
 from unittest import result
 
+
 import boto3
 import numpy as np
 import pandas as pd
@@ -35,6 +36,7 @@ from sqlalchemy import (
 from torch.utils.data import Subset
 from collections.abc import Sequence
 
+
 from egomimic.utils.aws.aws_sql import (
     TableRow,
     add_episode,
@@ -46,18 +48,35 @@ from egomimic.utils.aws.aws_sql import (
     update_episode,
 )
 
+
 logger = logging.getLogger(__name__)
+
+from datasets.utils.logging import disable_progress_bar
+
+disable_progress_bar()
+logging.getLogger("datasets").setLevel(logging.ERROR)
 
 logging.getLogger("huggingface_hub._snapshot_download").setLevel(logging.ERROR)
 
 import torch.nn.functional as F
 
-from egomimic.rldb.data_utils import _ypr_to_quat, _slerp, _quat_to_ypr, _slow_down_slerp_quat
+from egomimic.rldb.data_utils import (
+    _ypr_to_quat,
+    _slerp,
+    _quat_to_ypr,
+    _slow_down_slerp_quat,
+)
 import subprocess
 from urllib.parse import urlparse
 from collections import defaultdict
 import time
 import uuid
+from tqdm import tqdm
+
+
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import traceback
+
 
 class EMBODIMENT(Enum):
     EVE_RIGHT_ARM = 0
@@ -73,20 +92,25 @@ class EMBODIMENT(Enum):
     MECKA_RIGHT_ARM = 10
     MECKA_LEFT_ARM = 11
 
+
 SEED = 42
+
 
 EMBODIMENT_ID_TO_KEY = {
     member.value: key for key, member in EMBODIMENT.__members__.items()
 }
 
+
 def split_dataset_names(dataset_names, valid_ratio=0.2, seed=SEED):
     """
     Split a list of dataset names into train/valid sets.
+
 
     Args:
         dataset_names (Iterable[str])
         valid_ratio (float): fraction of datasets to put in valid.
         seed (int): for deterministic shuffling.
+
 
     Returns:
         train_set (set[str]), valid_set (set[str])
@@ -108,6 +132,7 @@ def split_dataset_names(dataset_names, valid_ratio=0.2, seed=SEED):
     valid = set(names[:n_valid])
     train = set(names[n_valid:])
     return train, valid
+
 
 def get_embodiment(index):
     return EMBODIMENT_ID_TO_KEY.get(index, None)
@@ -182,15 +207,19 @@ class RLDBDataset(LeRobotDataset):
         self.slow_down_factor = float(kwargs.get("slow_down_factor", 1.0))
         raw_keys = kwargs.get("slow_down_ac_keys", None)
         raw_rot_specs = kwargs.get("slow_down_rot_specs", None)
-        
+
         if raw_rot_specs is None:
             self.slow_down_rot_specs = {}
         else:
             self.slow_down_rot_specs = dict(raw_rot_specs)
-            
+
         for k, v in self.slow_down_rot_specs.items():
             # v should be a 2-tuple-like: (rot_type, index_ranges)
-            if not (isinstance(v, Sequence) and not isinstance(v, (str, bytes)) and len(v) == 2):
+            if not (
+                isinstance(v, Sequence)
+                and not isinstance(v, (str, bytes))
+                and len(v) == 2
+            ):
                 raise ValueError(
                     f"slow_down_rot_specs['{k}'] must be (rot_type, index_ranges), got {type(v)} with value {v}"
                 )
@@ -202,17 +231,23 @@ class RLDBDataset(LeRobotDataset):
                     f"Rotation type for key '{k}' must be 'quat_wxyz' or 'ypr', got {rot_type}"
                 )
 
-            if not (isinstance(ranges, Sequence) and not isinstance(ranges, (str, bytes))):
+            if not (
+                isinstance(ranges, Sequence) and not isinstance(ranges, (str, bytes))
+            ):
                 raise ValueError(
                     f"Index ranges for slow_down_rot_specs['{k}'] must be a sequence of (start, end) pairs, got {type(ranges)}"
                 )
 
             for pair in ranges:
-                if not (isinstance(pair, Sequence) and not isinstance(pair, (str, bytes)) and len(pair) == 2):
+                if not (
+                    isinstance(pair, Sequence)
+                    and not isinstance(pair, (str, bytes))
+                    and len(pair) == 2
+                ):
                     raise ValueError(
                         f"Each index range for slow_down_rot_specs['{k}'] must be a (start, end) sequence, got {pair}"
                     )
-        
+
         if raw_keys is None:
             self.slow_down_ac_keys = []
         elif isinstance(raw_keys, str):
@@ -225,7 +260,7 @@ class RLDBDataset(LeRobotDataset):
             raise ValueError(
                 f"slow_down_ac_keys must be str, sequence, or None; got {type(raw_keys)}"
             )
-        
+
         if mode == "train":
             super().__init__(
                 repo_id=repo_id,
@@ -360,9 +395,11 @@ class RLDBDataset(LeRobotDataset):
         """
         Slow down a sequence of shape (S, D) along the time dimension S.
 
+
         - S: time steps
         - D: feature dimension, with any rotation sub-blocks living in slices
              along D (e.g., [:, 0:4] for quats, [:, 3:6] for ypr).
+
 
         Steps:
         1. Take first S / slow_down_factor steps (shortened trajectory).
@@ -399,7 +436,7 @@ class RLDBDataset(LeRobotDataset):
         if rot_spec is not None:
             rot_type, index_ranges = rot_spec
 
-            for (start, end) in index_ranges:
+            for start, end in index_ranges:
                 if not (0 <= start < end <= D):
                     raise ValueError(
                         f"Invalid rotation slice [{start}:{end}] for seq with D={D}"
@@ -422,9 +459,9 @@ class RLDBDataset(LeRobotDataset):
                             f"ypr slice must have length 3, got {k} for slice [{start}:{end}]"
                         )
                     # ypr -> quat -> slerp -> ypr
-                    quat_short = _ypr_to_quat(rot_short)                # (S_short, 4)
+                    quat_short = _ypr_to_quat(rot_short)  # (S_short, 4)
                     quat_interp = _slow_down_slerp_quat(quat_short, S)  # (S, 4)
-                    ypr_interp = _quat_to_ypr(quat_interp)              # (S, 3)
+                    ypr_interp = _quat_to_ypr(quat_interp)  # (S, 3)
                     out[:, start:end] = ypr_interp
                 else:
                     raise ValueError(f"Unknown rotation type: {rot_type}")
@@ -461,7 +498,6 @@ class AnnotationLoader:
         
 
 class MultiRLDBDataset(torch.utils.data.Dataset):
-    
     def __init__(self, datasets, embodiment, key_map=None):
         self.datasets = datasets
         self.key_map = key_map
@@ -497,6 +533,7 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
     def _merge_hf_datasets(self):
         """
         Merge hf_dataset from multiple RLDBDataset instances while remapping keys.
+
 
         Returns:
             A unified Hugging Face Dataset object.
@@ -598,6 +635,7 @@ class S3RLDBDataset(MultiRLDBDataset):
     """
     A dataset class that downloads datasets from AWS S3 and instantiates them as RLDBDataset objects
 
+
     Args:
         embodiment (str): The embodiment type (e.g., "EVE_RIGHT_ARM", "ARIA_BIMANUAL").
         mode (str): Dataset mode - "train", "valid".
@@ -612,6 +650,7 @@ class S3RLDBDataset(MultiRLDBDataset):
         filters (dict): Filtering criteria for S3 datasets. e.g.,:
                        {"task": "fold_cloth/", "lab": "eth", "scene": "scene_10", "recording": "recording_1"}
                        Only datasets matching ALL non-empty filter values will be loaded.
+
 
     Example:
         # Download and load fold_cloth datasets from ETH lab, scene_10, recording_1
@@ -633,12 +672,16 @@ class S3RLDBDataset(MultiRLDBDataset):
         key_map=None,
         valid_ratio=0.2,
         temp_root="/coc/flash7/scratch/egoverseS3Dataset",  # "/coc/flash7/scratch/rldb_temp"
+        cache_root="/coc/flash7/scratch/.cache",
         filters={},
         **kwargs,
     ):
         temp_root += "/S3_rldb_data"
         filters["robot_name"] = embodiment
         filters["is_deleted"] = False
+
+        os.environ["HF_HOME"] = cache_root
+        os.environ["HF_DATASETS_CACHE"] = f"{cache_root}/datasets"
 
         if temp_root[0] != "/":
             temp_root = "/" + temp_root
@@ -652,7 +695,7 @@ class S3RLDBDataset(MultiRLDBDataset):
         logger.info(f"Filters: {filters}")
         datasets = {}
         skipped = []
-        
+
         filtered_paths = self.sync_from_filters(
             bucket_name=bucket_name,
             filters=filters,
@@ -665,46 +708,21 @@ class S3RLDBDataset(MultiRLDBDataset):
         for _, hashes in filtered_paths:
             valid_collection_names.add(hashes)
 
-        for collection_path in sorted(search_path.iterdir()):
-            if not collection_path.is_dir():
-                continue
+        max_workers = int(os.environ.get("RLDB_LOAD_WORKERS", "10"))
 
-            if collection_path.name not in valid_collection_names:
-                logger.warning(
-                    f"Skipping {collection_path.name}: not in filtered S3 paths"
-                )
-                skipped.append(collection_path.name)
-                continue
-                    
-            try:
-                repo_id = collection_path.name
-                dataset = RLDBDataset(
-                    repo_id=repo_id,
-                    root=collection_path,
-                    local_files_only=local_files_only,
-                    mode="total",
-                    percent=percent,
-                    valid_ratio=valid_ratio,
-                    **kwargs,
-                )
+        datasets, skipped = self._load_rldb_datasets_parallel(
+            search_path=search_path,
+            embodiment=embodiment,
+            valid_collection_names=valid_collection_names,
+            local_files_only=local_files_only,
+            percent=percent,
+            valid_ratio=valid_ratio,
+            max_workers=max_workers,
+            kwargs=kwargs,
+        )
 
-                expected_embodiment_id = get_embodiment_id(embodiment)
-                if dataset.embodiment != expected_embodiment_id:
-                    dataset_emb_name = EMBODIMENT_ID_TO_KEY.get(dataset.embodiment, f"unknown({dataset.embodiment})")
-                    expected_emb_name = EMBODIMENT_ID_TO_KEY.get(expected_embodiment_id, f"unknown({expected_embodiment_id})")
-                    logger.warning(
-                        f"Skipping {repo_id}: embodiment mismatch {dataset_emb_name} ({dataset.embodiment}) != {expected_emb_name} ({expected_embodiment_id})"
-                    )
-                    skipped.append(repo_id)
-                    continue
-
-                datasets[repo_id] = dataset
-
-            except Exception as e:
-                logger.error(f"Failed to load {repo_id} as RLDBDataset: {e}")
-                skipped.append(repo_id)
         assert datasets, "No valid RLDB datasets found! Check your S3 path and filters."
-        
+
         self.train_collections, self.valid_collections = split_dataset_names(
             datasets.keys(), valid_ratio=valid_ratio, seed=SEED
         )
@@ -742,7 +760,128 @@ class S3RLDBDataset(MultiRLDBDataset):
 
         if skipped:
             logger.warning(f"Skipped {len(skipped)} datasets: {skipped}")
-            
+
+    @classmethod
+    def _load_rldb_dataset_one(
+        cls,
+        *,
+        collection_path: Path,
+        embodiment: str,
+        valid_collection_names: set[str],
+        local_files_only: bool,
+        percent: float,
+        valid_ratio: float,
+        kwargs: dict,
+    ):
+        """
+        Attempt to construct one RLDBDataset from a local folder.
+
+
+        Returns:
+            (repo_id, dataset_or_None, skip_reason_or_None, err_str_or_None)
+        """
+        repo_id = collection_path.name
+
+        if not collection_path.is_dir():
+            return repo_id, None, "not_a_dir", None
+
+        if repo_id not in valid_collection_names:
+            return repo_id, None, "not_in_filtered_paths", None
+
+        try:
+            ds_obj = RLDBDataset(
+                repo_id=repo_id,
+                root=collection_path,
+                local_files_only=local_files_only,
+                mode="total",
+                percent=percent,
+                valid_ratio=valid_ratio,
+                **kwargs,
+            )
+
+            expected = get_embodiment_id(embodiment)
+            if ds_obj.embodiment != expected:
+                return (
+                    repo_id,
+                    None,
+                    f"embodiment_mismatch {ds_obj.embodiment} != {expected}",
+                    None,
+                )
+
+            return repo_id, ds_obj, None, None
+
+        except Exception as e:
+            return repo_id, None, "exception", f"{e}\n{traceback.format_exc()}"
+
+    @classmethod
+    def _load_rldb_datasets_parallel(
+        cls,
+        *,
+        search_path: Path,
+        embodiment: str,
+        valid_collection_names: set[str],
+        local_files_only: bool,
+        percent: float,
+        valid_ratio: float,
+        max_workers: int,
+        kwargs: dict,
+    ):
+        """
+        Parallelize RLDBDataset instantiation over folders in search_path.
+
+
+        Returns:
+            datasets: dict[str, RLDBDataset]
+            skipped: list[str]
+        """
+        all_paths = sorted(search_path.iterdir())
+        max_workers = max(1, int(max_workers))
+
+        datasets: dict[str, RLDBDataset] = {}
+        skipped: list[str] = []
+
+        def _submit_arg(p: Path):
+            return dict(
+                collection_path=p,
+                embodiment=embodiment,
+                valid_collection_names=valid_collection_names,
+                local_files_only=local_files_only,
+                percent=percent,
+                valid_ratio=valid_ratio,
+                kwargs=kwargs,
+            )
+
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = [
+                ex.submit(cls._load_rldb_dataset_one, **_submit_arg(p))
+                for p in all_paths
+            ]
+
+            for fut in tqdm(
+                as_completed(futures),
+                total=len(futures),
+                desc="Loading RLDBDataset",
+            ):
+                repo_id, ds_obj, reason, err = fut.result()
+
+                if ds_obj is not None:
+                    datasets[repo_id] = ds_obj
+                    continue
+
+                if reason == "not_a_dir":
+                    continue
+
+                skipped.append(repo_id)
+
+                if reason == "not_in_filtered_paths":
+                    logger.warning(f"Skipping {repo_id}: not in filtered S3 paths")
+                elif reason and reason.startswith("embodiment_mismatch"):
+                    logger.warning(f"Skipping {repo_id}: {reason}")
+                else:
+                    logger.error(f"Failed to load {repo_id} as RLDBDataset:\n{err}")
+
+        return datasets, skipped
+
     @staticmethod
     def _get_processed_path(filters):
         engine = create_default_engine()
@@ -754,7 +893,9 @@ class S3RLDBDataset(MultiRLDBDataset):
             ["processed_path", "episode_hash"],
         ]
         skipped = df[df["processed_path"].isnull()]["episode_hash"].tolist()
-        logger.info(f"Skipped {len(skipped)} episodes with null processed_path: {skipped}")
+        logger.info(
+            f"Skipped {len(skipped)} episodes with null processed_path: {skipped}"
+        )
         output = output[~output["episode_hash"].isin(skipped)]
 
         paths = list(output.itertuples(index=False, name=None))
@@ -766,9 +907,11 @@ class S3RLDBDataset(MultiRLDBDataset):
         """
         Downloads all files from a specific S3 prefix to a local directory.
 
+
         This method lists all objects under the given S3 prefix and downloads
         each file to the local directory, preserving just the filename (not
         the full S3 path structure).
+
 
         Args:
             bucket_name (str): The AWS S3 bucket name
@@ -848,7 +991,10 @@ class S3RLDBDataset(MultiRLDBDataset):
             if processed_path.startswith("s3://"):
                 src_prefix = processed_path.rstrip("/") + "/*"
             else:
-                src_prefix = f"s3://{bucket_name}/{processed_path.lstrip('/').rstrip('/')}" + "/*"
+                src_prefix = (
+                    f"s3://{bucket_name}/{processed_path.lstrip('/').rstrip('/')}"
+                    + "/*"
+                )
 
             # Destination is the root local_dir; s5cmd will preserve <hash>/... under it
             dst = local_dir / episode_hash
@@ -866,7 +1012,7 @@ class S3RLDBDataset(MultiRLDBDataset):
                 batch_path.unlink(missing_ok=True)
             except Exception as e:
                 logger.warning("Failed to delete batch file %s: %s", batch_path, e)
-                
+
     @classmethod
     def _episode_already_present(cls, local_dir: Path, episode_hash: str) -> bool:
         ep = local_dir / episode_hash
@@ -885,7 +1031,7 @@ class S3RLDBDataset(MultiRLDBDataset):
             return False
 
         return True
-    
+
     @classmethod
     def sync_from_filters(
         cls,
@@ -899,6 +1045,7 @@ class S3RLDBDataset(MultiRLDBDataset):
         - resolves episodes from DB using filters
         - runs a single aws s3 sync with includes
         - downloads into local_dir
+
 
         Returns:
             List[(processed_path, episode_hash)]
@@ -923,10 +1070,13 @@ class S3RLDBDataset(MultiRLDBDataset):
         )
 
         return filtered_paths
+
+
 class DataSchematic(object):
     def __init__(self, schematic_dict, viz_img_key, norm_mode="zscore"):
         """
         Initialize with a schematic dictionary and create a DataFrame.
+
 
         Args:
             schematic_dict:
@@ -947,6 +1097,7 @@ class DataSchematic(object):
                     .
                     .
                     .
+
 
         Attributes:
             df (pd.DataFrame): Columns include 'key_name', 'key_type', and 'shape', 'embodiment'.
@@ -979,9 +1130,12 @@ class DataSchematic(object):
         """
         Get the key name from the Lerobot key.
 
+
         Args:
             lerobot_key (str): Lerobot key, e.g., "observations.images.cam_high".
             embodiment (int): int id corresponding to embodiment
+
+
 
 
         Returns:
@@ -1000,9 +1154,11 @@ class DataSchematic(object):
         """
         Get the Lerobot key from the key name.
 
+
         Args:
             key_name (str): Key name, e.g., "front_img_1_line".
             embodiment (int): int id corresponding to embodiment
+
 
         Returns:
             str: Lerobot key, e.g., "observations.images.cam_high".
@@ -1019,9 +1175,11 @@ class DataSchematic(object):
         """
         Update shapes in the DataFrame based on a batch.
 
+
         Args:
             batch (dict): Maps key names (str) to tensors with shapes, e.g.,
                 {"key": tensor of shape (3, 480, 640, 3)}.
+
 
         Updates:
             The 'shape' column in the DataFrame is updated to match the inferred shapes (stored as tuples).
@@ -1065,10 +1223,9 @@ class DataSchematic(object):
             logger.info(f"[NormStats] Processing column={column_name}")
 
             # Arrow → NumPy (fast path, preserves shape)
-            column_data = (
-                dataset.hf_dataset
-                .with_format("numpy", columns=[column_name])[:][column_name]
-            )
+            column_data = dataset.hf_dataset.with_format(
+                "numpy", columns=[column_name]
+            )[:][column_name]
 
             if column_data.ndim not in (2, 3):
                 raise ValueError(
@@ -1096,7 +1253,6 @@ class DataSchematic(object):
 
         logger.info("[NormStats] Finished norm inference")
 
-
     def viz_img_key(self):
         """
         Get the key that should be used for offline visualization
@@ -1107,6 +1263,7 @@ class DataSchematic(object):
         """
         Get all key names.
 
+
         Returns:
             list: Key names (str).
         """
@@ -1116,9 +1273,11 @@ class DataSchematic(object):
         """
         Check if a key_name exists with a given embodiment
 
+
         Args:
             key_name (str): name of key, e.g. actions_joints
             embodiment (int): integer id of embodiment
+
 
         Returns:
             bool: if the key exists.
@@ -1131,8 +1290,10 @@ class DataSchematic(object):
         """
         Get keys of a specific type.
 
+
         Args:
             key_type (str): Type of keys, e.g., "camera_keys", "proprio_keys", "action_keys", "metadata_keys".
+
 
         Returns:
             list: Key names (str) of the given type.
@@ -1146,9 +1307,11 @@ class DataSchematic(object):
         """
         Get the shape of a specific key.
 
+
         Args:
             key (str): Name of the key.
             embodiment (int): integer id of embodiment
+
 
         Returns:
             tuple or None: Shape as a tuple, or None if not found.
@@ -1170,10 +1333,12 @@ class DataSchematic(object):
         """
         Normalize data using the stored normalization statistics.
 
+
         Args:
             data (dict): Maps key names to tensors.
                 joint_positions: tensor of shape (B, S, 7)
             embodiment (int): Id of the embodiment.
+
 
         Returns:
             dict: Maps key names to normalized tensors.
@@ -1222,10 +1387,12 @@ class DataSchematic(object):
         """
         Unnormalize data using the stored normalization statistics.
 
+
         Args:
             data (dict): Maps key names to tensors.
                 joint_positions: tensor of shape (B, S, 7)
             embodiment (int): Id of the embodiment.
+
 
         Returns:
             dict: Maps key names to denormalized tensors.
