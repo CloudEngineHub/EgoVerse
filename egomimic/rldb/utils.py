@@ -53,17 +53,10 @@ from egomimic.utils.aws.aws_sql import (
 
 logger = logging.getLogger(__name__)
 
-<<<<<<< HEAD
 from datasets.utils.logging import disable_progress_bar
 
 disable_progress_bar()
 logging.getLogger("datasets").setLevel(logging.ERROR)
-=======
-# from datasets.utils.logging import disable_progress_bar
-
-# disable_progress_bar()
-# logging.getLogger("datasets").setLevel(logging.ERROR)
->>>>>>> 4e00291 (added cuz lerobot is sussy)
 
 logging.getLogger("huggingface_hub._snapshot_download").setLevel(logging.ERROR)
 
