@@ -14,6 +14,7 @@ from egomimic.rldb.utils import EMBODIMENT, get_embodiment, get_embodiment_id, R
 from egomimic.pl_utils.pl_model import ModelWrapper
 
 from robot_utils import RateLoop
+from egomimic.robot.dwm_rollout import DWMPolicyRollout, DWMStreamingClient
 from egomimic.utils.egomimicUtils import CameraTransforms, draw_actions, cam_frame_to_base_frame, ee_pose_to_cam_frame, base_frame_to_cam_frame, interpolate_arr, interpolate_arr_euler
 from egomimic.robot.eva.eva_kinematics import EvaMinkKinematicsSolver
 sys.path.append(os.path.join(os.path.dirname(__file__), "eva/eva_ws/src/eva"))
@@ -360,6 +361,10 @@ def main(
     episodes=[0],
     debug=False,
     resampled_action_len=None,
+    dwm_checkpoint=None,
+    task_description=None,
+    num_inference_steps=None,
+    dwm_server=None,
 ):
     if arms == "both":
         arms_list = ["right", "left"]
@@ -370,7 +375,31 @@ def main(
 
     ri = ARXInterface(arms=arms_list)
 
-    if policy_path is None and dataset_path is not None and repo_id is not None:
+    # DWM Streaming Client (remote inference on desktop GPU)
+    if dwm_server is not None:
+        rollout_type = "dwm"
+        policy = DWMStreamingClient(
+            arm=arms,
+            server_address=dwm_server,
+            query_frequency=query_frequency,
+            extrinsics_key="x5Dec13_2",
+        )
+    # DWM Policy Rollout (local inference with dualistic-world-model checkpoints)
+    elif dwm_checkpoint is not None:
+        if task_description is None:
+            raise ValueError("--task-description is required when using --dwm-checkpoint")
+        if num_inference_steps is None:
+            raise ValueError("--num-inference-steps is required when using --dwm-checkpoint")
+        rollout_type = "dwm"
+        policy = DWMPolicyRollout(
+            arm=arms,
+            checkpoint_path=dwm_checkpoint,
+            query_frequency=query_frequency,
+            extrinsics_key="x5Dec13_2",
+            num_inference_steps=num_inference_steps,
+            task_description=task_description,
+        )
+    elif policy_path is None and dataset_path is not None and repo_id is not None:
         rollout_type = "replay_lerobot"
         policy = ReplayRolloutLerobot(
             dataset_path=dataset_path,
@@ -394,7 +423,7 @@ def main(
         rollout_type = "replay"
         policy = ReplayRollout(dataset_path=dataset_path, cartesian=cartesian)
     else:
-        raise ValueError("Must provide either --policy-path or --dataset-path (and optionally --repo-id).")
+        raise ValueError("Must provide either --policy-path, --dwm-checkpoint, or --dataset-path (and optionally --repo-id).")
 
     print(f"Cartesian value {cartesian}")
 
@@ -424,6 +453,9 @@ def main(
                         if rollout_type == "policy":
                             obs = ri.get_obs()
                             actions = policy.rollout_step(step_i, obs)
+                        elif rollout_type == "dwm":
+                            obs = ri.get_obs()
+                            actions = policy.rollout_step(step_i, obs)
                         elif rollout_type == "replay":
                             actions = policy.rollout_step(step_i)
                         elif rollout_type == "replay_lerobot":
@@ -444,7 +476,7 @@ def main(
                                 time.sleep(0.01)
                             break
 
-                        if debug and rollout_type == "policy":
+                        if debug and rollout_type in ("policy", "dwm"):
                             os.makedirs("debug", exist_ok=True)
 
                             if isinstance(obs["front_img_1"], torch.Tensor):
@@ -463,7 +495,8 @@ def main(
                             for arm in arms_list:
                                 arm_offset = 7 if (arm == "right" and arms == "both") else 0
 
-                                if cartesian:
+                                if cartesian or rollout_type == "dwm":
+                                    # DWM always outputs cartesian actions
                                     action_xyz = policy.debug_actions[:, :3]
                                 else:
                                     jnts = policy.actions[:, :7]
@@ -485,7 +518,8 @@ def main(
                         for arm in arms_list:
                             arm_offset = 7 if (arm == "right" and arms == "both") else 0
                             arm_action = actions[arm_offset : arm_offset + 7]
-                            if cartesian:
+                            if cartesian or rollout_type == "dwm":
+                                # DWM always outputs cartesian actions (xyz + ypr + gripper)
                                 ri.set_pose(arm_action, arm)
                             else:
                                 ri.set_joints(arm_action, arm)
@@ -540,6 +574,32 @@ if __name__ == "__main__":
         action="store_true",
         help="enable debug visualization of actions on images",
     )
+    
+    # DWM (dualistic-world-model) arguments
+    parser.add_argument(
+        "--dwm-checkpoint",
+        type=str,
+        default=None,
+        help="Path to DWM checkpoint for inference",
+    )
+    parser.add_argument(
+        "--task-description",
+        type=str,
+        default=None,
+        help="Task description for DWM inference (required with --dwm-checkpoint)",
+    )
+    parser.add_argument(
+        "--num-inference-steps",
+        type=int,
+        default=None,
+        help="Number of diffusion denoising steps for DWM (required with --dwm-checkpoint)",
+    )
+    parser.add_argument(
+        "--dwm-server",
+        type=str,
+        default=None,
+        help="DWM inference server address for remote inference (e.g., tcp://192.168.1.100:5555)",
+    )
 
     args = parser.parse_args()
     episodes = args.episodes if args.episodes is not None else [0]
@@ -555,5 +615,9 @@ if __name__ == "__main__":
         episodes=episodes,
         cartesian=args.cartesian,
         debug=args.debug,
-        resampled_action_len=args.resampled_action_len
+        resampled_action_len=args.resampled_action_len,
+        dwm_checkpoint=args.dwm_checkpoint,
+        task_description=args.task_description,
+        num_inference_steps=args.num_inference_steps,
+        dwm_server=args.dwm_server,
     )
