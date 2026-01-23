@@ -1,23 +1,24 @@
 #!/bin/bash
-# Script to submit scene_diversity_16 jobs sequentially with 30 seconds delay between each
-# Updated for organized sbatch structure: sbatch/scene_diversity/
+# Script to submit mixed_diversity jobs sequentially with 30 seconds delay between each
+# Updated for organized sbatch structure: sbatch/mixed_diversity/
 
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-# SBATCH files are in sbatch/scene_diversity/ subdirectory at the project root
+# SBATCH files are in sbatch/mixed_diversity/ subdirectory at the project root
 PROJECT_ROOT="$( cd "${SCRIPT_DIR}/.." && pwd )"
-SBATCH_DIR="${PROJECT_ROOT}/sbatch/scene_diversity"
+SBATCH_DIR="${PROJECT_ROOT}/sbatch/mixed_diversity"
 
-# Array of scene_diversity_16 files (in order from 60 to 3.75 minutes)
+# Array of mixed_diversity files
 declare -a sbatch_files=(
-    "scene_diversity_16_60.sh"
-    "scene_diversity_16_30.sh"
-    "scene_diversity_16_15.sh"
-    "scene_diversity_16_7_5.sh"
-    "scene_diversity_16_3_75.sh"
+    "mixed_diversity_4_4_15.sh"
+    "mixed_diversity_4_8_7_5.sh"
+    "mixed_diversity_6_4_10.sh"
+    "mixed_diversity_6_8_5.sh"
+    "mixed_diversity_8_4_7_5.sh"
+    "mixed_diversity_8_8_3_75.sh"
 )
 
-echo "Submitting scene_diversity_16 jobs sequentially (30 seconds delay between each)..."
+echo "Submitting mixed_diversity jobs sequentially (30 seconds delay between each)..."
 echo "======================================================================"
 echo "Total jobs to submit: ${#sbatch_files[@]}"
 echo "Estimated total time: ~$(( (${#sbatch_files[@]} - 1) * 30 )) seconds (~$(( (${#sbatch_files[@]} - 1) * 30 / 60 )) minutes)"

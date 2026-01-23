@@ -32,22 +32,22 @@ train_datasets:
         filters:
           episode_hash: 2025-10-12-23-59-38-361000
     embodiment: aria_bimanual
-  # dataset2:
-  #   _target_: egomimic.rldb.utils.MultiRLDBDataset
-  #   datasets:
-  #     eva:
-  #       _target_: egomimic.rldb.utils.S3RLDBDataset
-  #       bucket_name: rldb
-  #       mode: total
-  #       embodiment: eva_bimanual
-  #       local_files_only: true
-  #       temp_root: /coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_single_scene
-  #       filters:
-  #         operator: Ryan
-  #         lab: rl2
-  #         scene: '1'
-  #         task: fold clothes
-  #   embodiment: eva_bimanual
+  dataset2:
+    _target_: egomimic.rldb.utils.MultiRLDBDataset
+    datasets:
+      eva:
+        _target_: egomimic.rldb.utils.S3RLDBDataset
+        bucket_name: rldb
+        mode: total
+        embodiment: eva_bimanual
+        local_files_only: true
+        temp_root: /coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_single_scene
+        filters:
+          operator: Ryan
+          lab: rl2
+          scene: '1'
+          task: fold clothes
+    embodiment: eva_bimanual
 
 train_dataloader_params:
   dataset1:

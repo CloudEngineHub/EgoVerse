@@ -26,4 +26,6 @@ python egomimic/trainHydra.py \
     data=scene_diversity_cotrain/scene_diversity_cotrain_2_60 \
     logger.wandb.project=everse_scenes_diversity_fold_clothes_cotrain \
     name=fold-clothes-cotrain \
+    trainer.limit_val_batches=30 \
+    model=hpt_cotrain_flow_shared_head \
     description=scenes-2-time-60-cotrain

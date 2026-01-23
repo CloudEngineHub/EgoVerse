@@ -1,7 +1,7 @@
 #!/bin/bash
-#SBATCH --job-name=scene_diversity_cotrain_16_7_5
-#SBATCH --output=sbatch_logs/scene_diversity_cotrain_16_7_5.out
-#SBATCH --error=sbatch_logs/scene_diversity_cotrain_16_7_5.err
+#SBATCH --job-name=mixed_diversity_4_4_15
+#SBATCH --output=sbatch_logs/mixed_diversity_4_4_15.out
+#SBATCH --error=sbatch_logs/mixed_diversity_4_4_15.err
 #SBATCH --partition="hoffman-lab"
 #SBATCH --account="hoffman-lab"
 #SBATCH --nodes=1
@@ -23,9 +23,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 python egomimic/trainHydra.py \
     --config-name=train.yaml \
-    data=scene_diversity_cotrain/scene_diversity_cotrain_16_7_5 \
-    logger.wandb.project=everse_scenes_diversity_fold_clothes_cotrain \
-    name=fold-clothes-cotrain \
-    trainer.limit_val_batches=30 \
-    model=hpt_cotrain_flow_shared_head \
-    description=scenes-16-time-7_5-cotrain
+    data=mixed_diversity/mixed_diversity_4_4_15 \
+    logger.wandb.project=everse_mixed_diversity_fold_clothes \
+    name=fold-clothes \
+    description=mixed-diversity-4-4-15

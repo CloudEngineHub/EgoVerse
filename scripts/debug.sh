@@ -1,12 +1,10 @@
-# python egomimic/trainHydra.py \
-#     --config-name=train.yaml \
-#     data=motion_diversity_multi_scene_test \
-#     logger.wandb.project=everse_offline_eval_motion_diversity_multi_scene \
-#     train=False \
-#     eval=True
-
-
-python egomimic/test_dataset.py \
+python egomimic/trainHydra.py \
     --config-name=train.yaml \
-    data=motion_diversity_multi_scene_4_15 \
-    logger.wandb.project=everse_offline_eval_motion_diversity_multi_scene \
+    data=test_cotrain \
+    trainer=debug \
+    trainer.limit_val_batches=10 \
+    model=hpt_cotrain_flow_shared_head \
+    logger.wandb.project=everse_diversity_debug \
+
+
+# python egomimic/trainHydra.py --config-name=train.yaml data=test_mixed trainer=debug 
