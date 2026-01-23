@@ -23,7 +23,6 @@ import select
 import termios
 import tty
 
-from robot_interface import *
 # from stream_aria import AriaRecorder
 # from stream_d405 import RealSenseRecorder
 def visualize_actions(ims, actions, extrinsics, intrinsics, arm="both"):
@@ -179,7 +178,7 @@ class PolicyRollout(Rollout):
         super().__init__()
         self.arm = arm
         self.policy_path = policy_path
-        self.policy = ModelWrapper.load_from_checkpoint(policy_path)
+        self.policy = ModelWrapper.load_from_checkpoint(policy_path, weights_only=False)
         self.query_frequency = query_frequency
         self.cartesian = cartesian
         self.embodiment_id = EMBODIMENT_MAP[self.arm]
@@ -332,12 +331,11 @@ class PolicyRollout(Rollout):
     def reset(self):
         self.actions = None
         self.debug_actions = None
-        self.policy = ModelWrapper.load_from_checkpoint(self.policy_path)
+        self.policy = ModelWrapper.load_from_checkpoint(self.policy_path, weights_only=False)
         if getattr(self.policy.model, "diffusion", False):
             for head in self.policy.model.nets.policy.heads:
                 if isinstance(self.policy.model.nets.policy.heads[head], DenoisingPolicy):
-                    self.policy.model.nets.policy.heads[head].num_inference_steps = 10
-        
+                    self.policy.model.nets.policy.heads[head].num_inference_steps = 10 
         
 def reset_rollout(ri, policy): 
     print("Resetting rollout: going home + clearing policy state") 
@@ -360,6 +358,7 @@ def main(
     episodes=[0],
     debug=False,
     resampled_action_len=None,
+    offline_debug=False,
 ):
     if arms == "both":
         arms_list = ["right", "left"]
@@ -368,7 +367,12 @@ def main(
     else:
         arms_list = ["left"]
 
-    ri = ARXInterface(arms=arms_list)
+    if offline_debug is not None:
+        from dummy_robot_interface import dummyArxInterface
+        ri = dummyArxInterface(arms=arms_list, dataset_path=dataset_path)
+    else:
+        from arx_robot_interface import ARXInterface
+        ri = ARXInterface(arms=arms_list)
 
     if policy_path is None and dataset_path is not None and repo_id is not None:
         rollout_type = "replay_lerobot"
@@ -388,7 +392,7 @@ def main(
             query_frequency=query_frequency,
             cartesian=cartesian,
             extrinsics_key="x5Dec13_2",
-            resampled_action_len=resampled_action_len
+            resampled_action_len=resampled_action_len,
         )
     elif dataset_path is not None:
         rollout_type = "replay"
@@ -399,9 +403,10 @@ def main(
     print(f"Cartesian value {cartesian}")
 
     camera_transforms = CameraTransforms(intrinsics_key="base", extrinsics_key="x5Dec13_2")
-    kinematics_solver = EvaMinkKinematicsSolver(
-        model_path="/home/robot/robot_ws/egomimic/resources/model_x5.xml"
-    )
+    if debug and not cartesian:
+        kinematics_solver = EvaMinkKinematicsSolver(
+            model_path="/home/robot/robot_ws/egomimic/resources/model_x5.xml"
+        )
 
     try:
         with _KeyPoll() as kp:
@@ -480,6 +485,7 @@ def main(
                                     camera_transforms.intrinsics,
                                     arm=arm,
                                 )
+                                print(f"Save debug image to debug/debug_{arm}_{step_i}.png")
                                 cv2.imwrite(f"debug/debug_{arm}_{step_i}.png", im_viz)
 
                         for arm in arms_list:
@@ -541,6 +547,12 @@ if __name__ == "__main__":
         help="enable debug visualization of actions on images",
     )
 
+    parser.add_argument(
+        "--offline-debug",
+        action="store_true",
+        help="enable offline debugging",
+    )
+
     args = parser.parse_args()
     episodes = args.episodes if args.episodes is not None else [0]
 
@@ -555,5 +567,6 @@ if __name__ == "__main__":
         episodes=episodes,
         cartesian=args.cartesian,
         debug=args.debug,
-        resampled_action_len=args.resampled_action_len
+        resampled_action_len=args.resampled_action_len,
+        offline_debug=args.offline_debug,
     )
