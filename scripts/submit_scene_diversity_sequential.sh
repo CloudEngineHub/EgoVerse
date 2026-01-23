@@ -1,35 +1,25 @@
 #!/bin/bash
-# Script to submit scene_diversity jobs sequentially with 1 minute delay between each
+# Script to submit scene_diversity_16 jobs sequentially with 30 seconds delay between each
 
 # Get the directory where this script is located
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
-SBATCH_DIR="${SCRIPT_DIR}/sbatch"
+# SBATCH files are in sbatch/ directory at the project root
+PROJECT_ROOT="$( cd "${SCRIPT_DIR}/.." && pwd )"
+SBATCH_DIR="${PROJECT_ROOT}/sbatch"
 
-# Array of files from 8_7_5 to 1_3_75 (in order from bottom to top of table)
+# Array of scene_diversity_16 files (in order from 60 to 3.75 minutes)
 declare -a sbatch_files=(
-    "scene_diversity_8_7_5.sh"
-    "scene_diversity_8_3_75.sh"
-    "scene_diversity_4_60.sh"
-    "scene_diversity_4_30.sh"
-    "scene_diversity_4_15.sh"
-    "scene_diversity_4_7_5.sh"
-    "scene_diversity_4_3_75.sh"
-    "scene_diversity_2_60.sh"
-    "scene_diversity_2_30.sh"
-    "scene_diversity_2_15.sh"
-    "scene_diversity_2_7_5.sh"
-    "scene_diversity_2_3_75.sh"
-    "scene_diversity_1_60.sh"
-    "scene_diversity_1_30.sh"
-    "scene_diversity_1_15.sh"
-    "scene_diversity_1_7_5.sh"
-    "scene_diversity_1_3_75.sh"
+    "scene_diversity_16_60.sh"
+    "scene_diversity_16_30.sh"
+    "scene_diversity_16_15.sh"
+    "scene_diversity_16_7_5.sh"
+    "scene_diversity_16_3_75.sh"
 )
 
-echo "Submitting scene_diversity jobs sequentially (1 minute delay between each)..."
+echo "Submitting scene_diversity_16 jobs sequentially (30 seconds delay between each)..."
 echo "======================================================================"
 echo "Total jobs to submit: ${#sbatch_files[@]}"
-echo "Estimated total time: ~$(( ${#sbatch_files[@]} - 1 )) minutes"
+echo "Estimated total time: ~$(( (${#sbatch_files[@]} - 1) * 30 )) seconds (~$(( (${#sbatch_files[@]} - 1) * 30 / 60 )) minutes)"
 echo "======================================================================"
 echo ""
 
@@ -68,7 +58,7 @@ for sbatch_file in "${sbatch_files[@]}"; do
         ((fail_count++))
     fi
     
-    # Wait 1 minute before next submission (except for the last one)
+    # Wait 30 seconds before next submission (except for the last one)
     if [ $job_num -lt ${#sbatch_files[@]} ]; then
         echo "  Waiting 30 seconds before next submission..."
         sleep 30
