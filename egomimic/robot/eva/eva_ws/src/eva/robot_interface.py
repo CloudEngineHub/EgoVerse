@@ -339,18 +339,29 @@ class YAMInterface:
     }
     
     # Joint limits - from i2rt/robots/get_robot.py lines 47-49
+    # Including the ±0.15 rad buffer that i2rt applies for safety
     JOINT_LIMITS = np.array([
-        [-2.617, 3.13],   # Joint 1 (base rotation)
-        [0.0, 3.65],      # Joint 2 (shoulder) - NOTE: minimum is 0, not negative!
-        [0.0, 3.13],      # Joint 3 (elbow)    - NOTE: minimum is 0, not negative!
-        [-1.57, 1.57],    # Joint 4 (wrist 1)
-        [-1.57, 1.57],    # Joint 5 (wrist 2)
-        [-2.09, 2.09],    # Joint 6 (wrist 3)
+        [-2.767, 3.28],   # Joint 1 (base rotation): base [-2.617, 3.13] + buffer
+        [-0.15, 3.80],    # Joint 2 (shoulder): base [0, 3.65] + buffer
+        [-0.15, 3.28],    # Joint 3 (elbow): base [0, 3.13] + buffer
+        [-1.72, 1.72],    # Joint 4 (wrist 1): base [-1.57, 1.57] + buffer
+        [-1.72, 1.72],    # Joint 5 (wrist 2): base [-1.57, 1.57] + buffer
+        [-2.24, 2.24],    # Joint 6 (wrist 3): base [-2.09, 2.09] + buffer
     ])
     
     # Home position for YAM robot (in radians)
     HOME_POSITION = np.array([0.0, 0.05, 0.05, 0.0, 0.0, 0.0, 1.0])
-    
+    # HOME_POSITION = np.array([4.864e-2, 1.467, 5.205e-1, 1.25e-1, -2.88e-2, -6.847e-2, 1.0])
+    HOME_POSITION_ABOVE = np.array([
+        1.051e-1,
+        8.875e-1,
+        5.285e-1,
+        -2.840e-1,
+        5.207e-2,
+        -7.153e-2
+        , 0.80])
+
+
     def __init__(
         self,
         arms: list,
@@ -529,14 +540,38 @@ class YAMInterface:
             else:
                 raise ValueError(f"Unknown camera type '{cam_type}' for {name}")
     
-    def _check_joint_limits(self, joints: np.ndarray, arm: str) -> bool:
-        """Check if joint positions are within safe limits."""
+    def _check_joint_limits(self, joints: np.ndarray, arm: str, tolerance: float = 0.01) -> bool:
+        """Check if joint positions are within safe limits.
+        
+        Args:
+            joints: Joint positions array
+            arm: Arm name for logging
+            tolerance: Small tolerance for floating point comparison (default 0.01 rad ≈ 0.6°)
+            
+        Returns:
+            True if within limits (with tolerance), False otherwise
+        """
         arm_joints = joints[:6]
         for i, (j, (lo, hi)) in enumerate(zip(arm_joints, self.JOINT_LIMITS)):
-            if j < lo or j > hi:
+            if j < lo - tolerance or j > hi + tolerance:
                 print(f"[YAMInterface] WARNING: {arm} joint {i} = {j:.3f} rad is outside limits [{lo:.3f}, {hi:.3f}]")
                 return False
         return True
+    
+    def _clamp_to_limits(self, joints: np.ndarray, margin: float = 0.005) -> np.ndarray:
+        """Clamp joint positions to be within safe limits with a small margin.
+        
+        Args:
+            joints: (7,) array of joint positions + gripper
+            margin: Small margin inside limits to avoid edge cases (default 0.005 rad)
+            
+        Returns:
+            Clamped joint positions
+        """
+        clamped = joints.copy()
+        for i, (lo, hi) in enumerate(self.JOINT_LIMITS):
+            clamped[i] = np.clip(joints[i], lo + margin, hi - margin)
+        return clamped
     
     def set_joints(self, desired_position: np.ndarray, arm: str, velocity_limit: float = None):
         """Command joint positions for a specific arm.
@@ -603,7 +638,7 @@ class YAMInterface:
             velocity_limit: Maximum joint velocity in rad/s. If None, no velocity limit is applied.
             
         Returns:
-            joints: (7,) array of joint positions that were commanded
+            joints: (7,) array of joint positions that were commanded, or None if skipped
         """
         if pose.shape != (7,):
             raise ValueError(
@@ -612,14 +647,39 @@ class YAMInterface:
         
         arm_joints = self.solve_ik(pose[:6], arm)
         if arm_joints is None:
-            raise RuntimeError(f"IK failed for arm {arm}")
+            print(f"[YAMInterface] ERROR: IK completely failed for arm {arm}, skipping command")
+            return None
         
         joints = np.concatenate([arm_joints, [pose[6]]])
+        
+        # set_joints will check limits and skip if still violated after clamping
         self.set_joints(joints, arm, velocity_limit=velocity_limit)
         return joints
     
-    def solve_ik(self, ee_pose: np.ndarray, arm: str) -> np.ndarray:
-        """Solve inverse kinematics for target end-effector pose."""
+    def solve_ik(
+        self, 
+        ee_pose: np.ndarray, 
+        arm: str,
+        damping: float = 1e-3,
+        max_iters: int = 500,
+        pos_threshold: float = 1e-3,
+        ori_threshold: float = 1e-3,
+        verbose: bool = False,
+    ) -> np.ndarray:
+        """Solve inverse kinematics for target end-effector pose.
+        
+        Args:
+            ee_pose: (6,) array of [x, y, z, yaw, pitch, roll]
+            arm: Arm name ("left" or "right")
+            damping: Levenberg-Marquardt damping for stability (higher = more stable, slower)
+            max_iters: Maximum IK iterations
+            pos_threshold: Position convergence threshold (meters)
+            ori_threshold: Orientation convergence threshold (radians)
+            verbose: If True, print debug info on IK failure
+            
+        Returns:
+            Solved joint positions (6,) or None if IK fails completely
+        """
         if ee_pose.shape != (6,):
             raise ValueError(
                 f"For YAM, target pose must be of shape (6,), got {ee_pose.shape}"
@@ -635,14 +695,36 @@ class YAMInterface:
         
         cur_jnts = self.get_joints(arm)[:6]
         
+        # Use improved IK parameters for better convergence
         success, solved_joints = self.kinematics[arm].ik(
             target_pose=target_T,
             site_name="grasp_site",
             init_q=cur_jnts,
+            damping=damping,
+            max_iters=max_iters,
+            pos_threshold=pos_threshold,
+            ori_threshold=ori_threshold,
+            verbose=verbose,
         )
         
-        if not success:
-            print(f"[YAMInterface] Warning: IK did not fully converge for arm {arm}")
+        # Compute achieved pose to see how far off we are
+        achieved_T = self.kinematics[arm].fk(solved_joints)
+        pos_err = np.linalg.norm(achieved_T[:3, 3] - pos_xyz)
+        
+        # Print diagnostic info for large errors (> 5mm)
+        if pos_err > 0.005:
+            current_pose = self.kinematics[arm].fk(cur_jnts)
+            print(f"[YAMInterface] IK {'FAILED' if not success else 'large error'} for arm {arm}:")
+            print(f"  Target XYZ:   [{pos_xyz[0]:.4f}, {pos_xyz[1]:.4f}, {pos_xyz[2]:.4f}] m")
+            print(f"  Target YPR:   [{ypr[0]:.4f}, {ypr[1]:.4f}, {ypr[2]:.4f}] rad")
+            print(f"  Current XYZ:  [{current_pose[0,3]:.4f}, {current_pose[1,3]:.4f}, {current_pose[2,3]:.4f}] m")
+            print(f"  Achieved XYZ: [{achieved_T[0,3]:.4f}, {achieved_T[1,3]:.4f}, {achieved_T[2,3]:.4f}] m")
+            print(f"  Position error: {pos_err*1000:.1f}mm")
+        
+        # Clamp solved joints to be within limits (helps when IK solution is at boundary)
+        solved_joints = self._clamp_to_limits(
+            np.concatenate([solved_joints, [0.0]])  # Add dummy gripper for clamping
+        )[:6]
         
         return solved_joints
     
@@ -689,12 +771,14 @@ class YAMInterface:
     def set_home(self):
         """Move all arms to home position."""
         for arm in self.arms:
+            # home_position = self.HOME_POSITION if arm == 'right' else self.HOME_POSITION_ABOVE
+            home_position = self.HOME_POSITION
             if self.dry_run:
-                print(f"[YAMInterface] DRY RUN: Would move {arm} arm to home position: {self.HOME_POSITION}")
-                self._simulated_joints[arm] = self.HOME_POSITION.copy()
+                print(f"[YAMInterface] DRY RUN: Would move {arm} arm to home position: {home_position}")
+                self._simulated_joints[arm] = home_position.copy()
             else:
                 print(f"[YAMInterface] Moving {arm} arm to home position...")
-                self.robot[arm].move_joints(self.HOME_POSITION, time_interval_s=2.0)
+                self.robot[arm].move_joints(home_position, time_interval_s=2.0)
     
     def close(self):
         """Safely close robot connections and camera streams."""
