@@ -47,6 +47,98 @@ except ImportError:
 
 
 # =============================================================================
+# Action Format Utilities (YPR <-> rot6d)
+# =============================================================================
+
+def _reconstruct_rot_from_6d(rot6d: np.ndarray) -> np.ndarray:
+    """Reconstruct rotation matrices from 6D representation.
+
+    Args:
+        rot6d: (T, 6) array of first two rotation matrix columns.
+
+    Returns:
+        R: (T, 3, 3) rotation matrices.
+    """
+    eps = 1e-8
+    c1 = rot6d[:, 0:3]
+    c2 = rot6d[:, 3:6]
+    c1n = c1 / (np.linalg.norm(c1, axis=-1, keepdims=True) + eps)
+    proj = np.sum(c2 * c1n, axis=-1, keepdims=True) * c1n
+    c2o = c2 - proj
+    c2n = c2o / (np.linalg.norm(c2o, axis=-1, keepdims=True) + eps)
+    c3n = np.cross(c1n, c2n)
+    return np.stack([c1n, c2n, c3n], axis=-1)
+
+
+def _rot_matrix_to_ypr(Rm: np.ndarray) -> np.ndarray:
+    """Convert rotation matrices to yaw-pitch-roll (ZYX)."""
+    eps = 1e-6
+    sy = -Rm[:, 2, 0]
+    sy = np.clip(sy, -1 + eps, 1 - eps)
+    pitch = np.arcsin(sy)
+    cy = np.cos(pitch)
+    cy = np.clip(cy, eps, None)
+    yaw = np.arctan2(Rm[:, 1, 0], Rm[:, 0, 0])
+    roll = np.arctan2(Rm[:, 2, 1], Rm[:, 2, 2])
+    return np.stack([yaw, pitch, roll], axis=-1)
+
+
+def convert_rot6d_to_ypr(actions: np.ndarray) -> np.ndarray:
+    """Convert bimanual 20D rot6d actions to 14D ypr actions."""
+    squeeze = False
+    if actions.ndim == 1:
+        actions = actions[None, :]
+        squeeze = True
+    if actions.shape[1] != 20:
+        raise ValueError(f"Expected 20D rot6d actions, got {actions.shape}")
+
+    left_xyz = actions[:, 0:3]
+    left_rot6d = actions[:, 3:9]
+    left_grip = actions[:, 9:10]
+    right_xyz = actions[:, 10:13]
+    right_rot6d = actions[:, 13:19]
+    right_grip = actions[:, 19:20]
+
+    left_R = _reconstruct_rot_from_6d(left_rot6d)
+    right_R = _reconstruct_rot_from_6d(right_rot6d)
+    left_ypr = _rot_matrix_to_ypr(left_R)
+    right_ypr = _rot_matrix_to_ypr(right_R)
+
+    out = np.concatenate(
+        [left_xyz, left_ypr, left_grip, right_xyz, right_ypr, right_grip],
+        axis=-1,
+    )
+    return out[0] if squeeze else out
+
+
+def convert_ypr_to_rot6d(actions: np.ndarray) -> np.ndarray:
+    """Convert bimanual 14D ypr actions to 20D rot6d actions."""
+    squeeze = False
+    if actions.ndim == 1:
+        actions = actions[None, :]
+        squeeze = True
+    if actions.shape[1] != 14:
+        raise ValueError(f"Expected 14D ypr actions, got {actions.shape}")
+
+    left_xyz = actions[:, 0:3]
+    left_ypr = actions[:, 3:6]
+    left_grip = actions[:, 6:7]
+    right_xyz = actions[:, 7:10]
+    right_ypr = actions[:, 10:13]
+    right_grip = actions[:, 13:14]
+
+    left_R = R.from_euler("ZYX", left_ypr).as_matrix()
+    right_R = R.from_euler("ZYX", right_ypr).as_matrix()
+    left_rot6d = left_R[:, :, :2].reshape(-1, 6)
+    right_rot6d = right_R[:, :, :2].reshape(-1, 6)
+
+    out = np.concatenate(
+        [left_xyz, left_rot6d, left_grip, right_xyz, right_rot6d, right_grip],
+        axis=-1,
+    )
+    return out[0] if squeeze else out
+
+# =============================================================================
 # Deviation Statistics
 # =============================================================================
 
@@ -95,7 +187,15 @@ class DeviationStats:
                 offset = arm_idx * 7
                 self._compute_errors(pred[offset:offset+7], gt[offset:offset+7], arm_name)
         else:
-            self._compute_errors(pred[:7], gt[:7], arm)
+            # For single-arm tests, select the correct arm slice if data is bimanual
+            offset = 0 if arm == "left" else 7
+            pred_arm = pred
+            gt_arm = gt
+            if pred.shape[0] >= 14:
+                pred_arm = pred[offset:offset+7]
+            if gt.shape[0] >= 14:
+                gt_arm = gt[offset:offset+7]
+            self._compute_errors(pred_arm[:7], gt_arm[:7], arm)
     
     def _compute_errors(self, pred: np.ndarray, gt: np.ndarray, arm_label: str = ""):
         """Compute errors for a single arm (7D: xyz + ypr + gripper)."""
@@ -388,18 +488,33 @@ class HDF5DemoLoader:
             
             # Load ground truth actions
             # Try multiple possible locations
-            if 'actions' in f and 'eepose_ypr' in f['actions']:
-                self.gt_actions_eepose = f['actions']['eepose_ypr'][:]
-                print(f"  Loaded eepose_ypr actions: {self.gt_actions_eepose.shape}")
-            elif 'actions' in f and 'eepose' in f['actions']:
-                self.gt_actions_eepose = f['actions']['eepose'][:]
-                print(f"  Loaded eepose actions: {self.gt_actions_eepose.shape}")
-            elif 'observations' in f and 'eepose' in f['observations']:
-                self.gt_actions_eepose = f['observations']['eepose'][:]
-                print(f"  Loaded observations/eepose: {self.gt_actions_eepose.shape}")
-            else:
-                self.gt_actions_eepose = None
-                print("  Warning: No eepose actions found, will use joint-derived poses")
+            self.gt_actions_ypr = None
+            self.gt_actions_rot6d = None
+
+            if 'actions' in f:
+                if 'eepose_ypr' in f['actions']:
+                    self.gt_actions_ypr = f['actions']['eepose_ypr'][:]
+                    print(f"  Loaded eepose_ypr actions: {self.gt_actions_ypr.shape}")
+                # Support both naming variants
+                if 'eepose_6drot' in f['actions']:
+                    self.gt_actions_rot6d = f['actions']['eepose_6drot'][:]
+                    print(f"  Loaded eepose_6drot actions: {self.gt_actions_rot6d.shape}")
+                elif 'eepose_rot6d' in f['actions']:
+                    self.gt_actions_rot6d = f['actions']['eepose_rot6d'][:]
+                    print(f"  Loaded eepose_rot6d actions: {self.gt_actions_rot6d.shape}")
+                if 'eepose' in f['actions'] and self.gt_actions_ypr is None:
+                    self.gt_actions_ypr = f['actions']['eepose'][:]
+                    print(f"  Loaded eepose actions: {self.gt_actions_ypr.shape}")
+
+            if 'observations' in f and 'eepose' in f['observations'] and self.gt_actions_ypr is None:
+                self.gt_actions_ypr = f['observations']['eepose'][:]
+                print(f"  Loaded observations/eepose: {self.gt_actions_ypr.shape}")
+
+            self.gt_actions_eepose = (
+                self.gt_actions_ypr if self.gt_actions_ypr is not None else self.gt_actions_rot6d
+            )
+            if self.gt_actions_eepose is None:
+                print("  Warning: No eepose actions found in HDF5")
             
             # Load joint actions for reference
             if 'action' in f:
@@ -452,7 +567,7 @@ class HDF5DemoLoader:
         
         return obs
     
-    def get_ground_truth(self, step: int) -> Optional[np.ndarray]:
+    def get_ground_truth(self, step: int, action_dim: Optional[int] = None) -> Optional[np.ndarray]:
         """Get ground truth eepose action at a specific step.
         
         Args:
@@ -461,8 +576,16 @@ class HDF5DemoLoader:
         Returns:
             Ground truth action (14D: xyz+ypr+grip for each arm) or None
         """
-        if self.gt_actions_eepose is not None and step < len(self.gt_actions_eepose):
-            return self.gt_actions_eepose[step].copy()
+        if action_dim is None or action_dim in (7, 14):
+            if self.gt_actions_ypr is not None and step < len(self.gt_actions_ypr):
+                return self.gt_actions_ypr[step].copy()
+            if self.gt_actions_rot6d is not None and step < len(self.gt_actions_rot6d):
+                return convert_rot6d_to_ypr(self.gt_actions_rot6d[step])
+        if action_dim == 20:
+            if self.gt_actions_rot6d is not None and step < len(self.gt_actions_rot6d):
+                return self.gt_actions_rot6d[step].copy()
+            if self.gt_actions_ypr is not None and step < len(self.gt_actions_ypr):
+                return convert_ypr_to_rot6d(self.gt_actions_ypr[step])
         return None
     
     def __len__(self):
@@ -691,13 +814,32 @@ def run_inference_test(
     try:
         for i in range(num_steps):
             obs = loader.get_observation(i)
-            gt = loader.get_ground_truth(i)
+            gt = loader.get_ground_truth(i, action_dim=14)
             
             # Request new actions at query frequency
             if i % query_frequency == 0:
                 t0 = time.time()
-                actions_ypr, infer_time = client.request_inference(obs, i)
+                actions_pred, infer_time = client.request_inference(obs, i)
                 rtt = time.time() - t0
+
+                # Validate action shape and normalize to ypr for comparison
+                if actions_pred.ndim != 2:
+                    raise ValueError(f"Expected actions with shape (T, D), got {actions_pred.shape}")
+                action_dim = actions_pred.shape[1]
+                if action_dim == 20:
+                    actions_ypr = convert_rot6d_to_ypr(actions_pred)
+                    if not hasattr(run_inference_test, "_logged_rot6d_to_ypr"):
+                        print("Converting 20D rot6d actions to 14D ypr for evaluation.")
+                        run_inference_test._logged_rot6d_to_ypr = True
+                elif action_dim in (7, 14):
+                    actions_ypr = actions_pred
+                else:
+                    raise ValueError(f"Unexpected action dim {action_dim} (expected 7, 14, or 20)")
+
+                if arm == "both" and actions_ypr.shape[1] != 14:
+                    raise ValueError(
+                        f"Arm='both' requires 14D ypr actions, got {actions_ypr.shape[1]}D"
+                    )
                 
                 timing_stats['roundtrip_times'].append(rtt)
                 timing_stats['inference_times'].append(infer_time)
@@ -972,8 +1114,10 @@ Examples:
         print(f"\nDemo has {len(loader)} steps")
         print(f"Camera views: {loader.camera_names}")
         print(f"Joint positions shape: {loader.joint_positions.shape}")
-        if loader.gt_actions_eepose is not None:
-            print(f"EE pose actions shape: {loader.gt_actions_eepose.shape}")
+        if loader.gt_actions_ypr is not None:
+            print(f"EE pose YPR actions shape: {loader.gt_actions_ypr.shape}")
+        if loader.gt_actions_rot6d is not None:
+            print(f"EE pose rot6d actions shape: {loader.gt_actions_rot6d.shape}")
         return
     
     # Validate required arguments for inference

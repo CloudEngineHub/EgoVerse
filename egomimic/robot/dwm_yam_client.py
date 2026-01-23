@@ -107,6 +107,7 @@ class DWMYAMClient:
         arms: str,
         query_freq: int,
         extrinsics_key: str,
+        apply_extrinsics: bool,
         timeout_ms: int,
         gripper_type: str,
         can_interfaces: dict,
@@ -121,6 +122,7 @@ class DWMYAMClient:
             arms: Which arm(s) to control ("left", "right", or "both")
             query_freq: How often to request new actions (in timesteps)
             extrinsics_key: Key for camera extrinsics
+            apply_extrinsics: Whether to transform actions from camera to base frame
             timeout_ms: Request timeout in milliseconds
             gripper_type: Gripper type string
             can_interfaces: CAN interface mapping {"left": "can0", "right": "can1"}
@@ -135,11 +137,15 @@ class DWMYAMClient:
         self.dry_run = dry_run
         self.velocity_limit = velocity_limit
         self.wait_for_server = wait_for_server
+        self.apply_extrinsics = apply_extrinsics
         
-        # Setup extrinsics
-        if extrinsics_key not in EXTRINSICS:
-            raise ValueError(f"Unknown extrinsics_key: {extrinsics_key}")
-        self.extrinsics = EXTRINSICS[extrinsics_key]
+        # Setup extrinsics (only if actions are in camera frame)
+        if self.apply_extrinsics:
+            if extrinsics_key not in EXTRINSICS:
+                raise ValueError(f"Unknown extrinsics_key: {extrinsics_key}")
+            self.extrinsics = EXTRINSICS[extrinsics_key]
+        else:
+            self.extrinsics = None
         
         # Determine arm list
         if arms == "both":
@@ -265,6 +271,12 @@ class DWMYAMClient:
         Returns:
             transformed: (T, 14) array in base frame
         """
+        if not self.apply_extrinsics:
+            if not hasattr(self, "_logged_no_transform"):
+                print("Skipping camera-to-base transform; actions assumed base frame (matches collect_demo).")
+                self._logged_no_transform = True
+            return actions_ypr
+
         if self.arms == "both":
             left = actions_ypr[:, :7]
             right = actions_ypr[:, 7:14]
@@ -393,6 +405,8 @@ def main():
     # Camera configuration  
     parser.add_argument("--extrinsics", type=str, default="x5Dec13_2",
                         help="Camera extrinsics configuration key")
+    parser.add_argument("--apply-extrinsics", action="store_true",
+                        help="Transform actions from camera frame to base frame")
     
     # Debug
     parser.add_argument("--dry-run", action="store_true",
@@ -418,6 +432,7 @@ def main():
     print(f"Frequency:       {args.frequency} Hz")
     print(f"Query frequency: {args.query_frequency}")
     print(f"Extrinsics:      {args.extrinsics}")
+    print(f"Apply extrinsics:{args.apply_extrinsics}")
     print(f"Dry run:         {args.dry_run}")
     print(f"Velocity limit:  {args.velocity_limit} rad/s" if args.velocity_limit else "Velocity limit:  None (unlimited)")
     print(f"Wait for server: {args.wait_for_server}")
@@ -431,6 +446,7 @@ def main():
         arms=args.arms,
         query_freq=args.query_frequency,
         extrinsics_key=args.extrinsics,
+        apply_extrinsics=args.apply_extrinsics,
         timeout_ms=args.timeout_ms,
         gripper_type=args.gripper_type,
         can_interfaces=can_interfaces,
