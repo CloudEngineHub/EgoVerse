@@ -3,9 +3,21 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 from robot_interface import Robot_Interface
 from egomimic.rldb.utils import S3RLDBDataset
+from egomimic.rldb.utils import EMBODIMENT
 
+
+keys_translation = {
+    "base_0_rgb": "front_img_1",
+    "right_wrist_0_rgb": "right_wrist_img",
+    "left_wrist_0_rgb": "left_wrist_img",
+}
+
+def translate_if_necessary(key):
+    if key in keys_translation:
+        return keys_translation[key]
+    return key
 class dummyArxInterface(Robot_Interface):
-    def __init__(self, arms, dataset_path=None):
+    def __init__(self, arms, embodiment_id,dataset_path=None, data_schematic=None):
         # Skip Robot_Interface config loading to keep this fully local/offline.
         self.arms = arms
         self.recorders = {}
@@ -13,10 +25,17 @@ class dummyArxInterface(Robot_Interface):
         self._ee_pose = {arm: np.zeros(7, dtype=np.float64) for arm in arms}
         self.dataset_path = dataset_path
         self.dataset = None
+        self.embodiment_id = embodiment_id
         if self.dataset_path is not None:
             filters = {"episode_hash": "2025-11-27-03-39-50-378000"}
             self.dataset = S3RLDBDataset(embodiment="eva_right_arm", mode="total", filters=filters, cache_root='scratch/.cache')
             self.dataset_step = 0
+        if data_schematic is not None:
+            self.data_schematic = data_schematic
+        else:
+            self.data_schematic = None
+            print("No data schematic provided")
+            
 
     def _create_controllers(self, cfg):
         return None
@@ -42,29 +61,33 @@ class dummyArxInterface(Robot_Interface):
     def get_obs(self):
         if self.dataset is not None:
             data = self.dataset[self.dataset_step] #TODO from dataschematic instead of hardcoding
-            front_image_key = "observations.images.front_img_1"
-            right_wrist_image_key = "observations.images.right_wrist_img"
-            raw_front_ims = data[front_image_key]
-            if raw_front_ims.ndim == 4:
-                front_ims = (raw_front_ims.permute(0,2, 3, 1).squeeze().cpu().numpy() * 255.0).astype(np.uint8)
-            else:
-                front_ims = (raw_front_ims.permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
-            raw_right_wrist_ims = data[right_wrist_image_key]
-            if raw_right_wrist_ims.ndim == 4:
-                right_wrist_ims = (raw_right_wrist_ims.permute(0,2, 3, 1).squeeze().cpu().numpy() * 255.0).astype(np.uint8)
-            else:
-                right_wrist_ims = (raw_right_wrist_ims.permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
-            ee_pose = np.zeros(14, dtype=np.float32)
-            ee_pose[7:] = data["observations.state.ee_pose"].cpu().numpy()
-            joint_positions = np.zeros(14, dtype=np.float32)
-            joint_positions[7:] = data["observations.state.joint_positions"].cpu().numpy()
+            obs = {}
+            for key in self.data_schematic.keys_of_type("camera_keys"):
+                lerobot_key = self.data_schematic.keyname_to_lerobot_key(key, self.embodiment_id)
+                if lerobot_key is not None:
+                    image = data[lerobot_key]
+                    if image.ndim == 4:
+                        image = (image.permute(0,2, 3, 1).squeeze().cpu().numpy() * 255.0).astype(np.uint8)
+                        image = image[..., [2, 1, 0]]
+                    else:
+                        image = (image.permute(1, 2, 0).cpu().numpy() * 255.0).astype(np.uint8)
+                        image = image[..., [2, 1, 0]]
+                    obs[translate_if_necessary(key)] = image
+            for key in self.data_schematic.keys_of_type("proprio_keys"):
+                lerobot_key = self.data_schematic.keyname_to_lerobot_key(key, self.embodiment_id)
+                if lerobot_key is not None:
+                    proprio = data[lerobot_key].cpu().numpy()
+                    if key == "joint_positions":
+                        if self.embodiment_id == EMBODIMENT.EVA_RIGHT_ARM.value:
+                            zero_proprio = np.zeros(14)
+                            zero_proprio[7:] = proprio
+                            proprio = zero_proprio
+                        elif self.embodiment_id == EMBODIMENT.EVA_LEFT_ARM.value:
+                            zero_proprio = np.zeros(14)
+                            zero_proprio[:7] = proprio
+                            proprio = zero_proprio
+                    obs[translate_if_necessary(key)] = proprio
 
-            obs = {
-                "front_img_1": front_ims,
-                "right_wrist_img": right_wrist_ims,
-                "ee_pose": ee_pose,
-                "joint_positions": joint_positions,
-            }
             self.dataset_step += 1
             return obs
         else:
