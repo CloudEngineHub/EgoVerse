@@ -60,8 +60,8 @@ expected_denominators = {
     # Operator 5 (Ryan)
     ('Ryan', '1'): 4, ('Ryan', '2'): 4, ('Ryan', '3'): 4, ('Ryan', '4'): 4,
     ('Ryan', '5'): 4, ('Ryan', '6'): 4, ('Ryan', '7'): 4, ('Ryan', '8'): 4,
-    ('Ryan', '9'): 4, ('Ryan', '10'): 4, ('Ryan', '11'): 4, ('Ryan', '12'): 0,
-    ('Ryan', '13'): 0, ('Ryan', '14'): 0, ('Ryan', '15'): 4, ('Ryan', '16'): 4,
+    ('Ryan', '9'): 0, ('Ryan', '10'): 0, ('Ryan', '11'): 0, ('Ryan', '12'): 0,
+    ('Ryan', '13'): 0, ('Ryan', '14'): 0, ('Ryan', '15'): 0, ('Ryan', '16'): 0,
     # Operator 6 (Pranav)
     ('Pranav', '1'): 3, ('Pranav', '2'): 3, ('Pranav', '3'): 3, ('Pranav', '4'): 3,
     ('Pranav', '5'): 3, ('Pranav', '6'): 3, ('Pranav', '7'): 3, ('Pranav', '8'): 3,
@@ -110,8 +110,8 @@ expected_denominators = {
     # Operator 15 (David)
     ('David', '1'): 2, ('David', '2'): 2, ('David', '3'): 2, ('David', '4'): 2,
     ('David', '5'): 2, ('David', '6'): 2, ('David', '7'): 2, ('David', '8'): 2,
-    ('David', '9'): 0, ('David', '10'): 0, ('David', '11'): 0, ('David', '12'): 0,
-    ('David', '13'): 0, ('David', '14'): 0, ('David', '15'): 0, ('David', '16'): 0,
+    ('David', '9'): 4, ('David', '10'): 4, ('David', '11'): 0, ('David', '12'): 0,
+    ('David', '13'): 0, ('David', '14'): 0, ('David', '15'): 4, ('David', '16'): 0,
     # Operator 16 (Vaibhav)
     ('Vaibhav', '1'): 2, ('Vaibhav', '2'): 2, ('Vaibhav', '3'): 2, ('Vaibhav', '4'): 2,
     ('Vaibhav', '5'): 2, ('Vaibhav', '6'): 2, ('Vaibhav', '7'): 2, ('Vaibhav', '8'): 2,
