@@ -71,6 +71,9 @@ train_datasets:
     embodiment: "aria_bimanual"
     temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
 <<<<<<< HEAD
+    filters: {operator: "Liqian", lab: "rl2", scene: "8", task: "fold clothes", recordings: null}
+=======
+<<<<<<< HEAD
     filters: {operator: "Pranav", lab: "rl2", scene: "1", task: "fold clothes", recordings: null}
     local_files_only: True
   
@@ -138,6 +141,7 @@ train_datasets:
 =======
     filters: {operator: "Liqian", lab: "rl2", scene: "8", task: "fold clothes", recordings: null}
 >>>>>>> 4ff3fd6458be283254c6103621feb429c5e371c8
+>>>>>>> 0b7a8fe084d2c97a32b17e80d0e8625dcfc46857
     local_files_only: True
 
 valid_datasets:
@@ -149,10 +153,14 @@ valid_datasets:
     temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
     filters: 
 <<<<<<< HEAD
+      operator: "Baoyu"
+=======
+<<<<<<< HEAD
       operator: "Pranav"
 =======
       operator: "Baoyu"
 >>>>>>> 4ff3fd6458be283254c6103621feb429c5e371c8
+>>>>>>> 0b7a8fe084d2c97a32b17e80d0e8625dcfc46857
       lab: "rl2"
       scene: "8"
       task: "fold clothes"

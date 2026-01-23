@@ -4,12 +4,16 @@ defaults:
   - trainer: ddp
   - debug: null
   - logger: wandb
-  - data: eva_bc_s3
-  - callbacks: null
+  - data: single_scene_fold_clothes_eva_only
+  - callbacks: checkpoints
   - override hydra/launcher: submitit
   - _self_
 
+<<<<<<< HEAD
+name: 0117_cotrain_eva_aria
+=======
 name: 0115_val_liqian
+>>>>>>> 0b7a8fe084d2c97a32b17e80d0e8625dcfc46857
 description: nan
 ckpt_path: null
 train: true
