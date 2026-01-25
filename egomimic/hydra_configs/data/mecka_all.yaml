@@ -1,0 +1,28 @@
+_target_: egomimic.pl_utils.pl_data_utils.MultiDataModuleWrapper
+
+
+train_datasets:
+  dataset1:
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: train
+    sample_percent: 1.0
+    embodiment: "mecka_bimanual"
+
+valid_datasets:
+  dataset1:
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: valid
+    sample_percent: 1.0
+    embodiment: "mecka_bimanual"
+
+train_dataloader_params:
+  dataset1:
+    batch_size: 256
+    num_workers: 8
+
+valid_dataloader_params:
+  dataset1:
+    batch_size: 256
+    num_workers: 8
