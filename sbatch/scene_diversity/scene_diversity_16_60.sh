@@ -27,3 +27,4 @@ python egomimic/trainHydra.py \
     logger.wandb.project=everse_scenes_diveristy_fold_clothes \
     name=fold-clothes \
     description=scenes-16-time-60 \
+    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/scenes-16-time-60_2026-01-23_22-22-22/checkpoints/last.ckpt
