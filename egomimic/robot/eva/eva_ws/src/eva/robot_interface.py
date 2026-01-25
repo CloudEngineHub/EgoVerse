@@ -370,6 +370,9 @@ class YAMInterface:
         cameras_cfg: dict = None,
         zero_gravity_mode: bool = False,
         dry_run: bool = False,
+        max_ik_iters: int = 500,
+        ik_error_threshold: float = None,
+        read_all_arms: bool = False,
     ):
         """
         Initialize YAM robot interface.
@@ -382,6 +385,11 @@ class YAMInterface:
             zero_gravity_mode: If True, robot starts in gravity compensation mode (movable by hand).
                               If False, robot holds current position on startup.
             dry_run: If True, don't connect to real robot - just log commands and simulate responses.
+            max_ik_iters: Maximum IK solver iterations (lower = faster failure, default 500).
+            ik_error_threshold: If set, reject IK solutions with position error > this value (meters).
+                               When rejected, the arm command is skipped entirely.
+            read_all_arms: If True, initialize both arms for reading proprioception even if only
+                          controlling one arm. The non-controlled arm will be in zero-gravity mode.
         """
         # Import i2rt dependencies when this class is used
         sys.path.insert(0, os.path.expanduser("~/i2rt"))
@@ -393,10 +401,20 @@ class YAMInterface:
         self._I2RTKinematics = I2RTKinematics
         self._GripperType = GripperType
 
-        self.arms = arms
+        self.arms = arms  # Arms to control
+        self.control_arms = arms  # Alias for clarity
         self.interfaces = interfaces if interfaces is not None else self.DEFAULT_INTERFACES
         self.zero_gravity_mode = zero_gravity_mode
         self.dry_run = dry_run
+        self.max_ik_iters = max_ik_iters
+        self.ik_error_threshold = ik_error_threshold
+        self.read_all_arms = read_all_arms
+        
+        # Determine which arms to read from (for proprioception)
+        if read_all_arms:
+            self.read_arms = ["left", "right"]
+        else:
+            self.read_arms = arms
         
         # Handle gripper_type
         if gripper_type is None:
@@ -408,7 +426,7 @@ class YAMInterface:
         
         # Track simulated joint positions for dry run mode
         self._simulated_joints = {}
-        for arm in arms:
+        for arm in self.read_arms:
             self._simulated_joints[arm] = self.HOME_POSITION.copy()
         
         # Track last command time for velocity limiting (per arm)
@@ -423,27 +441,34 @@ class YAMInterface:
         else:
             self._load_default_camera_config()
 
-        # Initialize robot controllers (one per arm)
+        # Initialize robot controllers
+        # - Control arms: initialized with specified zero_gravity_mode
+        # - Read-only arms (when read_all_arms=True): initialized in zero-gravity mode
         self.robot = {}
         self.kinematics = {}
         
         # Get the XML path for kinematics (same for all arms)
         model_path = self.gripper_type.get_xml_path()
         
-        for arm in self.arms:
+        for arm in self.read_arms:
             channel = self.interfaces.get(arm, self.DEFAULT_INTERFACES.get(arm, "can0"))
+            is_control_arm = arm in self.control_arms
+            # Read-only arms always use zero-gravity mode so they don't fight movement
+            arm_zero_gravity = zero_gravity_mode if is_control_arm else True
             
             if self.dry_run:
                 print(f"[YAMInterface] DRY RUN: Would initialize {arm} arm on {channel}")
                 print(f"[YAMInterface] DRY RUN: Gripper type: {self.gripper_type}")
                 print(f"[YAMInterface] DRY RUN: Model path: {model_path}")
+                print(f"[YAMInterface] DRY RUN: Control arm: {is_control_arm}, zero_gravity: {arm_zero_gravity}")
                 self.robot[arm] = None
             else:
-                print(f"[YAMInterface] Initializing {arm} arm on {channel} with gripper type {self.gripper_type}")
+                mode_str = "CONTROL" if is_control_arm else "READ-ONLY (zero-gravity)"
+                print(f"[YAMInterface] Initializing {arm} arm on {channel} [{mode_str}]")
                 self.robot[arm] = get_yam_robot(
                     channel=channel,
                     gripper_type=self.gripper_type,
-                    zero_gravity_mode=zero_gravity_mode,
+                    zero_gravity_mode=arm_zero_gravity,
                 )
             
             print(f"[YAMInterface] Using model: {model_path}")
@@ -453,7 +478,7 @@ class YAMInterface:
                 site_name="grasp_site",
             )
         
-        print(f"[YAMInterface] Initialized with arms: {self.arms}")
+        print(f"[YAMInterface] Control arms: {self.control_arms}, Read arms: {self.read_arms}")
         if self.dry_run:
             print("[YAMInterface] *** DRY RUN MODE ENABLED - NO ROBOT ACTUATION ***")
     
@@ -462,10 +487,12 @@ class YAMInterface:
         print("\n" + "="*60)
         print("YAM ROBOT CONFIGURATION")
         print("="*60)
-        print(f"Arms:              {self.arms}")
+        print(f"Control arms:      {self.control_arms}")
+        print(f"Read arms:         {self.read_arms}")
+        print(f"Read all arms:     {self.read_all_arms}")
         print(f"Gripper type:      {self.gripper_type}")
         print(f"CAN interfaces:    {self.interfaces}")
-        print(f"Zero gravity mode: {self.zero_gravity_mode}")
+        print(f"Zero gravity mode: {self.zero_gravity_mode} (for control arms)")
         print(f"Dry run mode:      {self.dry_run}")
         print(f"Model path:        {self.gripper_type.get_xml_path()}")
         print(f"Cameras:           {list(self.recorders.keys())}")
@@ -660,8 +687,8 @@ class YAMInterface:
         self, 
         ee_pose: np.ndarray, 
         arm: str,
-        damping: float = 1e-4,
-        max_iters: int = 500,
+        damping: float = 1e-3,
+        max_iters: int = None,
         pos_threshold: float = 1e-3,
         ori_threshold: float = 1e-3,
         verbose: bool = False,
@@ -672,14 +699,16 @@ class YAMInterface:
             ee_pose: (6,) array of [x, y, z, yaw, pitch, roll]
             arm: Arm name ("left" or "right")
             damping: Levenberg-Marquardt damping for stability (higher = more stable, slower)
-            max_iters: Maximum IK iterations
+            max_iters: Maximum IK iterations (default: self.max_ik_iters)
             pos_threshold: Position convergence threshold (meters)
             ori_threshold: Orientation convergence threshold (radians)
             verbose: If True, print debug info on IK failure
             
         Returns:
-            Solved joint positions (6,) or None if IK fails completely
+            Solved joint positions (6,) or None if IK fails or error exceeds threshold
         """
+        if max_iters is None:
+            max_iters = self.max_ik_iters
         if ee_pose.shape != (6,):
             raise ValueError(
                 f"For YAM, target pose must be of shape (6,), got {ee_pose.shape}"
@@ -721,6 +750,12 @@ class YAMInterface:
             print(f"  Achieved XYZ: [{achieved_T[0,3]:.4f}, {achieved_T[1,3]:.4f}, {achieved_T[2,3]:.4f}] m")
             print(f"  Position error: {pos_err*1000:.1f}mm")
         
+        # If error threshold is set and exceeded, reject the solution
+        if self.ik_error_threshold is not None and pos_err > self.ik_error_threshold:
+            print(f"[YAMInterface] IK error {pos_err*1000:.1f}mm exceeds threshold "
+                  f"{self.ik_error_threshold*1000:.1f}mm - skipping {arm} arm")
+            return None
+        
         # Clamp solved joints to be within limits (helps when IK solution is at boundary)
         solved_joints = self._clamp_to_limits(
             np.concatenate([solved_joints, [0.0]])  # Add dummy gripper for clamping
@@ -747,12 +782,16 @@ class YAMInterface:
         return np.concatenate([pos, ypr])
     
     def get_obs(self) -> dict:
-        """Get full observation dictionary including joint states and camera images."""
+        """Get full observation dictionary including joint states and camera images.
+        
+        Note: Reads proprioception from all arms in self.read_arms (which may include
+        arms not being controlled if read_all_arms=True was set during initialization).
+        """
         obs = {}
         joint_positions = np.zeros(14)
         ee_poses = np.zeros(14)
         
-        for arm in self.arms:
+        for arm in self.read_arms:
             arm_offset = 0 if arm == "left" else 7
             joint_positions[arm_offset:arm_offset + 7] = self.get_joints(arm)
             xyz, rot = self.get_pose(arm, se3=False)
@@ -768,11 +807,68 @@ class YAMInterface:
         
         return obs
     
+    def get_obs_with_latency(self) -> tuple[dict, dict]:
+        """Get observations with camera latency information.
+        
+        Note: Reads proprioception from all arms in self.read_arms (which may include
+        arms not being controlled if read_all_arms=True was set during initialization).
+        
+        Returns:
+            tuple: (obs, latency_info)
+                - obs: Standard observation dictionary
+                - latency_info: Dict mapping camera names to their latency info
+        """
+        obs = {}
+        latency_info = {}
+        joint_positions = np.zeros(14)
+        ee_poses = np.zeros(14)
+        
+        for arm in self.read_arms:
+            arm_offset = 0 if arm == "left" else 7
+            joint_positions[arm_offset:arm_offset + 7] = self.get_joints(arm)
+            xyz, rot = self.get_pose(arm, se3=False)
+            ypr = rot.as_euler("ZYX", degrees=False)
+            gripper = joint_positions[arm_offset + 6]
+            ee_poses[arm_offset:arm_offset + 7] = np.concatenate([xyz, ypr, [gripper]])
+        
+        obs["joint_positions"] = joint_positions
+        obs["ee_poses"] = ee_poses
+        
+        for name, recorder in self.recorders.items():
+            # Use latency-aware method if available
+            if hasattr(recorder, 'get_image_with_latency'):
+                img, lat_info = recorder.get_image_with_latency()
+                obs[name] = img
+                latency_info[name] = lat_info
+            else:
+                obs[name] = recorder.get_image()
+                latency_info[name] = {}
+        
+        return obs, latency_info
+    
+    def get_camera_latency_stats(self) -> dict:
+        """Get latency statistics for all cameras without capturing images.
+        
+        Returns:
+            Dict mapping camera names to their latency stats
+        """
+        stats = {}
+        for name, recorder in self.recorders.items():
+            if hasattr(recorder, 'get_latency_stats'):
+                stats[name] = recorder.get_latency_stats()
+            else:
+                stats[name] = {'type': type(recorder).__name__}
+        return stats
+    
     def set_home(self):
-        """Move all arms to home position."""
-        for arm in self.arms:
-            home_position = self.HOME_POSITION if arm == 'right' else self.HOME_POSITION_ABOVE
-            # home_position = self.HOME_POSITION
+        """Move control arms to home position.
+        
+        Note: Only moves arms in self.control_arms. Read-only arms (when read_all_arms=True)
+        are in zero-gravity mode and are not homed.
+        """
+        for arm in self.control_arms:
+            # home_position = self.HOME_POSITION if arm == 'right' else self.HOME_POSITION_ABOVE
+            home_position = self.HOME_POSITION
             if self.dry_run:
                 print(f"[YAMInterface] DRY RUN: Would move {arm} arm to home position: {home_position}")
                 self._simulated_joints[arm] = home_position.copy()
@@ -782,7 +878,7 @@ class YAMInterface:
     
     def close(self):
         """Safely close robot connections and camera streams."""
-        for arm in self.arms:
+        for arm in self.read_arms:  # Close all connected arms (both control and read-only)
             if self.dry_run:
                 print(f"[YAMInterface] DRY RUN: Would close {arm} arm controller")
             else:

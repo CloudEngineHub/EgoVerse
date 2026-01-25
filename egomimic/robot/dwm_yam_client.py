@@ -143,7 +143,7 @@ class DWMYAMClient:
         self,
         server_addr: str,
         arms: str,
-        query_freq: int,
+        execution_horizon: int,
         timeout_ms: int,
         gripper_type: str,
         can_interfaces: dict,
@@ -151,16 +151,19 @@ class DWMYAMClient:
         velocity_limit: float = None,
         wait_for_server: bool = False,
         zero_action_threshold: float = None,
-        action_horizon: int = None,
+        max_ik_iters: int = 500,
+        ik_error_threshold: float = None,
+        skip_small_delta: float = None,
+        monitor_latency: bool = False,
     ):
         """Initialize YAM client.
         
         Args:
             server_addr: ZMQ server address (e.g., "tcp://192.168.1.100:5555")
             arms: Which arm(s) to control ("left", "right", or "both")
-            query_freq: How often to request new actions (in timesteps)
-            extrinsics_key: Key for camera extrinsics
-            apply_extrinsics: Whether to transform actions from camera to base frame
+            execution_horizon: Number of actions to execute from each action chunk before
+                              requesting new actions. New actions are requested after executing
+                              exactly this many actions.
             timeout_ms: Request timeout in milliseconds
             gripper_type: Gripper type string
             can_interfaces: CAN interface mapping {"left": "can0", "right": "can1"}
@@ -171,19 +174,30 @@ class DWMYAMClient:
             zero_action_threshold: If set, replace near-zero actions (xyz norm < threshold) with
                                    current pose. Workaround for models trained with zeros for 
                                    non-engaged arms.
-            action_horizon: If set, only execute the first H actions from each action chunk.
-                           If None, execute all actions in the chunk.
+            max_ik_iters: Maximum IK solver iterations (lower = faster failure, default 500).
+            ik_error_threshold: If set, skip arm commands when IK error exceeds this value (meters).
+            skip_small_delta: If set, skip arm execution when target xyz is within this distance
+                             of current pose (meters). Avoids wasting IK on "hold position" actions.
+            monitor_latency: If True, track and report camera latency statistics.
         """
         self.server_addr = server_addr
         self.arms = arms
-        self.query_freq = query_freq
+        self.execution_horizon = execution_horizon
         self.timeout_ms = timeout_ms
         self.dry_run = dry_run
         self.velocity_limit = velocity_limit
         self.wait_for_server = wait_for_server
         self.zero_action_threshold = zero_action_threshold
-        self.action_horizon = action_horizon
+        self.skip_small_delta = skip_small_delta
+        self.monitor_latency = monitor_latency
         self._zero_arms = {}
+        self._skipped_arms = {}  # Track which arms are being skipped due to small delta
+        self._ik_fail_count = {"left": 0, "right": 0}  # Consecutive IK failures per arm
+        self._ik_fail_skip_threshold = 3  # Skip arm after N consecutive IK failures
+        
+        # Latency tracking
+        self._latency_history = {}  # camera_name -> list of frame_age_ms
+        self._latency_window = 30  # Keep last N samples for averaging
         
         # Determine arm list
         if arms == "both":
@@ -214,6 +228,9 @@ class DWMYAMClient:
             interfaces=can_interfaces,
             zero_gravity_mode=False,
             dry_run=False,  # Always use real robot for proprioception
+            max_ik_iters=max_ik_iters,
+            ik_error_threshold=ik_error_threshold,
+            read_all_arms=True,  # Always read proprioception from both arms
         )
         
         if dry_run:
@@ -221,8 +238,9 @@ class DWMYAMClient:
 
         time.sleep(2)
         
-        # Action buffer
+        # Action buffer and index tracking
         self.actions = None
+        self.action_index = 0  # Index of next action to execute in current chunk
         
     def _connect_with_retry(self):
         """Connect to server, optionally waiting indefinitely if wait_for_server is enabled."""
@@ -317,14 +335,14 @@ class DWMYAMClient:
         Actions are assumed to already be in robot base frame (no coordinate 
         transformation needed).
         
-        If action_horizon is set, only the first H actions are returned.
+        Slices to execution_horizon actions.
         
         Args:
             raw_actions: Raw actions from server (T, 14) or (T, 20)
             
         Returns:
             actions_ypr: (H, 14) array in YPR format for robot execution,
-                         where H = min(T, action_horizon) if action_horizon is set, else T
+                         where H = min(T, execution_horizon)
         """
 
         action_dim = raw_actions.shape[1]
@@ -333,11 +351,11 @@ class DWMYAMClient:
         elif action_dim == 14:
             actions_ypr = raw_actions
 
-        # Slice to action_horizon if specified
-        if self.action_horizon is not None:
-            original_len = actions_ypr.shape[0]
-            actions_ypr = actions_ypr[:self.action_horizon]
-            print(f"[DWMClient] Sliced actions from {original_len} to {actions_ypr.shape[0]} (action_horizon={self.action_horizon})")
+        # Slice to execution_horizon
+        original_len = actions_ypr.shape[0]
+        actions_ypr = actions_ypr[:self.execution_horizon]
+        if original_len != actions_ypr.shape[0]:
+            print(f"[DWMClient] Sliced actions from {original_len} to {actions_ypr.shape[0]} (execution_horizon={self.execution_horizon})")
         
         return actions_ypr
     
@@ -432,17 +450,24 @@ class DWMYAMClient:
         Returns:
             True if step succeeded, False to terminate
         """
-        # Get observations
-        obs = self.robot.get_obs()
+        # Get observations (with optional latency monitoring)
+        if self.monitor_latency:
+            obs, latency_info = self.robot.get_obs_with_latency()
+            self._track_latency(latency_info, i)
+        else:
+            obs = self.robot.get_obs()
         
         # Store actual ee_poses before any modifications (for action fixing)
         actual_ee_poses = obs.get('ee_poses')
         if actual_ee_poses is not None:
             actual_ee_poses = actual_ee_poses.copy()
         
-        # Request new actions at query frequency
-        if i % self.query_freq == 0:
+        # Request new actions when we've exhausted the current batch
+        need_new_actions = (self.actions is None or self.action_index >= self.execution_horizon)
+        
+        if need_new_actions:
             # Print current robot state
+            print(f"[DWMClient] Step {i}: Requesting new actions (action_index={self.action_index}, execution_horizon={self.execution_horizon})")
             print(f"[DWMClient] Current robot ee_poses: {actual_ee_poses}")
             
             # Zero out observations for arms that output near-zero actions
@@ -464,15 +489,21 @@ class DWMYAMClient:
             
             print(f"[DWMClient] Final actions (shape {self.actions.shape}):")
             print(f"  First action [left_7D, right_7D]: {self.actions[0]}")
+            
+            # Reset action index for new chunk
+            self.action_index = 0
+            
+            # Reset IK failure counts for new action chunk - give arms another chance
+            for arm in self._ik_fail_count:
+                if self._ik_fail_count[arm] >= self._ik_fail_skip_threshold:
+                    print(f"[DWMClient] Resetting {arm} arm IK failure count for new action chunk")
+                self._ik_fail_count[arm] = 0
         
         if self.actions is None:
             return False
         
         # Get action at current index
-        act_idx = i % self.query_freq
-        if act_idx >= self.actions.shape[0]:
-            act_idx = self.actions.shape[0] - 1
-        
+        act_idx = self.action_index
         action = self.actions[act_idx]
         
         # Execute on robot (skip if dry_run - only read proprioception)
@@ -485,16 +516,98 @@ class DWMYAMClient:
                 if self.arms != "both" and arm == "right":
                     arm_offset = 0
                 arm_action = action[arm_offset:arm_offset + 7]
+                
+                # Check if we should skip this arm due to small delta
+                if self.skip_small_delta is not None and actual_ee_poses is not None:
+                    current_xyz = actual_ee_poses[arm_offset:arm_offset + 3]
+                    target_xyz = arm_action[0:3]
+                    delta = np.linalg.norm(target_xyz - current_xyz)
+                    
+                    if delta < self.skip_small_delta:
+                        # Only log once per arm when we start skipping
+                        if not self._skipped_arms.get(arm, False):
+                            print(f"[DWMClient] Skipping {arm} arm - delta {delta*1000:.1f}mm < threshold {self.skip_small_delta*1000:.1f}mm")
+                            self._skipped_arms[arm] = True
+                        continue  # Skip this arm entirely
+                    else:
+                        # Arm is moving again, clear skip flag
+                        if self._skipped_arms.get(arm, False):
+                            print(f"[DWMClient] Resuming {arm} arm - delta {delta*1000:.1f}mm")
+                            self._skipped_arms[arm] = False
+                
+                # Check if arm is being skipped due to consecutive IK failures
+                if self._ik_fail_count.get(arm, 0) >= self._ik_fail_skip_threshold:
+                    # Only log occasionally to avoid spam
+                    if act_idx == 0:
+                        print(f"[DWMClient] Skipping {arm} arm - {self._ik_fail_count[arm]} consecutive IK failures")
+                    continue
+                
                 print(f"[DWMClient] Executing {arm} arm action: xyz=[{arm_action[0]:.4f}, {arm_action[1]:.4f}, {arm_action[2]:.4f}] ypr=[{arm_action[3]:.4f}, {arm_action[4]:.4f}, {arm_action[5]:.4f}] grip={arm_action[6]:.3f}")
-                self.robot.set_pose(arm_action, arm, velocity_limit=self.velocity_limit)
+                result = self.robot.set_pose(arm_action, arm, velocity_limit=self.velocity_limit)
+                
+                # Track IK failures
+                if result is None:
+                    self._ik_fail_count[arm] = self._ik_fail_count.get(arm, 0) + 1
+                    if self._ik_fail_count[arm] == self._ik_fail_skip_threshold:
+                        print(f"[DWMClient] {arm} arm hit {self._ik_fail_skip_threshold} consecutive IK failures - will skip until next action chunk")
+                else:
+                    # Reset on success
+                    if self._ik_fail_count.get(arm, 0) > 0:
+                        print(f"[DWMClient] {arm} arm IK recovered after {self._ik_fail_count[arm]} failures")
+                    self._ik_fail_count[arm] = 0
+        
+        # Increment action index for next step
+        self.action_index += 1
         
         return True
+    
+    def _track_latency(self, latency_info: dict, step: int):
+        """Track and report camera latency statistics.
+        
+        Args:
+            latency_info: Dict mapping camera names to their latency info
+            step: Current timestep
+        """
+        for cam_name, info in latency_info.items():
+            if not info:
+                continue
+            
+            # Initialize history for this camera
+            if cam_name not in self._latency_history:
+                self._latency_history[cam_name] = []
+            
+            frame_age_ms = info.get('frame_age_ms', 0)
+            is_new = info.get('is_new_frame', True)
+            
+            # Track frame age
+            self._latency_history[cam_name].append(frame_age_ms)
+            if len(self._latency_history[cam_name]) > self._latency_window:
+                self._latency_history[cam_name].pop(0)
+            
+            # Report when we're about to request new actions
+            if self.actions is None or self.action_index >= self.execution_horizon:
+                history = self._latency_history[cam_name]
+                avg_age = np.mean(history) if history else 0
+                max_age = max(history) if history else 0
+                frame_num = info.get('frame_number', 0)
+                capture_lat = info.get('capture_latency_ms', 0)
+                
+                # Warn if frame is stale
+                stale_warning = ""
+                if not is_new:
+                    stale_warning = " [STALE - same frame as last read!]"
+                elif frame_age_ms > 50:  # > 50ms is concerning at 30fps
+                    stale_warning = " [HIGH LATENCY]"
+                
+                print(f"[Latency] {cam_name}: frame #{frame_num}, age={frame_age_ms:.1f}ms, "
+                      f"avg={avg_age:.1f}ms, max={max_age:.1f}ms, capture_lat={capture_lat:.1f}ms{stale_warning}")
     
     def reset(self):
         """Reset robot to home position."""
         print("Resetting to home position...")
         self.robot.set_home()
         self.actions = None
+        self.action_index = 0
     
     def close(self):
         """Clean up resources."""
@@ -550,8 +663,9 @@ def main():
     # Control parameters
     parser.add_argument("--frequency", type=float, default=30.0,
                         help="Control loop frequency in Hz")
-    parser.add_argument("--query-frequency", type=int, default=16,
-                        help="How often to request new actions (in timesteps)")
+    parser.add_argument("--execution-horizon", type=int, required=True,
+                        help="Number of actions to execute from each action chunk before "
+                             "requesting new actions from the server.")
     parser.add_argument("--timeout-ms", type=int, default=5000,
                         help="Server request timeout in milliseconds")
     
@@ -573,10 +687,24 @@ def main():
                              "Workaround for models trained with zeros for non-engaged arms. "
                              "Suggested value: 0.05 (5cm)")
     
-    # Action horizon
-    parser.add_argument("--action-horizon", type=int, default=None,
-                        help="Only execute the first H actions from each action chunk. "
-                             "If not specified, all actions in the chunk are executed.")
+    # IK parameters
+    parser.add_argument("--max-ik-iters", type=int, default=500,
+                        help="Maximum IK solver iterations. Lower = faster failure. Default: 500. "
+                             "Try 50-100 for faster response when IK is failing.")
+    parser.add_argument("--ik-error-threshold", type=float, default=None,
+                        help="Skip arm commands when IK position error exceeds this value (meters). "
+                             "Suggested: 0.02 (20mm) to skip badly-converged IK solutions.")
+    
+    # Small delta skip
+    parser.add_argument("--skip-small-delta", type=float, default=None,
+                        help="Skip arm execution when target position is within this distance (meters) "
+                             "of current position. Avoids wasting IK on 'hold position' actions. "
+                             "Suggested: 0.005-0.01 (5-10mm).")
+    
+    # Latency monitoring
+    parser.add_argument("--monitor-latency", action="store_true",
+                        help="Enable camera latency monitoring. Reports frame age and capture "
+                             "latency for each RealSense camera at every inference step.")
     
     args = parser.parse_args()
     
@@ -584,16 +712,19 @@ def main():
     print("=" * 60)
     print("DWM YAM Client Configuration")
     print("=" * 60)
-    print(f"Server:          {args.server}")
-    print(f"Arms:            {args.arms}")
-    print(f"Gripper type:    {args.gripper_type}")
-    print(f"Frequency:       {args.frequency} Hz")
-    print(f"Query frequency: {args.query_frequency}")
-    print(f"Dry run:         {args.dry_run}")
-    print(f"Velocity limit:  {args.velocity_limit} rad/s" if args.velocity_limit else "Velocity limit:  None (unlimited)")
-    print(f"Wait for server: {args.wait_for_server}")
-    print(f"Zero action fix: {args.zero_action_threshold}m threshold" if args.zero_action_threshold else "Zero action fix: disabled")
-    print(f"Action horizon:  {args.action_horizon}" if args.action_horizon else "Action horizon:  None (use full chunk)")
+    print(f"Server:            {args.server}")
+    print(f"Arms:              {args.arms}")
+    print(f"Gripper type:      {args.gripper_type}")
+    print(f"Frequency:         {args.frequency} Hz")
+    print(f"Execution horizon: {args.execution_horizon} actions")
+    print(f"Dry run:           {args.dry_run}")
+    print(f"Velocity limit:    {args.velocity_limit} rad/s" if args.velocity_limit else "Velocity limit:    None (unlimited)")
+    print(f"Wait for server:   {args.wait_for_server}")
+    print(f"Zero action fix:   {args.zero_action_threshold}m threshold" if args.zero_action_threshold else "Zero action fix:   disabled")
+    print(f"Max IK iters:      {args.max_ik_iters}")
+    print(f"IK error thresh:   {args.ik_error_threshold}m" if args.ik_error_threshold else "IK error thresh:   None (no rejection)")
+    print(f"Skip small delta:  {args.skip_small_delta}m" if args.skip_small_delta else "Skip small delta:  None (always execute)")
+    print(f"Monitor latency:   {args.monitor_latency}")
     print("=" * 60)
     
     # Initialize client
@@ -602,7 +733,7 @@ def main():
     client = DWMYAMClient(
         server_addr=args.server,
         arms=args.arms,
-        query_freq=args.query_frequency,
+        execution_horizon=args.execution_horizon,
         timeout_ms=args.timeout_ms,
         gripper_type=args.gripper_type,
         can_interfaces=can_interfaces,
@@ -610,7 +741,10 @@ def main():
         velocity_limit=args.velocity_limit,
         wait_for_server=args.wait_for_server,
         zero_action_threshold=args.zero_action_threshold,
-        action_horizon=args.action_horizon,
+        max_ik_iters=args.max_ik_iters,
+        ik_error_threshold=args.ik_error_threshold,
+        skip_small_delta=args.skip_small_delta,
+        monitor_latency=args.monitor_latency,
     )
     
     # Initialize rate controller

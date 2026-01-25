@@ -758,6 +758,7 @@ def collect_demo(
             interfaces=yam_interfaces,
             zero_gravity_mode=False,  # Hold position on startup for safety
             dry_run=dry_run,
+            read_all_arms=True,  # Always read proprioception from both arms
         )
         # Print detailed config for YAM
         robot_interface.print_config()
@@ -1000,22 +1001,23 @@ def collect_demo(
                                     cmd_joints[arm]
                                 )
 
-                            robot_joint_action[arm_offset : arm_offset + 7] = (
-                                robot_interface.get_joints(arm)
-                            )
+                # Record data after processing all arms for this timestep
+                if collecting_data:
+                    obs = robot_interface.get_obs()
+                    
+                    # Use real proprioception from both arms (read_all_arms=True)
+                    # robot_joint_action now contains real joint positions for ALL arms
+                    robot_joint_action = obs["joint_positions"].copy()
 
-                        if collecting_data:
-                            obs = robot_interface.get_obs()
-
-                            obs_copy = {}
-                            for key, val in obs.items():
-                                obs_copy[key] = (
-                                    None if val is None else val.copy()
-                                )  # NumPy copy
-                            demo_data["obs"].append(obs_copy)
-                            demo_data["cmd_joint_actions"].append(cmd_joint_action)
-                            demo_data["robot_joint_actions"].append(robot_joint_action)
-                            demo_data["cmd_eepose_actions"].append(cmd_eepose_action)
+                    obs_copy = {}
+                    for key, val in obs.items():
+                        obs_copy[key] = (
+                            None if val is None else val.copy()
+                        )  # NumPy copy
+                    demo_data["obs"].append(obs_copy)
+                    demo_data["cmd_joint_actions"].append(cmd_joint_action.copy())
+                    demo_data["robot_joint_actions"].append(robot_joint_action)
+                    demo_data["cmd_eepose_actions"].append(cmd_eepose_action.copy())
 
                 if vr_data is not None:
                     prev_vr_data = vr_data
