@@ -26,7 +26,10 @@ import huggingface_hub
 import datasets.config as ds_cfg
 from datasets import DatasetDict, concatenate_datasets
 from datasets.utils.logging import disable_progress_bar
-from lerobot.common.datasets.lerobot_dataset import LeRobotDataset, LeRobotDatasetMetadata
+from lerobot.common.datasets.lerobot_dataset import (
+    LeRobotDataset,
+    LeRobotDatasetMetadata,
+)
 
 # Local EgoMimic Imports
 from egomimic.utils.aws.aws_sql import (
@@ -63,7 +66,6 @@ class EMBODIMENT(Enum):
 
 
 SEED = 42
-
 
 EMBODIMENT_ID_TO_KEY = {
     member.value: key for key, member in EMBODIMENT.__members__.items()
@@ -156,10 +158,10 @@ class RLDBDataset(LeRobotDataset):
         percent=0.1,
         mode="train",
         valid_ratio: float = 0.2,
+        use_annotations=False,
         **kwargs,
-    ):  
-
-        
+    ):
+        logger.info(f"Loading RLDB dataset from {root}")
         dataset_meta = LeRobotDatasetMetadata(
             repo_id=repo_id, root=root, local_files_only=local_files_only
         )
@@ -233,7 +235,7 @@ class RLDBDataset(LeRobotDataset):
             )
 
         annotation_path = Path(root) / "annotations"
-        if annotation_path.is_dir():
+        if annotation_path.is_dir() and use_annotations:
             self.annotations = AnnotationLoader(root=root)
             self.annotation_df = self.annotations.df
         else:
@@ -320,14 +322,13 @@ class RLDBDataset(LeRobotDataset):
         frame_item = self.hf_dataset[frame_idx]
         frame_time = float(frame_item["timestamp"])
 
-        frame_item["annotations"] = self._get_frame_annotation(
-            episode_idx=ep_idx,
-            frame_time=frame_time,
-        )
+        if self._get_frame_annotation is not None:
+            frame_item["annotations"] = self._get_frame_annotation(
+                episode_idx=ep_idx,
+                frame_time=frame_time,
+            )
 
         return frame_item
-
-
 
     def _get_frame_annotation(
         self,
@@ -368,7 +369,6 @@ class RLDBDataset(LeRobotDataset):
             return df_episode.iloc[prev_pos]["Labels"]
 
         return ""
-
 
     def _slow_down_sequence(self, seq, rot_spec=None):
         """
@@ -526,8 +526,12 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
                 hf_dataset = hf_dataset.rename_columns(key_map)
 
             dataset_list.append(hf_dataset)
-
-        merged_dataset = concatenate_datasets(dataset_list)
+        
+        try:
+            merged_dataset = concatenate_datasets(dataset_list)
+        except Exception as e:
+            logger.error(f"Failed to merge datasets: {e}")
+            return None
 
         return merged_dataset
 
@@ -612,7 +616,10 @@ class FolderRLDBDataset(MultiRLDBDataset):
             logger.warning(f"Skipped {len(skipped)} datasets: {skipped}")
 
 
-def _fmt_bytes(n: int) -> str:
+_PROCESS = psutil.Process()
+
+
+def _fmt_bytes(n: float) -> str:
     for unit in ("B", "KB", "MB", "GB", "TB"):
         if n < 1024:
             return f"{n:.2f}{unit}"
@@ -621,146 +628,153 @@ def _fmt_bytes(n: int) -> str:
 
 
 def _log_mem(tag: str):
-    """
-    Logs CPU + (optional) CUDA memory.
-    No side effects, safe in DDP / threads.
-    """
+    """Logs CPU + (optional) CUDA memory safely."""
     try:
         mi = _PROCESS.memory_info()
-        msg = (
-            f"[MEM] {tag} | "
-            f"RSS={_fmt_bytes(mi.rss)} | "
-            f"VMS={_fmt_bytes(mi.vms)}"
-        )
+        msg = f"[MEM] {tag} | RSS={_fmt_bytes(mi.rss)} | VMS={_fmt_bytes(mi.vms)}"
 
         if torch.cuda.is_available():
             msg += (
                 f" | CUDA_alloc={_fmt_bytes(torch.cuda.memory_allocated())}"
                 f" | CUDA_reserved={_fmt_bytes(torch.cuda.memory_reserved())}"
             )
-
         logger.info(msg)
     except Exception as e:
         logger.warning(f"[MEM] failed at {tag}: {e}")
 
 
 class S3RLDBDataset(MultiRLDBDataset):
-    """
-    A dataset class that downloads datasets from AWS S3 and instantiates them as RLDBDataset objects
-    """
-
     def __init__(
         self,
         embodiment,
         mode,
+        local_mode=False,
+        use_annotations=False,
         bucket_name="rldb",
         main_prefix="processed_v2",
-        percent=0.1,
+        sample_percent=1.0,  # Samples % of total available collection paths
+        percent=1.0,  # Samples % of frames within each loaded RLDBDataset
         local_files_only=True,
         key_map=None,
         valid_ratio=0.2,
-        temp_root="/coc/flash7/scratch/egoverseS3Dataset",
-        cache_root="/coc/flash7/scratch/.cache",
-        filters={},
+        temp_root="/storage/project/r-dxu345-0/shared/egoverse_datasets/S3_rldb_data/S3_rldb_data",  # "/coc/flash7/scratch/rldb_temp"
+        cache_root="/storage/project/r-dxu345-0/shared/.cache",
+        filters=None,
         debug=False,
         **kwargs,
     ):
         _log_mem("init:start")
-
-        temp_root += "/S3_rldb_data"
+        logger.info(f"Summary Dataset and S3RLDBDataset instantiation: {filters} {embodiment} {mode} {local_mode} {use_annotations} {bucket_name} {main_prefix} {sample_percent} {percent} {local_files_only} {key_map} {valid_ratio} {temp_root} {cache_root} {debug} {kwargs}")
+        filters = filters or {}
         filters["robot_name"] = embodiment
         filters["is_deleted"] = False
 
+        # Environment & Cache Setup
         os.environ["HF_HOME"] = cache_root
         os.environ["HF_DATASETS_CACHE"] = f"{cache_root}/datasets"
-
         ds_cfg.HF_DATASETS_CACHE = os.environ["HF_DATASETS_CACHE"]
         huggingface_hub.constants.HF_HOME = os.environ["HF_HOME"]
 
-        if temp_root[0] != "/":
-            temp_root = "/" + temp_root
-        temp_root = Path(temp_root)
+        temp_root_path = Path(temp_root)
+        temp_root_path.mkdir(parents=True, exist_ok=True)
 
-        if temp_root.is_dir():
-            logger.info(f"Using existing temp_root directory: {temp_root}")
-        else:
-            temp_root.mkdir()
+        # ------------------------------------------------------------
+        # 1. Query Metadata & Subsample FIRST (No S3 Sync yet)
+        # ------------------------------------------------------------
+        _log_mem("init:query_metadata")
+        all_filtered_paths = self._get_processed_path(filters)
 
-        logger.info(f"Filters: {filters}")
+        if not all_filtered_paths:
+            raise ValueError(f"No episodes matched filters: {filters}")
 
-        _log_mem("init:before_sync")
+        if local_mode:
+            local_paths = []
+            for ep in all_filtered_paths:
+                if self._episode_already_present(temp_root_path, ep[1]):
+                    local_paths.append(ep)
+            all_filtered_paths = local_paths
+        # Deterministic shuffle for disjoint train/valid splits
+        random.Random(6).shuffle(all_filtered_paths)
 
-        filtered_paths = self.sync_from_filters(
-            bucket_name=bucket_name,
-            filters=filters,
-            local_dir=temp_root,
+        # Apply sample_percent to the list of paths
+        total_to_sample = (
+            max(1, int(len(all_filtered_paths) * sample_percent))
+            if sample_percent > 0
+            else 0
         )
+        sampled_paths = all_filtered_paths[:total_to_sample]
+        logger.info(f"Sampled {len(sampled_paths)} paths from {len(all_filtered_paths)} total paths.")
 
-        _log_mem("init:after_sync")
+        # Split into disjoint subsets
+        num_valid = int(len(sampled_paths) * valid_ratio)
+        valid_paths_subset = sampled_paths[:num_valid]
+        train_paths_subset = sampled_paths[num_valid:]
 
-        search_path = temp_root
+        if len(valid_paths_subset) == 0 or len(train_paths_subset) == 0:
+            raise ValueError(f"Not enough paths to split for mode: {mode}. Valid paths: {valid_paths_subset}, Train paths: {train_paths_subset}")
 
-        valid_collection_names = {h for _, h in filtered_paths}
-
-        max_workers = int(os.environ.get("RLDB_LOAD_WORKERS", "10"))
-
-        _log_mem("init:before_parallel_load")
-
-        if mode in ["train", "valid", "percent"]:
-            mode = "total"
-        
-        datasets = {}
-        datasets, skipped = self._load_rldb_datasets_parallel(
-            search_path=search_path,
-            embodiment=embodiment,
-            valid_collection_names=valid_collection_names,
-            local_files_only=local_files_only,
-            percent=percent,
-            valid_ratio=valid_ratio,
-            max_workers=max_workers,
-            debug=debug,
-            kwargs=kwargs,
-        )
-
-        _log_mem("init:after_parallel_load")
-
-        assert datasets, "No valid RLDB datasets found! Check your S3 path and filters."
-
-        self.train_collections, self.valid_collections = split_dataset_names(
-            datasets.keys(), valid_ratio=valid_ratio, seed=SEED
-        )
-
+        # Select which subset we actually need to download and load
         if mode == "train":
-            chosen = self.train_collections
+            paths_to_process = train_paths_subset
         elif mode == "valid":
-            chosen = self.valid_collections
-        elif mode == "total":
-            chosen = set(datasets.keys())
-        elif mode == "percent":
-            all_names = sorted(datasets.keys())
-            rng = random.Random(SEED)
-            rng.shuffle(all_names)
-            n_keep = max(1, int(len(all_names) * percent)) if percent > 0 else 0
-            chosen = set(all_names[:n_keep])
+            paths_to_process = valid_paths_subset
+        elif mode in ["total", "percent"]:
+            paths_to_process = sampled_paths
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
-        datasets = {rid: ds for rid, ds in datasets.items() if rid in chosen}
-        assert datasets, "No datasets left after applying mode split."
-
-        key_map_per_dataset = (
-            {repo_id: key_map for repo_id in datasets} if key_map else None
+        # ------------------------------------------------------------
+        # 2. Sync ONLY the required paths from S3
+        # ------------------------------------------------------------
+        _log_mem("init:before_sync")
+        logger.info(
+            f"Syncing {len(paths_to_process)} sampled episodes for mode '{mode}' to {temp_root_path}"
         )
+
+        if mode == "local":
+            pass
+        else:
+            self._sync_s3_to_local(
+                bucket_name=bucket_name,
+                s3_paths=paths_to_process,
+                local_dir=temp_root_path,
+            )
+            _log_mem("init:after_sync")
+
+        # ------------------------------------------------------------
+        # 3. Parallel Load
+        # ------------------------------------------------------------
+        valid_collection_names = {h for _, h in paths_to_process}
+        max_workers = int(os.environ.get("RLDB_LOAD_WORKERS", "10"))
+
+        _log_mem("init:before_parallel_load")
+        datasets, skipped = self._load_rldb_datasets_parallel(
+            search_path=temp_root_path,
+            embodiment=embodiment,
+            valid_collection_names=valid_collection_names,
+            local_files_only=local_files_only,
+            percent=percent,  # Frame-level sampling
+            valid_ratio=valid_ratio,
+            max_workers=max_workers,
+            debug=debug,
+            use_annotations=use_annotations,
+            kwargs=kwargs,
+        )
+        _log_mem("init:after_parallel_load")
+
+        if datasets is None:
+            raise ValueError("No datasets loaded during parallel load.")
+
+        key_map = {repo_id: key_map for repo_id in datasets} if key_map else None
 
         super().__init__(
             datasets=datasets,
             embodiment=embodiment,
-            key_map=key_map_per_dataset,
+            key_map=key_map,
         )
 
         if skipped:
-            logger.warning(f"Skipped {len(skipped)}")
-
+            logger.warning(f"Skipped {len(skipped)} datasets during parallel load.")
         _log_mem("init:done")
 
     @classmethod
@@ -773,6 +787,7 @@ class S3RLDBDataset(MultiRLDBDataset):
         percent: float,
         valid_ratio: float,
         kwargs: dict,
+        use_annotations: bool,
     ):
         repo_id = collection_path.name
 
@@ -787,17 +802,29 @@ class S3RLDBDataset(MultiRLDBDataset):
                 mode="total",
                 percent=percent,
                 valid_ratio=valid_ratio,
+                use_annotations=use_annotations,
                 **kwargs,
             )
 
             expected = get_embodiment_id(embodiment)
             if ds_obj.embodiment != expected:
-                return repo_id, None, f"embodiment_mismatch {ds_obj.embodiment} != {expected}", None
+                return (
+                    repo_id,
+                    None,
+                    "embodiment_mismatch",
+                    f"{ds_obj.embodiment} != {expected}",
+                )
 
             return repo_id, ds_obj, None, None
 
         except Exception as e:
-            return repo_id, None, "exception", f"{e}\n{traceback.format_exc()}"
+            return (
+                repo_id,
+                None,
+                "exception",
+                f"{type(e).__name__}: {e}\n{traceback.format_exc()}",
+            )
+
 
     @classmethod
     def _load_rldb_datasets_parallel(
@@ -811,122 +838,108 @@ class S3RLDBDataset(MultiRLDBDataset):
         valid_ratio: float,
         max_workers: int,
         debug: bool = False,
+        use_annotations: bool,
         kwargs: dict,
         batch_size: int = 10,
     ):
         _log_mem("parallel_load:start")
-
         max_workers = max(1, int(max_workers))
-        process = psutil.Process()
-
-        datasets: dict[str, RLDBDataset] = {}
-        skipped: list[str] = []
 
         if debug:
             logger.info("Debug mode: limiting to 10 datasets.")
             valid_collection_names = set(list(valid_collection_names)[:10])
 
-        def _submit_arg(p: Path):
-            return dict(
-                collection_path=p,
-                embodiment=embodiment,
-                local_files_only=local_files_only,
-                percent=percent,
-                valid_ratio=valid_ratio,
-                kwargs=kwargs,
-            )
-
-        def get_memory():
-            mi = process.memory_info()
-            return mi.rss, mi.vms
-
-        # ------------------------------------------------------------
-        # Pre-filter valid dataset paths
-        # ------------------------------------------------------------
         valid_paths = [
             search_path / name
             for name in valid_collection_names
             if (search_path / name).is_dir()
         ]
+
         total = len(valid_paths)
+        datasets: dict[str, RLDBDataset] = {}
+        skipped: list[str] = []
 
         logger.info(
-            f"Starting parallel RLDB load: "
-            f"{total} datasets | workers={max_workers} | batch_size={batch_size}"
+            f"Starting parallel RLDB load: {total} datasets | workers={max_workers}"
         )
 
-        # Hard safety cap (prevents unrecoverable thread failures)
-        vm_total = psutil.virtual_memory().total
-        VMS_ABORT_FRAC = 0.90
-
-        with tqdm(total=total, desc="Loading RLDBDataset") as dataset_bar, \
+        with (
+            tqdm(total=total, desc="Loading RLDBDataset") as dataset_bar,
             tqdm(
-                total=1,
-                bar_format="RSS Mem: {bar} {n:.1f}MB",
-                position=1,
-                leave=True,
-            ) as rss_bar, \
+                total=1, bar_format="RSS Mem: {bar} {n:.1f}MB", position=1, leave=True
+            ) as rss_bar,
             tqdm(
-                total=1,
-                bar_format="VMS Mem: {bar} {n:.1f}MB",
-                position=2,
-                leave=True,
-            ) as vms_bar:
-
-            # ------------------------------------------------------------
-            # SINGLE executor reused for entire load
-            # ------------------------------------------------------------
+                total=1, bar_format="VMS Mem: {bar} {n:.1f}MB", position=2, leave=True
+            ) as vms_bar,
+        ):
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 in_flight = set()
                 path_iter = iter(valid_paths)
 
-                def submit_one(p: Path):
+                def _submit(p: Path):
                     return executor.submit(
                         cls._load_rldb_dataset_one,
-                        **_submit_arg(p),
+                        collection_path=p,
+                        embodiment=embodiment,
+                        local_files_only=local_files_only,
+                        percent=percent,
+                        valid_ratio=valid_ratio,
+                        use_annotations=use_annotations,
+                        kwargs=kwargs,
                     )
 
-                # Prime the pipeline
-                try:
-                    for _ in range(min(batch_size, total)):
-                        in_flight.add(submit_one(next(path_iter)))
-                except StopIteration:
-                    pass
+                # Prime pipeline
+                for _ in range(min(batch_size, total)):
+                    try:
+                        in_flight.add(_submit(next(path_iter)))
+                    except StopIteration:
+                        break
 
                 while in_flight:
                     done, in_flight = concurrent.futures.wait(
-                        in_flight,
-                        return_when=concurrent.futures.FIRST_COMPLETED,
+                        in_flight, return_when=concurrent.futures.FIRST_COMPLETED
                     )
 
                     for fut in done:
-                        repo_id, ds_obj, reason, err = fut.result()
+                        try:
+                            repo_id, ds_obj, reason, err = fut.result()
+                        except Exception as e:
+                            msg = (
+                                "[FUTURE FAILURE]\n"
+                                f"{type(e).__name__}: {e}\n{traceback.format_exc()}"
+                            )
+                            tqdm.write(msg)
+                            logger.exception(msg)
+                            dataset_bar.update(1)
+                            continue
 
-                        if ds_obj is not None:
+                        if ds_obj:
                             datasets[repo_id] = ds_obj
                         else:
+                            msg = (
+                                "\n[DATASET SKIPPED]\n"
+                                f"repo_id: {repo_id}\n"
+                                f"reason: {reason}\n"
+                                f"error:\n{err if err else 'None'}\n"
+                            )
+                            tqdm.write(msg)
+                            logger.error(msg)
+
                             if reason != "not_a_dir":
                                 skipped.append(repo_id)
-                                if err:
-                                    logger.debug(f"[SKIP] {repo_id}: {err}")
 
                         dataset_bar.update(1)
 
-                        # Submit next task if available
                         try:
-                            in_flight.add(submit_one(next(path_iter)))
+                            in_flight.add(_submit(next(path_iter)))
                         except StopIteration:
                             pass
 
-                    # ----------------------------------------------------
-                    # Memory monitoring & safety check
-                    # ----------------------------------------------------
-                    rss, vms = get_memory()
-                    rss_bar.n = rss / 1e6
-                    vms_bar.n = vms / 1e6
+                    # Memory monitoring
+                    mi = _PROCESS.memory_info()
+                    rss_bar.n, vms_bar.n = mi.rss / 1e6, mi.vms / 1e6
                     rss_bar.refresh()
                     vms_bar.refresh()
-
 
         _log_mem("parallel_load:end")
         return datasets, skipped
@@ -938,104 +951,94 @@ class S3RLDBDataset(MultiRLDBDataset):
         df = episode_table_to_df(engine)
         series = pd.Series(filters)
 
-        output = df.loc[
-            (df[list(filters)] == series).all(axis=1),
-            ["processed_path", "episode_hash"],
-        ]
-
-        skipped = df[df["processed_path"].isnull()]["episode_hash"].tolist()
-        # logger.info(f"Skipped {len(skipped)} episodes with null processed_path: {skipped}")
-
-        output = output[~output["episode_hash"].isin(skipped)]
-        paths = list(output.itertuples(index=False, name=None))
-
-        # logger.info(f"Paths: {paths}")
-        return paths
+        mask = (df[list(filters)] == series).all(axis=1)
+        output = df.loc[mask, ["processed_path", "episode_hash"]].dropna(
+            subset=["processed_path"]
+        )
+        return list(output.itertuples(index=False, name=None))
 
     @classmethod
     def _sync_s3_to_local(cls, bucket_name, s3_paths, local_dir: Path):
         _log_mem("s3_sync:start")
-
-        if not s3_paths:
-            return
-
-        to_sync = []
-        for processed_path, episode_hash in s3_paths:
-            if not cls._episode_already_present(local_dir, episode_hash):
-                to_sync.append((processed_path, episode_hash))
-
+        to_sync = [
+            p for p in s3_paths if not cls._episode_already_present(local_dir, p[1])
+        ]
         if not to_sync:
             logger.info("Nothing to sync from S3.")
             return
 
         local_dir.mkdir(parents=True, exist_ok=True)
 
-        with tempfile.NamedTemporaryFile(prefix="_s5cmd_sync_", suffix=".txt", delete=False) as f:
+        # Create the full batch file as before for maximum s5cmd efficiency
+        with tempfile.NamedTemporaryFile(
+            prefix="_s5cmd_", suffix=".txt", delete=False
+        ) as f:
+            lines = []
+            for src_path, episode_hash in to_sync:
+                src = (
+                    src_path
+                    if src_path.startswith("s3://")
+                    else f"s3://{bucket_name}/{src_path.lstrip('/')}"
+                )
+                lines.append(
+                    f'sync "{src.rstrip("/")}/*" "{local_dir / episode_hash}/"'
+                )
+            f.write("\n".join(lines).encode())
             batch_path = Path(f.name)
 
-        lines = []
-        for processed_path, episode_hash in to_sync:
-            if processed_path.startswith("s3://"):
-                src = processed_path.rstrip("/") + "/*"
-            else:
-                src = f"s3://{bucket_name}/{processed_path.lstrip('/').rstrip('/')}" + "/*"
+        logger.info(f"Syncing {len(to_sync)} episodes via s5cmd...")
 
-            dst = local_dir / episode_hash
-            lines.append(f'sync "{src}" "{dst}/"')
+        # Execute s5cmd and stream output to tqdm
+        # We use a simple counter for files synced since we don't know the exact file count per episode easily
+        with tqdm(total=len(to_sync), desc="S3 Sync Progress", unit="ep") as pbar:
+            process = subprocess.Popen(
+                ["s5cmd", "run", str(batch_path)],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
 
-        batch_path.write_text("\n".join(lines) + "\n")
+            # We look for the completion of a folder/sync operation in the logs
+            # s5cmd logs individual files, but we'll increment the bar based on unique episode hashes seen
+            completed_hashes = set()
+            for line in process.stdout:
+                # s5cmd output usually contains the destination path
+                # We check which episode hash is mentioned in the current log line
+                for _, episode_hash in to_sync:
+                    if episode_hash in line and episode_hash not in completed_hashes:
+                        completed_hashes.add(episode_hash)
+                        pbar.update(1)
+                        break
 
-        _log_mem("s3_sync:before_s5cmd")
-        subprocess.run(["s5cmd", "run", str(batch_path)], check=True)
+            process.wait()
+            if process.returncode != 0:
+                raise subprocess.CalledProcessError(process.returncode, process.args)
+
+        batch_path.unlink(missing_ok=True)
         _log_mem("s3_sync:after_s5cmd")
-
-        try:
-            batch_path.unlink(missing_ok=True)
-        except Exception:
-            pass
 
     @classmethod
     def _episode_already_present(cls, local_dir: Path, episode_hash: str) -> bool:
         ep = local_dir / episode_hash
-        meta = ep / "meta"
-        chunk0 = ep / "data" / "chunk-000"
-
-        if not meta.is_dir() or not chunk0.is_dir():
-            return False
-
+        meta, chunk0 = ep / "meta", ep / "data" / "chunk-000"
         try:
-            if not any(meta.iterdir()):
-                return False
-            if not any(chunk0.iterdir()):
-                return False
-        except FileNotFoundError:
+            return all(d.is_dir() and any(d.iterdir()) for d in [meta, chunk0])
+        except (FileNotFoundError, StopIteration):
             return False
-
-        return True
 
     @classmethod
-    def sync_from_filters(
-        cls,
-        *,
-        bucket_name: str,
-        filters: dict,
-        local_dir: Path,
-    ):
+    def sync_from_filters(cls, *, bucket_name: str, filters: dict, local_dir: Path):
         _log_mem("sync_from_filters:start")
-
         filtered_paths = cls._get_processed_path(filters)
         if not filtered_paths:
             logger.warning("No episodes matched filters.")
             return []
 
         logger.info(f"Syncing S3 datasets with filters {filters} to {local_dir}")
-
         cls._sync_s3_to_local(
-            bucket_name=bucket_name,
-            s3_paths=filtered_paths,
-            local_dir=local_dir,
+            bucket_name=bucket_name, s3_paths=filtered_paths, local_dir=local_dir
         )
-
         _log_mem("sync_from_filters:end")
         return filtered_paths
 
@@ -1191,6 +1194,9 @@ class DataSchematic(object):
             memory_usage = psutil.Process().memory_info().rss / (1024**2)
             logger.info(f"Memory usage before column processing: {memory_usage:.2f} MB")
 
+            memory_usage = psutil.Process().memory_info().rss / (1024**2)
+            logger.info(f"Memory usage before column processing: {memory_usage:.2f} MB")
+
             column_name = self.keyname_to_lerobot_key(column, embodiment)
             logger.info(f"[NormStats] Processing column={column_name}")
 
@@ -1198,6 +1204,9 @@ class DataSchematic(object):
             column_data = dataset.hf_dataset.with_format(
                 "numpy", columns=[column_name]
             )[:][column_name]
+
+            memory_usage = psutil.Process().memory_info().rss / (1024**2)
+            logger.info(f"Memory usage before mean calculation: {memory_usage:.2f} MB")
 
             memory_usage = psutil.Process().memory_info().rss / (1024**2)
             logger.info(f"Memory usage before mean calculation: {memory_usage:.2f} MB")
@@ -1416,5 +1425,3 @@ class DataSchematic(object):
                 denorm_data[key] = tensor
 
         return denorm_data
-
-
