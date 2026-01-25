@@ -4,6 +4,8 @@ import os
 from pprint import pprint
 import random
 import shutil
+import psutil
+
 from datetime import datetime, timezone
 from enum import Enum
 from multiprocessing.dummy import connection
@@ -262,6 +264,14 @@ class RLDBDataset(LeRobotDataset):
                 f"slow_down_ac_keys must be str, sequence, or None; got {type(raw_keys)}"
             )
 
+        annotation_path = Path(root) / "annotations"
+        if annotation_path.is_dir():
+            self.annotations = AnnotationLoader(root=root)
+            self.annotation_df = self.annotations.df
+        else:
+            self.annotations = None
+            self.annotation_df = None
+
         if mode == "train":
             super().__init__(
                 repo_id=repo_id,
@@ -335,62 +345,62 @@ class RLDBDataset(LeRobotDataset):
                     item[key] = self._slow_down_sequence(item[key])
 
         ep_idx = int(item["episode_index"])
+        frame_idx = (
+            self.sampled_indices[idx] if self.sampled_indices is not None else idx
+        )
 
-        frame = self.sampled_indices[idx] if self.sampled_indices is not None else idx
-        frame_item = self.hf_dataset[frame]
+        frame_item = self.hf_dataset[frame_idx]
+        frame_time = float(frame_item["timestamp"])
 
-        # Check if annotations directory exists before trying to load annotations
-        annotation_path = Path(self.root) / "annotations"
-        if not annotation_path.is_dir():
-            # No annotations available, set empty and return early
-            frame_item["annotations"] = ""
-            return frame_item
+        frame_item["annotations"] = self._get_frame_annotation(
+            episode_idx=ep_idx,
+            frame_time=frame_time,
+        )
 
-        # Load annotations only if they exist
-        annotations = AnnotationLoader(root=self.root)
-        df = annotations.df
+        return frame_item
 
-        current_ts = float(frame_item["timestamp"])
-        fps = float(self.fps)
-        frame_duration = 1 / fps
 
-        # Use frame start time for annotation lookup to avoid missing boundary annotations
-        frame_time = current_ts
-        # print(f"Frame {frame}, ts={current_ts}, duration={frame_duration}, episode {ep_idx}")
 
-        df_episode = df.loc[df["idx"].astype(int) == ep_idx]
+    def _get_frame_annotation(
+        self,
+        episode_idx: int,
+        frame_time: float,
+    ) -> str:
+        """
+        Return the annotation string for a given episode index and timestamp.
+        Returns empty string if annotations are unavailable or no match is found.
+        """
+        if self.annotation_df is None:
+            return ""
+
+        df_episode = self.annotation_df.loc[
+            self.annotation_df["idx"].astype(int) == episode_idx
+        ]
 
         if df_episode.empty:
-            logger.debug("No annotations for episode %s", ep_idx)
-            frame_item["annotations"] = ""
-            return frame_item
+            return ""
 
-        # print(df_episode.head())
-
-        frame_annotations = df_episode[
+        # Active annotation
+        active = df_episode[
             (df_episode["start_time"] <= frame_time)
             & (df_episode["end_time"] >= frame_time)
         ]
 
-        if frame_annotations.empty:
-            next_ann = df_episode[df_episode["start_time"] > frame_time]
-            if next_ann.empty:
-                annotation = df_episode.tail(1)["Labels"].iloc[0]
-                frame_item["annotations"] = annotation
-                return frame_item
-            else:
-                next_pos = df_episode.index.get_loc(next_ann.index[0])
-                prev_pos = next_pos - 1
-                if prev_pos >= 0:
-                    annotation = df_episode.iloc[prev_pos]["Labels"]
-                else:
-                    annotation = ""
-                frame_item["annotations"] = annotation
-                return frame_item
-        else:
-            annotation = frame_annotations["Labels"].iloc[0]
-            frame_item["annotations"] = annotation
-            return frame_item
+        if not active.empty:
+            return active["Labels"].iloc[0]
+
+        # Fallback: previous annotation
+        future = df_episode[df_episode["start_time"] > frame_time]
+        if future.empty:
+            return df_episode.tail(1)["Labels"].iloc[0]
+
+        next_pos = df_episode.index.get_loc(future.index[0])
+        prev_pos = next_pos - 1
+        if prev_pos >= 0:
+            return df_episode.iloc[prev_pos]["Labels"]
+
+        return ""
+
 
     def _slow_down_sequence(self, seq, rot_spec=None):
         """
@@ -887,12 +897,12 @@ class S3RLDBDataset(MultiRLDBDataset):
 
                 skipped.append(repo_id)
 
-                if reason == "not_in_filtered_paths":
-                    logger.warning(f"Skipping {repo_id}: not in filtered S3 paths")
-                elif reason and reason.startswith("embodiment_mismatch"):
-                    logger.warning(f"Skipping {repo_id}: {reason}")
-                else:
-                    logger.error(f"Failed to load {repo_id} as RLDBDataset:\n{err}")
+                # if reason == "not_in_filtered_paths":
+                #     logger.warning(f"Skipping {repo_id}: not in filtered S3 paths")
+                # elif reason and reason.startswith("embodiment_mismatch"):
+                #     logger.warning(f"Skipping {repo_id}: {reason}")
+                # else:
+                #     logger.error(f"Failed to load {repo_id} as RLDBDataset:\n{err}")
 
         return datasets, skipped
 
@@ -1027,7 +1037,7 @@ class S3RLDBDataset(MultiRLDBDataset):
 
             cmd = ["s5cmd", "run", str(batch_path)]
             logger.info("Running s5cmd batch (%d lines): %s", len(lines), " ".join(cmd))
-            subprocess.run(cmd, check=True)
+            subprocess.run(cmd, check=True) # check ts 
 
         finally:
             try:
@@ -1242,6 +1252,9 @@ class DataSchematic(object):
             if not self.is_key_with_embodiment(column, embodiment):
                 continue
 
+            memory_usage = psutil.Process().memory_info().rss / (1024**2)
+            logger.info(f"Memory usage before column processing: {memory_usage:.2f} MB")
+
             column_name = self.keyname_to_lerobot_key(column, embodiment)
             logger.info(f"[NormStats] Processing column={column_name}")
 
@@ -1249,6 +1262,9 @@ class DataSchematic(object):
             column_data = dataset.hf_dataset.with_format(
                 "numpy", columns=[column_name]
             )[:][column_name]
+
+            memory_usage = psutil.Process().memory_info().rss / (1024**2)
+            logger.info(f"Memory usage before mean calculation: {memory_usage:.2f} MB")
 
             if column_data.ndim not in (2, 3):
                 raise ValueError(
