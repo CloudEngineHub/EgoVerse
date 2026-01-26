@@ -14,6 +14,7 @@ description: nan
 ckpt_path: null
 train: true
 eval: false
+validate: false
 
 eval_class:
   _target_ : egomimic.scripts.evaluation.Eve

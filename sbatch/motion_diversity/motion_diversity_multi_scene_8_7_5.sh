@@ -2,7 +2,8 @@
 #SBATCH --job-name=motion_diversity_multi_scene_8_7_5
 #SBATCH --output=sbatch_logs/motion_diversity_multi_scene_8_7_5.out
 #SBATCH --error=sbatch_logs/motion_diversity_multi_scene_8_7_5.err
-#SBATCH --partition="overcap"
+#SBATCH --partition="hoffman-lab"
+#SBATCH --account="hoffman-lab"
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=12
@@ -20,9 +21,20 @@ echo "Using node: $SLURM_NODELIST, GPUs per node: $NUM_GPUS_PER_NODE, total GPUs
 # Set PyTorch memory allocation to reduce fragmentation
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
+# python egomimic/trainHydra.py \
+#     --config-name=train.yaml \
+#     data=motion_diversity/motion_diversity_multi_scene_8_7_5 \
+#     logger.wandb.project=everse_motion_diversity_multi_scene_fold_clothes \
+#     name=fold-clothes \
+#     description=operator-8-time-7_5
+
+
 python egomimic/trainHydra.py \
     --config-name=train.yaml \
     data=motion_diversity/motion_diversity_multi_scene_8_7_5 \
     logger.wandb.project=everse_motion_diversity_multi_scene_fold_clothes \
-    name=fold-clothes \
-    description=operator-8-time-7_5
+    name=eval-fold-clothes-motion-diversity \
+    description=operator-8-time-7_5 \
+    train=false \
+    validate=true \
+    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/motion_diversity/operator-8-time-7_5_2026-01-21_01-02-39/everse_motion_diversity_multi_scene_fold_clothes/fold-clothes_operator-8-time-7_5_2026-01-21_01-02-39/checkpoints/epoch_1999.ckpt
