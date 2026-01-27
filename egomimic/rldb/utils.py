@@ -70,6 +70,7 @@ from egomimic.rldb.data_utils import (
     _slow_down_slerp_quat,
 )
 import subprocess
+import tempfile
 import time
 from time import perf_counter
 import uuid
@@ -1014,7 +1015,9 @@ class S3RLDBDataset(MultiRLDBDataset):
 
         # 1) Build s5cmd batch script (one line per episode)
         local_dir.mkdir(parents=True, exist_ok=True)
-        batch_path = f"./logs/_s5cmd_sync_{int(time.time())}_{os.getpid()}_{uuid.uuid4().hex}.txt"
+        # Use tempfile for the batch script since it's temporary and gets deleted
+        batch_fd, batch_path = tempfile.mkstemp(suffix='.txt', prefix='_s5cmd_sync_', text=True)
+        os.close(batch_fd)  # Close the file descriptor, we'll use Path.write_text instead
         batch_path = Path(batch_path)
 
         lines = []

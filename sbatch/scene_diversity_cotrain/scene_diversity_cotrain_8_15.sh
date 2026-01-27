@@ -2,12 +2,12 @@
 #SBATCH --job-name=scene_diversity_cotrain_8_15
 #SBATCH --output=sbatch_logs/scene_diversity_cotrain_8_15.out
 #SBATCH --error=sbatch_logs/scene_diversity_cotrain_8_15.err
-#SBATCH --partition="rl2-lab"
-#SBATCH --account="rl2-lab"
+#SBATCH --partition="hoffman-lab"
+#SBATCH --account="hoffman-lab"
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=14
-#SBATCH --gpus-per-node="l40s:1"
+#SBATCH --gpus-per-node="a40:1"
 #SBATCH --qos="short"
 #SBATCH --exclude="clippy"
 
@@ -29,4 +29,4 @@ python egomimic/trainHydra.py \
     trainer.limit_val_batches=30 \
     model=hpt_cotrain_flow_shared_head \
     description=scenes-8-time-15-cotrain \
-    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold-clothes-cotrain/scenes-8-time-15-cotrain_2026-01-23_23-24-16/checkpoints/last.ckpt
+    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold-clothes-cotrain-2/scenes-8-time-15-cotrain_2026-01-25_22-33-22/checkpoints/last.ckpt

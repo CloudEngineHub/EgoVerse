@@ -2,8 +2,8 @@
 #SBATCH --job-name=scene_diversity_8_30
 #SBATCH --output=sbatch_logs/scene_diversity_8_30.out
 #SBATCH --error=sbatch_logs/scene_diversity_8_30.err
-#SBATCH --partition="hoffman-lab"
-#SBATCH --account="hoffman-lab"
+#SBATCH --partition="rl2-lab"
+#SBATCH --account="rl2-lab"
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=12
@@ -26,4 +26,15 @@ python egomimic/trainHydra.py \
     data=scene_diversity/scene_diversity_8_30 \
     logger.wandb.project=everse_scenes_diveristy_fold_clothes \
     name=fold-clothes \
-    description=scenes-8-time-30
+    description=scenes-8-time-30 \
+    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/scene_diversity/scenes-8-time-30_2026-01-21_21-36-39/everse_scenes_diveristy_fold_clothes/fold-clothes_scenes-8-time-30_2026-01-21_21-36-39/checkpoints/last.ckpt
+
+# python egomimic/trainHydra.py \
+#     --config-name=train.yaml \
+#     data=scene_diversity/scene_eval \
+#     logger.wandb.project=everse_scene_diversity_fold_clothes \
+#     name=eval-fold-clothes-scene-diversity \
+#     description=scenes-8-time-30 \
+#     train=false \
+#     validate=true \
+#     ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/scene_diversity/scenes-8-time-30_2026-01-21_21-36-39/everse_scenes_diveristy_fold_clothes/fold-clothes_scenes-8-time-30_2026-01-21_21-36-39/checkpoints/last.ckpt

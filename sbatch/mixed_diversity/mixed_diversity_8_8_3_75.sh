@@ -2,8 +2,8 @@
 #SBATCH --job-name=mixed_diversity_8_8_3_75
 #SBATCH --output=sbatch_logs/mixed_diversity_8_8_3_75.out
 #SBATCH --error=sbatch_logs/mixed_diversity_8_8_3_75.err
-#SBATCH --partition="hoffman-lab"
-#SBATCH --account="hoffman-lab"
+#SBATCH --partition="overcap"
+#SBATCH --account="rl2-lab"
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=12
@@ -21,9 +21,19 @@ echo "Using node: $SLURM_NODELIST, GPUs per node: $NUM_GPUS_PER_NODE, total GPUs
 # Set PyTorch memory allocation to reduce fragmentation
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
+# python egomimic/trainHydra.py \
+#     --config-name=train.yaml \
+#     data=mixed_diversity/mixed_diversity_8_8_3_75 \
+#     logger.wandb.project=everse_mixed_diversity_fold_clothes \
+#     name=fold-clothes \
+#     description=mixed-diversity-8-8-3-75
+
 python egomimic/trainHydra.py \
     --config-name=train.yaml \
-    data=mixed_diversity/mixed_diversity_8_8_3_75 \
+    data=mixed_diversity/mixed_eval \
     logger.wandb.project=everse_mixed_diversity_fold_clothes \
-    name=fold-clothes \
-    description=mixed-diversity-8-8-3-75
+    name=eval-fold-clothes-mixed-diversity \
+    description=8-8-3-75 \
+    train=false \
+    validate=true \
+    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/mixed_diversity/mixed-diversity-8-8-3-75_2026-01-23_02-22-38/checkpoints/last.ckpt

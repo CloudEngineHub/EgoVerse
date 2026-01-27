@@ -15,18 +15,31 @@ def parse_directory_name(dirname: str) -> Optional[Tuple[int, int]]:
     """
     Parse directory name to extract scenes and operators.
     
-    Expected format: mixed-diversity-{scenes}-{operators}-{minutes}_{timestamp}
+    Expected format: {scenes}-{operators}-{minutes}_{timestamp}
+    Example: 4-4-15_2026-01-26_11-00-08
     
     Returns:
         Tuple of (scenes, operators) or None if parsing fails
     """
     # Pattern to extract scenes and operators (ignore minutes)
-    pattern = r'mixed-diversity-(\d+)-(\d+)-'
-    match = re.match(pattern, dirname)
+    # Handles both formats: "mixed-diversity-{scenes}-{operators}-" and "{scenes}-{operators}-"
+    pattern1 = r'mixed-diversity-(\d+)-(\d+)-'
+    pattern2 = r'^(\d+)-(\d+)-'
+    
+    # Try pattern with "mixed-diversity-" prefix first
+    match = re.match(pattern1, dirname)
     if match:
         scenes = int(match.group(1))
         operators = int(match.group(2))
         return (scenes, operators)
+    
+    # Try pattern without prefix
+    match = re.match(pattern2, dirname)
+    if match:
+        scenes = int(match.group(1))
+        operators = int(match.group(2))
+        return (scenes, operators)
+    
     return None
 
 
@@ -102,10 +115,10 @@ def main():
     """Main function to extract metrics and create tables."""
     
     # Source directory with experiment results
-    source_dir = Path("/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/mixed_diversity")
+    source_dir = Path("/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/eval-fold-clothes-mixed-diversity")
     
     # Output directory for CSV files
-    output_dir = Path("/coc/flash7/bli678/Shared/EgoVerse/results")
+    output_dir = Path("/coc/flash7/bli678/Shared/EgoVerse/results/mixed_diversity_fold_clothes")
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Collect all metrics by configuration

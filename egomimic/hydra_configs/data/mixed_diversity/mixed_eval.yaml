@@ -4,15 +4,30 @@ valid_datasets:
   dataset1: 
     _target_: egomimic.rldb.utils.MultiRLDBDataset
     datasets:
-      # song record 2
-      op1_scene1_ep1:
+      lab1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
-        mode: total
+        mode: valid
         embodiment: "aria_bimanual"
         local_files_only: True
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
-        filters: {episode_hash: '2025-11-11-23-06-20-738000'}
+        filters: {lab: "song", task: "fold clothes"}
+      lab2:
+        _target_: egomimic.rldb.utils.S3RLDBDataset
+        bucket_name: "rldb"
+        mode: valid
+        embodiment: "aria_bimanual"
+        local_files_only: True
+        temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+        filters: {lab: "wang", task: "fold clothes"}
+      lab3:
+        _target_: egomimic.rldb.utils.S3RLDBDataset
+        bucket_name: "rldb"
+        mode: valid
+        embodiment: "aria_bimanual"
+        local_files_only: True
+        temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+        filters: {lab: "eth", task: "fold clothes"}
 
     embodiment: "aria_bimanual"
 

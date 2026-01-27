@@ -21,9 +21,19 @@ echo "Using node: $SLURM_NODELIST, GPUs per node: $NUM_GPUS_PER_NODE, total GPUs
 # Set PyTorch memory allocation to reduce fragmentation
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
+# python egomimic/trainHydra.py \
+#     --config-name=train.yaml \
+#     data=mixed_diversity/mixed_diversity_4_8_7_5 \
+#     logger.wandb.project=everse_mixed_diversity_fold_clothes \
+#     name=fold-clothes \
+#     description=mixed-diversity-4-8-7-5
+
 python egomimic/trainHydra.py \
     --config-name=train.yaml \
-    data=mixed_diversity/mixed_diversity_4_8_7_5 \
+    data=mixed_diversity/mixed_eval \
     logger.wandb.project=everse_mixed_diversity_fold_clothes \
-    name=fold-clothes \
-    description=mixed-diversity-4-8-7-5
+    name=eval-fold-clothes-mixed-diversity \
+    description=4-8-7-5 \
+    train=false \
+    validate=true \
+    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/mixed_diversity/mixed-diversity-4-8-7-5_2026-01-23_02-20-18/checkpoints/last.ckpt

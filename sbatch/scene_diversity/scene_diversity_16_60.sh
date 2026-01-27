@@ -2,7 +2,7 @@
 #SBATCH --job-name=scene_diversity_16_60
 #SBATCH --output=sbatch_logs/scene_diversity_16_60.out
 #SBATCH --error=sbatch_logs/scene_diversity_16_60.err
-#SBATCH --partition="rl2-lab"
+#SBATCH --partition="overcap"
 #SBATCH --account="rl2-lab"
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -21,10 +21,19 @@ echo "Using node: $SLURM_NODELIST, GPUs per node: $NUM_GPUS_PER_NODE, total GPUs
 # Set PyTorch memory allocation to reduce fragmentation
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
+# python egomimic/trainHydra.py \
+#     --config-name=train.yaml \
+#     data=scene_diversity/scene_diversity_16_60 \
+#     logger.wandb.project=everse_scenes_diveristy_fold_clothes \
+#     name=fold-clothes \
+#     description=scenes-16-time-60
+
 python egomimic/trainHydra.py \
     --config-name=train.yaml \
-    data=scene_diversity/scene_diversity_16_60 \
-    logger.wandb.project=everse_scenes_diveristy_fold_clothes \
-    name=fold-clothes \
+    data=scene_diversity/scene_eval \
+    logger.wandb.project=everse_scene_diversity_fold_clothes \
+    name=eval-fold-clothes-scene-diversity \
     description=scenes-16-time-60 \
-    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/scenes-16-time-60_2026-01-23_22-22-22/checkpoints/last.ckpt
+    train=false \
+    validate=true \
+    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/scene_diversity/scenes-16-time-60_2026-01-25_18-12-16/checkpoints/last.ckpt

@@ -7,7 +7,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=14
-#SBATCH --gpus-per-node="l40s:1"
+#SBATCH --gpus-per-node="a40:1"
 #SBATCH --qos="short"
 #SBATCH --exclude="clippy"
 
@@ -29,4 +29,4 @@ python egomimic/trainHydra.py \
     trainer.limit_val_batches=30 \
     model=hpt_cotrain_flow_shared_head \
     description=scenes-16-time-3_75-cotrain \
-    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold-clothes-cotrain/scenes-16-time-3_75-cotrain_2026-01-24_00-39-04/checkpoints/last.ckpt
+    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold-clothes-cotrain-2/scenes-16-time-3_75-cotrain_2026-01-25_22-13-54/checkpoints/last.ckpt
