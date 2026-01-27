@@ -37,7 +37,8 @@ from geomloss import SamplesLoss
 from tslearn.metrics import SoftDTWLossPyTorch
 
 import math
-
+import pickle
+import os
 
 class HPTModel(nn.Module):
     """
@@ -843,6 +844,8 @@ class HPT(Algo):
         self.auxiliary_ac_keys = auxiliary_ac_keys.copy()
         self.shared_ac_key = kwargs.get("shared_ac_key", None)
         self.is_6dof = kwargs.get("6dof", False)
+        self.use_quat = kwargs.get("use_quat", False)  # quaternion orientation instead of ypr
+        self.use_delta = kwargs.get("use_delta", False)  # delta actions mode
         self.kinematics_solver = kwargs.get("kinematics_solver", None)
 
         model = HPTModel(**trunk)
@@ -971,6 +974,13 @@ class HPT(Algo):
                 pad_mask: torch.Size([32, 100, 1])
                 embodiment: torch.Size([])
         """
+        # ETH [DEBUG] dumping the entire batch into a .pkl file ONCE during current epoch
+        # put in same location as checkpoints
+        if self.training_step == 1:
+            from hydra.core.hydra_config import HydraConfig
+            with open(os.path.join(HydraConfig.get().runtime.output_dir, f"process_batch_for_training_batch_{self.training_step}.pkl"), "wb") as f:
+                pickle.dump(batch, f)
+
         processed_batch = {}
         
         # Get set of configured embodiment IDs to filter out unconfigured ones
@@ -1034,6 +1044,14 @@ class HPT(Algo):
         hpt_batches = {}
         self.training_step += 1
         for embodiment_id, _batch in batch.items():
+
+            # ETH [DEBUG] dumping the entire batch into a .pkl file ONCE during current epoch
+            # put in same location as checkpoints
+            if self.training_step == 1:
+                from hydra.core.hydra_config import HydraConfig
+                with open(os.path.join(HydraConfig.get().runtime.output_dir, f"batch_{self.training_step}.pkl"), "wb") as f:
+                    pickle.dump(_batch, f)
+
             cam_keys = self.camera_keys[embodiment_id]
             proprio_keys = self.proprio_keys[embodiment_id]
             lang_keys = self.lang_keys[embodiment_id]
@@ -1058,6 +1076,23 @@ class HPT(Algo):
 
             predictions[f"{embodiment_name}_{ac_key}"] = _batch[ac_key]
             predictions[f"{embodiment_name}_loss"] = loss
+
+            # ETH [DEBUG] dumping the entire batch into a .pkl file ONCE during current epoch
+            # put in same location as checkpoints
+            if self.training_step == 1:
+                from hydra.core.hydra_config import HydraConfig
+                with open(os.path.join(HydraConfig.get().runtime.output_dir, f"hpt_batch_input_{self.training_step}.pkl"), "wb") as f:
+                    pickle.dump(hpt_batch, f)
+
+            # ETH [DEBUG] dump all action predictions (including auxiliary) on step 1
+            # NOTE: Must use hpt_batches (cloned before compute_loss) because compute_loss() modifies data in-place
+            if self.training_step == 1:
+                with torch.no_grad():
+                    cloned_batch = hpt_batches[embodiment_id]
+                    actions = self.nets["policy"].forward(cloned_batch["domain"], cloned_batch["data"])
+                    from hydra.core.hydra_config import HydraConfig
+                    with open(os.path.join(HydraConfig.get().runtime.output_dir, f"predictions_{embodiment_name}.pkl"), "wb") as f:
+                        pickle.dump(actions, f)
 
         if self.ot:
             ot_loss, avg_feat_distance = self._forward_ot(
@@ -1279,14 +1314,59 @@ class HPT(Algo):
         ims = (batch[viz_img_key].cpu().numpy().transpose((0, 2, 3, 1)) * 255).astype(
             np.uint8
         )
+        
+        # Handle delta mode - visualization not yet implemented
+        if self.use_delta:
+            print("[visualize_preds] use_delta=True: must implement delta visualization")
+            # Continue with normal visualization (delta values will be visualized as-is)
+        
         for key in batch:
             if f"{embodiment_name}_{key}" in predictions:
                 preds = predictions[f"{embodiment_name}_{key}"]
                 gt = batch[key]
                 # ee_pose = batch['ee_pose'] # (B, 6) visualize these too
-                cartesian_arm = batch['cartesian_arm'] # (B, 6)
+                cartesian_arm = batch['cartesian_arm'] # (B, 6) or (B, 7) if quat, or (B, 12/14) if bimanual
 
-                if self.is_6dof and key == "actions_cartesian":
+                # Handle quaternion mode for cartesian actions
+                if self.use_quat and key == "actions_cartesian":
+                    print("[visualize_preds] use_quat=True: must implement quaternion visualization")
+                    # For now, extract only xyz for visualization, skip rotation text
+                    # Single arm: 7D (xyz + quat), Bimanual: 14D (xyz + quat + xyz + quat)
+                    if preds.shape[-1] == 7:
+                        # Single arm with quaternion
+                        gt_xyz = gt[..., :3]
+                        preds_xyz = preds[..., :3]
+                        gt_rot = gt[..., 3:7]  # quaternion
+                        preds_rot = preds[..., 3:7]
+                    elif preds.shape[-1] == 14:
+                        # Bimanual with quaternion
+                        gt_xyz = torch.cat([gt[..., :3], gt[..., 7:10]], dim=-1)
+                        preds_xyz = torch.cat([preds[..., :3], preds[..., 7:10]], dim=-1)
+                        gt_rot = torch.cat([gt[..., 3:7], gt[..., 10:14]], dim=-1)  # quaternions
+                        preds_rot = torch.cat([preds[..., 3:7], preds[..., 10:14]], dim=-1)
+                    else:
+                        print(f"[visualize_preds] use_quat=True but unexpected shape {preds.shape}, skipping")
+                        continue
+                    
+                    # Use extracted xyz for drawing
+                    gt = gt_xyz
+                    preds = preds_xyz
+                    
+                    # Handle ee_frame delta offset
+                    ee_frame = self.chosen_frame == "ee_frame"
+                    if ee_frame:
+                        # cartesian arm is (B, 7) or (B, 14) with quat, just take xyz positions
+                        if cartesian_arm.shape[-1] == 7:
+                            cartesian_arm_xyz = cartesian_arm[:, :3]  # (B, 3)
+                        elif cartesian_arm.shape[-1] == 14:
+                            cartesian_arm_xyz = torch.cat([cartesian_arm[:, :3], cartesian_arm[:, 7:10]], dim=-1)  # (B, 6)
+                        else:
+                            cartesian_arm_xyz = torch.cat([cartesian_arm[:, :3], cartesian_arm[:, 7:10]], dim=-1)  # (B, 6)
+                        cartesian_arm_xyz = cartesian_arm_xyz.unsqueeze(1)  # (B, 1, 3 or 6)
+                        gt = gt + cartesian_arm_xyz
+                        preds = preds + cartesian_arm_xyz
+
+                elif self.is_6dof and key == "actions_cartesian":
                     gt, gt_rot = self._extract_xyz(gt)
                     preds, preds_rot = self._extract_xyz(preds)
                 
@@ -1300,10 +1380,17 @@ class HPT(Algo):
                         preds = preds + cartesian_arm
 
                 for b in range(ims.shape[0]):
-                    if preds.shape[-1] == 7 or preds.shape[-1] == 14:
+                    # Determine action type based on shape and mode
+                    if self.use_quat and key == "actions_cartesian":
+                        # After extracting xyz from quat data, shape should be 3 or 6
+                        ac_type = "xyz"
+                        arm = "right" if preds.shape[-1] == 3 else "both"
+                    elif preds.shape[-1] == 7 or preds.shape[-1] == 14:
                         ac_type = "joints"
+                        arm = "right" if preds.shape[-1] == 7 else "both"
                     elif preds.shape[-1] == 3 or preds.shape[-1] == 6:
                         ac_type = "xyz"
+                        arm = "right" if preds.shape[-1] == 3 else "both"
                     elif preds.shape[-1] == 34 or preds.shape[-1] == 17:
                         # Handle 34D or 17D action space - likely high-dimensional joint space or multi-robot setup
                         ac_type = "hand_joints"
@@ -1314,11 +1401,6 @@ class HPT(Algo):
                             f"Unknown action type with shape {preds.shape}"
                         )
 
-                    arm = (
-                        "right"
-                        if preds.shape[-1] == 7 or preds.shape[-1] == 3
-                        else "both"
-                    )
                     ims[b] = draw_actions(
                         ims[b],
                         ac_type,
@@ -1340,7 +1422,8 @@ class HPT(Algo):
                         chosen_frame=self.chosen_frame,
                     )
 
-                    if self.is_6dof and ac_key == "actions_cartesian":
+                    # Draw rotation text only for ypr mode (not quaternion)
+                    if self.is_6dof and not self.use_quat and ac_key == "actions_cartesian":
                         ims[b] = draw_rotation_text(
                             ims[b], gt_rot[b][0], preds_rot[b][0], position=(340, 20)
                         )
@@ -1475,6 +1558,8 @@ class HPT(Algo):
                 data[key] = batch[key]
 
         data["is_6dof"] = self.is_6dof
+        data["use_quat"] = self.use_quat
+        data["use_delta"] = self.use_delta
         data["pad_mask"] = batch["pad_mask"]
         data["embodiment"] = batch["embodiment"]
 
