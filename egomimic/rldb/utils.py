@@ -677,6 +677,7 @@ class S3RLDBDataset(MultiRLDBDataset):
         temp_root="/coc/flash7/scratch/egoverseS3Dataset",  # "/coc/flash7/scratch/rldb_temp"
         cache_root="/coc/flash7/scratch/.cache",
         filters={},
+        debug=False,
         **kwargs,
     ):
         temp_root += "/S3_rldb_data"
@@ -730,6 +731,7 @@ class S3RLDBDataset(MultiRLDBDataset):
             percent=percent,
             valid_ratio=valid_ratio,
             max_workers=max_workers,
+            debug=debug,
             kwargs=kwargs,
         )
 
@@ -779,7 +781,6 @@ class S3RLDBDataset(MultiRLDBDataset):
         *,
         collection_path: Path,
         embodiment: str,
-        valid_collection_names: set[str],
         local_files_only: bool,
         percent: float,
         valid_ratio: float,
@@ -796,9 +797,6 @@ class S3RLDBDataset(MultiRLDBDataset):
 
         if not collection_path.is_dir():
             return repo_id, None, "not_a_dir", None
-
-        if repo_id not in valid_collection_names:
-            return repo_id, None, "not_in_filtered_paths", None
 
         try:
             ds_obj = RLDBDataset(
@@ -836,6 +834,7 @@ class S3RLDBDataset(MultiRLDBDataset):
         percent: float,
         valid_ratio: float,
         max_workers: int,
+        debug: bool = False,
         kwargs: dict,
     ):
         """
@@ -852,6 +851,10 @@ class S3RLDBDataset(MultiRLDBDataset):
         datasets: dict[str, RLDBDataset] = {}
         skipped: list[str] = []
 
+        if debug:
+            logger.info("Debug mode: limiting to 10 datasets.")
+            valid_collection_names = set(list(valid_collection_names)[:10])
+
         def _submit_arg(p: Path):
             return dict(
                 collection_path=p,
@@ -866,7 +869,7 @@ class S3RLDBDataset(MultiRLDBDataset):
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = [
                 ex.submit(cls._load_rldb_dataset_one, **_submit_arg(p))
-                for p in all_paths
+                for p in all_paths if p.name in valid_collection_names
             ]
 
             for fut in tqdm(
