@@ -53,3 +53,5 @@ datasets==4.0.0
 s5cmd
 mediapy
 pytest
+pre-commit
+ruff

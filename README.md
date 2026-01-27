@@ -25,6 +25,7 @@ conda activate emimic
 pip install projectaria-tools'[all]'
 pip install -e external/lerobot
 pip install -e .
+pre-commit install
 ```
 # UV
 
@@ -34,13 +35,14 @@ curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR="/path/to/flash/
 ```
 
 ```
-uv venv emimic --python 3.11
-source emimic/bin/activate
 git clone git@github.com:GaTech-RL2/EgoVerse.git
 cd EgoVerse
+uv venv emimic --python 3.11
+source emimic/bin/activate
 uv pip install -r requirements.txt
 uv pip install -e external/lerobot
 uv pip install -e .
+uv run pre-commit install
 ```
 
 Set `git config --global submodule.recurse true` if you want `git pull` to automatically update the submodule as well.
