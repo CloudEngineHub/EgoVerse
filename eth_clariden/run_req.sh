@@ -115,7 +115,7 @@ if [ "$delta" = "true" ]; then
     export EXPERIMENT=${PG_CL_EXPERIMENT}_delta
 fi
 
-export hydra_run_dir=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_v2/50hz/DEBUG_cup250/${EXPERIMENT}/${task}/${task}_${frame_type}
+export hydra_run_dir=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_v2/50hz/${EXPERIMENT}/${task}/${task}_${frame_type}
 export dataset_root=/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/release_2_0/50hz/${EXPERIMENT}/${task}_lerobot_${frame_type}
 # export dataset_root=/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/debug_2_0/${task}_lerobot_${frame_type}_1_debug
 ##################################################################
