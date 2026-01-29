@@ -1119,7 +1119,7 @@ class HPT(Algo):
         unnorm_preds = {}
         for embodiment_id, _batch in batch.items():
             cam_keys = self.camera_keys[embodiment_id]
-            proprio_keys = self.proprio_keys[embodiment_id] 
+            proprio_keys = self.proprio_keys[embodiment_id]
             lang_keys = self.lang_keys[embodiment_id]
             ac_key = self.ac_keys[embodiment_id]
             embodiment_name = get_embodiment(embodiment_id).lower()
@@ -1256,7 +1256,10 @@ class HPT(Algo):
                 }
                 rkl_targets = []
 
-                if f"{embodiment_name}_{ac_key}" in preds and ac_key != self.shared_ac_key:
+                if (
+                    f"{embodiment_name}_{ac_key}" in preds
+                    and ac_key != self.shared_ac_key
+                ):
                     rkl_targets.append(
                         (
                             f"{embodiment_name}_{ac_key}",
@@ -1468,7 +1471,7 @@ class HPT(Algo):
             loss_dict["avg_feature_distance"] = predictions["avg_feature_distance"]
             total_action_loss += ot_weight * self.temperature * predictions["ot_loss"]
 
-        loss_dict["action_loss"] = total_action_loss
+        loss_dict["action_loss"] = total_action_loss / len(self.domains)
         return loss_dict
 
     @override
@@ -1487,8 +1490,6 @@ class HPT(Algo):
         log["Loss"] = info["losses"]["action_loss"].item()
         for loss_key, loss in info["losses"].items():
             log[loss_key] = loss.item()
-        if "policy_grad_norms" in info:
-            log["Policy_Grad_Norms"] = info["policy_grad_norms"]
         return log
 
     @torch.no_grad()

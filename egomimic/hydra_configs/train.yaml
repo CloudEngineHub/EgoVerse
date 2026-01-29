@@ -1,10 +1,14 @@
 defaults:
   - model: hpt_cotrain_flow_transformer
   - paths: default
-  - trainer: debug
+  - trainer: ddp
   - debug: null
   - logger: wandb
+<<<<<<< HEAD
   - data: multi_data
+=======
+  - data: eva_bc_s3
+>>>>>>> main
   - callbacks: checkpoints
   - override hydra/launcher: submitit
   - _self_
@@ -37,6 +41,7 @@ data_schematic: # Dynamically fill in these shapes from the dataset
   _target_: egomimic.rldb.utils.DataSchematic
   norm_mode: quantile
   schematic_dict:
+<<<<<<< HEAD
     # aria_right_arm:
     #   front_img_1:
     #     key_type: camera_keys
@@ -55,6 +60,18 @@ data_schematic: # Dynamically fill in these shapes from the dataset
       front_img_1:
         key_type: camera_keys
         lerobot_key: observations.images.aria_rgb_cam
+=======
+    eva_bimanual:
+      front_img_1: #batch key
+        key_type: camera_keys # key type
+        lerobot_key: observations.images.front_img_1 # dataset key
+      right_wrist_img:
+        key_type: camera_keys
+        lerobot_key: observations.images.right_wrist_img
+      left_wrist_img:
+        key_type: camera_keys
+        lerobot_key: observations.images.left_wrist_img
+>>>>>>> main
       ee_pose:
         key_type: proprio_keys
         lerobot_key: observations.state.ee_pose
@@ -70,11 +87,30 @@ data_schematic: # Dynamically fill in these shapes from the dataset
       actions_joints:
         key_type: action_keys
         lerobot_key: actions_joints
+<<<<<<< HEAD
+=======
+      actions_cartesian:
+        key_type: action_keys
+        lerobot_key: actions_cartesian
+      embodiment:
+        key_type: metadata_keys
+        lerobot_key: metadata.embodiment
+    aria_bimanual:
+      front_img_1:
+        key_type: camera_keys
+        lerobot_key: observations.images.front_img_1
+      ee_pose:
+        key_type: proprio_keys
+        lerobot_key: observations.state.ee_pose
+      actions_cartesian:
+        key_type: action_keys
+        lerobot_key: actions_cartesian
+>>>>>>> main
       embodiment:
         key_type: metadata_keys
         lerobot_key: metadata.embodiment
     mecka_bimanual:
-      base_0_rgb:
+      front_img_1:
         key_type: camera_keys
         lerobot_key: observations.images.front_img_1
       ee_pose:
@@ -93,8 +129,17 @@ data_schematic: # Dynamically fill in these shapes from the dataset
         key_type: metadata_keys
         lerobot_key: metadata.embodiment
   viz_img_key: 
+<<<<<<< HEAD
     # aria_right_arm:
     #   front_img_1
 
     eve_bimanual:
       front_img_1
+=======
+    eva_bimanual:
+      front_img_1
+    aria_bimanual:
+      front_img_1
+    mecka_bimanual:
+      front_img_1
+>>>>>>> main
