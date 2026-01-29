@@ -1315,11 +1315,6 @@ class HPT(Algo):
             np.uint8
         )
         
-        # Handle delta mode - visualization not yet implemented
-        if self.use_delta:
-            print("[visualize_preds] use_delta=True: must implement delta visualization")
-            # Continue with normal visualization (delta values will be visualized as-is)
-        
         for key in batch:
             if f"{embodiment_name}_{key}" in predictions:
                 preds = predictions[f"{embodiment_name}_{key}"]
