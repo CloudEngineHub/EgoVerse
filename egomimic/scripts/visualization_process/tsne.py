@@ -28,13 +28,16 @@ def _load_embeddings(zarr_path: Path) -> np.ndarray:
     arr = root["embeddings"]
     # Load entire array into memory for t-SNE
     x = arr[:]
+    print("x.shape =", x.shape)
     # cuML prefers float32
     if x.dtype != np.float32:
         x = x.astype(np.float32, copy=False)
     return x
 
 
-def _run_cuml_tsne(x: np.ndarray, *, perplexity: float, random_state: int) -> np.ndarray:
+def _run_cuml_tsne(
+    x: np.ndarray, *, perplexity: float, random_state: int, learning_rate: float
+) -> np.ndarray:
     try:
         from cuml import TSNE
     except Exception as e:
@@ -48,7 +51,8 @@ def _run_cuml_tsne(x: np.ndarray, *, perplexity: float, random_state: int) -> np
         perplexity=perplexity,
         random_state=random_state,
         init="random",
-        learning_rate="auto",
+        # NOTE: scikit-learn supports learning_rate="auto", but cuML expects numeric.
+        learning_rate=float(learning_rate),
     )
     y = tsne.fit_transform(x)
 
@@ -93,7 +97,7 @@ def main():
     ap.add_argument(
         "--manifest",
         type=str,
-        default="egomimic/scripts/visualization_process/data/manifest.json",
+        default="egomimic/scripts/visualization_process/fold_clothes_aria_eva_all_labs/manifest.json",
         help="Path to manifest.json produced by process_image.py",
     )
     ap.add_argument(
@@ -104,6 +108,12 @@ def main():
     )
     ap.add_argument("--out-name", type=str, default="tsne_2d", help="Dataset name to write in zarr")
     ap.add_argument("--perplexity", type=float, default=30.0)
+    ap.add_argument(
+        "--learning-rate",
+        type=float,
+        default=200.0,
+        help="cuML TSNE learning rate (must be numeric; sklearn's 'auto' is not supported).",
+    )
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--overwrite", action="store_true")
     args = ap.parse_args()
@@ -126,7 +136,9 @@ def main():
     x = _load_embeddings(zarr_path)
     print("[INFO] embeddings shape/dtype =", x.shape, x.dtype)
 
-    y2d = _run_cuml_tsne(x, perplexity=args.perplexity, random_state=args.seed)
+    y2d = _run_cuml_tsne(
+        x, perplexity=args.perplexity, random_state=args.seed, learning_rate=args.learning_rate
+    )
     print("[INFO] tsne_2d shape/dtype =", y2d.shape, y2d.dtype)
 
     _write_tsne(zarr_path, y2d=y2d, name=args.out_name, overwrite=args.overwrite)

@@ -24,12 +24,14 @@ import json
 from pathlib import Path
 from typing import Any, Dict, List
 
+import hydra
 import numpy as np
+from omegaconf import OmegaConf
 import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Subset
 
-from egomimic.rldb.utils import S3RLDBDataset
+from egomimic.rldb.utils import S3RLDBDataset, MultiRLDBDataset
 from egomimic.algo.hpt import DinoV3
 from egomimic.utils.aws.aws_sql import create_default_engine, episode_table_to_df
 
@@ -189,23 +191,48 @@ def _py_scalar(v: Any) -> Any:
     return v
 
 
+def _instantiate_hydra(cfg_path: str):
+    """
+    Instantiate a dataset from a Hydra-style YAML config.
+
+    Example:
+      cfg_path="egomimic/hydra_configs/data/viz_data.yaml"
+    """
+    try:
+        from hydra.utils import instantiate
+        from omegaconf import OmegaConf
+    except Exception as e:
+        raise RuntimeError(
+            "Hydra instantiation requires `hydra-core` and `omegaconf`."
+        ) from e
+
+    cfg = OmegaConf.load(cfg_path)
+    return instantiate(cfg)
+
+
 def _ensure_out_dir(out_dir: Path) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--embodiment", type=str, required=True, help='e.g. "eva_right_arm" or "eva_bimanual"')
-    ap.add_argument("--mode", type=str, default="total", choices=["train", "valid", "total", "percent"])
-    ap.add_argument("--percent", type=float, default=1.0, help="Used when mode=percent")
-    ap.add_argument("--filters-json", type=str, default="", help='JSON dict. Example: \'{"task":"fold clothes"}\'')
-    ap.add_argument("--cache-root", type=str, default="/coc/flash7/scratch/.cache")
-    ap.add_argument("--temp-root", type=str, default="/coc/flash7/scratch/egoverseS3Dataset")
-    ap.add_argument("--bucket", type=str, default="rldb")
-    ap.add_argument("--main-prefix", type=str, default="processed_v2")
-    ap.add_argument("--local-files-only", action="store_true", help="Use only local files after sync/download")
-    ap.add_argument("--out-dir", type=str, default="egomimic/scripts/visualization_process/data")
-
+    ap.add_argument(
+        "--embodiment",
+        type=str,
+        default="",
+        help='e.g. "eva_right_arm" or "eva_bimanual". Required unless using --data-config.',
+    )
+    ap.add_argument("--out-dir", type=str, default="egomimic/scripts/visualization_process/data2")
+    ap.add_argument(
+        "--data-config",
+        type=str,
+        default="",
+        help=(
+            "Optional Hydra YAML path for dataset instantiation, e.g. "
+            "egomimic/hydra_configs/data/viz_data.yaml. If set, the dataset is "
+            "created via hydra `instantiate()` from --data-split/--dataset-name."
+        ),
+    )
     ap.add_argument(
         "--image-keys",
         type=str,
@@ -219,10 +246,20 @@ def main():
         default="facebook/dinov3-vitl16-pretrain-lvd1689m",
         help="HuggingFace model id for DINO (e.g. facebook/dinov3-vitl16-pretrain-lvd1689m).",
     )
-    ap.add_argument("--batch-size", type=int, default=256)
-    ap.add_argument("--image-size", type=int, default=224)
+    ap.add_argument("--batch-size", type=int, default=240)
     ap.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--num-frames", type=int, default=-1, help="Limit number of frames for debugging")
+    ap.add_argument(
+        "--every-k-datapoint",
+        type=int,
+        default=15,
+        help="Keep only every k-th datapoint (0,k,2k,...) to reduce compute. Set to 1 to keep all.",
+    )
+    ap.add_argument(
+        "--debug-first-batch",
+        action="store_true",
+        help="Process/save only the first batch, then exit (useful for debugging).",
+    )
 
     ap.add_argument(
         "--embed-store",
@@ -239,17 +276,60 @@ def main():
     out_dir = Path(args.out_dir)
     _ensure_out_dir(out_dir)
 
-    filters = _parse_json_or_empty(args.filters_json)
-    filters = {"task": "fold_clothes"}
 
-    # Instantiation triggers S3 sync + local load.
-    ds = S3RLDBDataset(embodiment=args.embodiment, mode="total", filters=filters)
+    # Dataset instantiation
+    # If --data-config is provided, treat it as a MultiDataModuleWrapper-style config
+    # and ONLY use its train_datasets (ignore valid_datasets entirely).
+    dataset_dict: Dict[str, torch.utils.data.Dataset] = {}
+    if args.data_config:
+        cfg = OmegaConf.load(args.data_config)
+        cfg_data = cfg.data if ("data" in cfg and "train_datasets" in cfg.data) else cfg
+        if "train_datasets" not in cfg_data:
+            raise KeyError(
+                "Expected 'train_datasets' in --data-config (or in data.train_datasets)."
+            )
+        for dataset_name, ds_cfg in cfg_data.train_datasets.items():
+            dataset_dict[str(dataset_name)] = hydra.utils.instantiate(ds_cfg)
+    else:
+        # CLI-configured dataset; instantiation triggers S3 sync + local load.
+        if not args.embodiment:
+            raise ValueError("--embodiment is required when not using --data-config")
+        filters = {"task": "fold_clothes"}
+        ds = S3RLDBDataset(embodiment=args.embodiment, mode="total", filters=filters)
+        dataset_dict[str(args.embodiment)] = ds
 
-    n_total = len(ds)
-    if args.num_frames > 0:
-        n_total = min(n_total, args.num_frames)
+    if not dataset_dict:
+        raise RuntimeError("No datasets were instantiated.")
 
-    print(f"[INFO] Dataset loaded: {len(ds)} frames total; processing {n_total} frames")
+    dataset_names = list(dataset_dict.keys())
+
+    # Compute effective per-dataset lengths + global offsets into the shared embedding array
+    per_dataset_n: Dict[str, int] = {}
+    per_dataset_offset: Dict[str, int] = {}
+    per_dataset_keep_indices: Dict[str, List[int]] = {}
+    running = 0
+    k_stride = int(args.every_k_datapoint)
+    if k_stride <= 0:
+        k_stride = 1
+    for dataset_name in dataset_names:
+        ds_i = dataset_dict[dataset_name]
+        n_i = len(ds_i)
+        if args.num_frames > 0:
+            n_i = min(n_i, args.num_frames)
+        if args.debug_first_batch:
+            n_i = min(n_i, args.batch_size)
+        keep_idx = list(range(0, n_i, k_stride))
+        per_dataset_keep_indices[dataset_name] = keep_idx
+        per_dataset_offset[dataset_name] = running
+        per_dataset_n[dataset_name] = len(keep_idx)
+        running += len(keep_idx)
+
+    n_total = running
+    print(
+        "[INFO] Using {} train datasets; total frames to process = {}".format(
+            len(dataset_names), n_total
+        )
+    )
 
     # Model (HPT DinoV3 stem + HF processor)
     # If the CLI flag was removed, default to 1024 (common for ViT-L features).
@@ -259,7 +339,7 @@ def main():
     )
 
     # Probe embedding dim
-    first = ds[0]
+    first = dataset_dict[dataset_names[0]][0]
     probe_key = args.image_keys[0]
     if probe_key not in first:
         raise KeyError(
@@ -309,17 +389,6 @@ def main():
     # Metadata rows (we’ll write parquet at the end; for huge datasets you can switch to incremental writing)
     meta_rows: List[Dict[str, Any]] = []
 
-    # Batch loop
-    bs = args.batch_size
-    ds_for_loader = ds if n_total == len(ds) else Subset(ds, range(n_total))
-    loader = DataLoader(
-        ds_for_loader,
-        batch_size=bs,
-        shuffle=False,
-        num_workers=0,
-        collate_fn=lambda batch: batch,  # keep list[dict] (no tensor stacking)
-    )
-
     engine = create_default_engine()
     df = episode_table_to_df(engine)
     # Cache episode-level DB metadata by episode_hash for fast per-frame lookup.
@@ -334,64 +403,90 @@ def main():
             # store sanitized scalars
             episode_meta_by_hash[str(ep_hash)] = {k: _py_scalar(v) for k, v in row.items()}
 
-    
-    for batch_idx, batch_samples in enumerate(loader):
-        start = batch_idx * bs
-        end = start + len(batch_samples)
+    # Batch loop across train datasets, writing into one shared embeddings array per image key
+    bs = args.batch_size
+    processed = 0
+    for dataset_name in dataset_names:
+        ds = dataset_dict[dataset_name]
+        keep_idx = per_dataset_keep_indices[dataset_name]
+        n_eff = len(keep_idx)
+        offset = per_dataset_offset[dataset_name]
 
-        # NOTE: In this codebase, `ds.index_map` is treated as batch-indexed.
-        # We therefore resolve the episode_hash once per batch and attach the same
-        # episode-level DB metadata to each sample in the batch.
-        batch_episode_hash = None
-        batch_db_row = None
-        try:
-            dataset_name, _ = ds.index_map[batch_idx]
-            batch_episode_hash = str(dataset_name)
-            batch_db_row = episode_meta_by_hash.get(batch_episode_hash)
-        except Exception:
-            pass
+        # Only load/process the kept indices (efficient: filters before model forward)
+        ds_for_loader = ds if (n_eff == len(ds) and keep_idx == list(range(len(ds)))) else Subset(ds, keep_idx)
+        loader = DataLoader(
+            ds_for_loader,
+            batch_size=bs,
+            shuffle=False,
+            num_workers=8,
+            collate_fn=lambda batch: batch,  # keep list[dict] (no tensor stacking)
+        )
 
-        # metadata
-        for i, sample in enumerate(batch_samples):
-            m = _flatten_metadata(sample)
-            # Add indexing to allow joining back to embeddings
-            if batch_episode_hash is not None:
-                m["episode_hash"] = batch_episode_hash
-            
-            global_index = start + i
-            m["embedding_global_index"] = global_index
+        for batch_idx, batch_samples in enumerate(loader):
+            start = batch_idx * bs
+            end = start + len(batch_samples)
+            global_start = offset + start
+            global_end = offset + end
 
-            # Attach episode-level DB metadata (same for all frames in an episode)
-            if batch_db_row:
-                for k, v in batch_db_row.items():
-                    if k == "episode_hash":
-                        continue
-                    m[f"{k}"] = v
+            # metadata
+            for i, sample in enumerate(batch_samples):
+                m = _flatten_metadata(sample)
+                m["dataset_name"] = dataset_name
+                m["dataset_offset"] = offset
+                # Index within the Subset (i.e., after every-k subsample), then map back
+                # to the original dataset index.
+                subset_pos = batch_idx * bs + i  # == start + i
+                orig_ds_idx = keep_idx[subset_pos] if subset_pos < len(keep_idx) else subset_pos
+                m["dataset_local_index"] = int(orig_ds_idx)
+                m["embedding_global_index"] = int(global_start + i)
 
-            meta_rows.append(m)
+                # Per-sample index_map lookup (batch may span multiple episodes).
+                try:
+                    idx_map_name, _ = ds.index_map[int(orig_ds_idx)]
+                    if isinstance(idx_map_name, MultiRLDBDataset):
+                        raise ValueError("idx_map_name is a MultiRLDBDataset, which is not supported")
+                    ep_hash = str(idx_map_name)
+                    m["episode_hash"] = ep_hash
 
-        # embeddings per image key
-        for key in args.image_keys:
-            imgs_bchw = []
-            for sample in batch_samples:
-                if key not in sample:
-                    raise KeyError(
-                        f"Missing image key '{key}' in sample. Keys: {list(sample.keys())[:30]}"
-                    )
-                imgs_bchw.append(_image_to_torch_uint8_bchw(sample[key]))
-            img_bchw = torch.cat(imgs_bchw, dim=0)  # uint8 BCHW on CPU
-            images_hwc = _bchw_u8_to_list_hwc_u8(img_bchw)  # list[np.uint8 HWC]
-            emb_t = _embed_batch_dinov3(processor, stem, images_hwc, args.device)
-            emb = emb_t.detach().cpu().numpy().astype(embed_dtype, copy=False)
+                    # Attach episode-level DB metadata (same for all frames in an episode)
+                    db_row = episode_meta_by_hash.get(ep_hash)
+                    if db_row:
+                        for k, v in db_row.items():
+                            if k == "episode_hash":
+                                continue
+                            m[str(k)] = v
+                except Exception:
+                    pass
 
-            writer = embed_writers[key]
-            if args.embed_store == "npy":
-                writer[start:end, :] = emb
-            else:
-                writer[start:end, :] = emb
+                meta_rows.append(m)
 
-        if (start // bs) % 10 == 0:
-            print(f"[INFO] Processed {end}/{n_total}")
+            # embeddings per image key
+            for key in args.image_keys:
+                imgs_bchw = []
+                for sample in batch_samples:
+                    if key not in sample:
+                        raise KeyError(
+                            f"Missing image key '{key}' in sample. Keys: {list(sample.keys())[:30]}"
+                        )
+                    imgs_bchw.append(_image_to_torch_uint8_bchw(sample[key]))
+                img_bchw = torch.cat(imgs_bchw, dim=0)  # uint8 BCHW on CPU
+                images_hwc = _bchw_u8_to_list_hwc_u8(img_bchw)  # list[np.uint8 HWC]
+                emb_t = _embed_batch_dinov3(processor, stem, images_hwc, args.device)
+                emb = emb_t.detach().cpu().numpy().astype(embed_dtype, copy=False)
+
+                writer = embed_writers[key]
+                writer[global_start:global_end, :] = emb
+
+            processed = global_end
+            if (processed // bs) % 10 == 0:
+                print(f"[INFO] Processed {processed}/{n_total}")
+
+            if args.debug_first_batch:
+                print("[DEBUG] Exiting after first batch (--debug-first-batch).")
+                break
+
+        if args.debug_first_batch:
+            break
 
     # Finalize memmaps
     if args.embed_store == "npy":
@@ -411,8 +506,16 @@ def main():
         "image_keys": list(args.image_keys),
         "embed_store": args.embed_store,
         "embed_dtype": args.embed_dtype,
+        "every_k_datapoint": int(args.every_k_datapoint),
         "embeddings": {k: str(p) for k, p in embed_paths.items()},
         "metadata_parquet": str(meta_path),
+        "datasets": {
+            name: {
+                "n_frames": int(per_dataset_n[name]),
+                "offset": int(per_dataset_offset[name]),
+            }
+            for name in dataset_names
+        },
     }
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2))
 
