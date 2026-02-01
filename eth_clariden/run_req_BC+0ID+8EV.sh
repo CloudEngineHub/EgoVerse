@@ -42,6 +42,9 @@ export MASTER_PORT=12345   # Choose an unused port
 export WORLD_SIZE=$(( SLURM_NNODES * SLURM_NTASKS_PER_NODE ))
 export NCCL_NET="AWS Libfabric"
 
+# Speed up dataset loading
+export RLDB_LOAD_WORKERS=32                # Parallel dataset loading threads (default 10)
+export HF_HUB_DISABLE_PROGRESS_BARS=1      # Disable progress bars
 
 # Print job information
 echo "Job started at: $(date)"
@@ -79,7 +82,8 @@ else
     export logger=wandb
 fi
 
-export config_name=train_eth_${arm}
+export config_name=train_eth_${arm}_BC_aria
+
 export ckpt_path=${hydra_run_dir}/checkpoints/last.ckpt
 # export ckpt_path='/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_v2/50hz/pg2_cl75_clout100/cup/cup_base_frame/checkpoints/epoch_epoch=799.ckpt' # INCASE WE NEED TO USE A SPECIFIC CHECKPOINT
 ckpt_path=$( [[ -f "$ckpt_path" ]] && echo "\\\"$ckpt_path\\\"" || echo null )

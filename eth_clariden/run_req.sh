@@ -42,6 +42,9 @@ export MASTER_PORT=12345   # Choose an unused port
 export WORLD_SIZE=$(( SLURM_NNODES * SLURM_NTASKS_PER_NODE ))
 export NCCL_NET="AWS Libfabric"
 
+# Speed up dataset loading
+export RLDB_LOAD_WORKERS=32                # Parallel dataset loading threads (default 10)
+export HF_HUB_DISABLE_PROGRESS_BARS=1      # Disable progress bars
 
 # Print job information
 echo "Job started at: $(date)"
