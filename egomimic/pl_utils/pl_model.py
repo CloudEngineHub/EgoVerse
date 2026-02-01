@@ -165,6 +165,9 @@ class ModelWrapper(LightningModule):
 
         ## images is now a dict
         for key, images in images_dict.items():
+            # ETH: skip making folder and images for ARIA embodiment
+            if 'ARIA' in str(get_embodiment(key)): continue
+            
             os.makedirs(
                 os.path.join(
                     self.video_dir(),
