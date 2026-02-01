@@ -1,8 +1,8 @@
 defaults:
-  - hpt_cotrain_enc_dec_base_eth_right_arm
+  - hpt_cotrain_enc_dec_base_eth_right_arm_BC_aria
 
 robomimic_model:
-  domains: ["eve_right_arm"]
+  domains: ["eve_right_arm", "aria_right_arm"]
   diffusion: true 
   head_specs:
     shared: null
@@ -40,6 +40,26 @@ robomimic_model:
         cond_dim: 256
         hidden_dim: 128
         act_dim: 17
+        act_seq: 100
+        n_heads: 4
+        dropout: 0.1
+        mlp_layers: 4
+        mlp_ratio: 4
+
+    aria_right_arm: 
+      _target_: egomimic.models.fm_policy.FMPolicy
+      action_horizon: 100
+      num_inference_steps: 50
+      pooling: null
+      time_dist: "beta"
+      infer_ac_dims:
+        aria_right_arm: 6
+      model:
+        _target_: egomimic.models.denoising_nets.CrossTransformer
+        nblocks: 6
+        cond_dim: 256
+        hidden_dim: 128
+        act_dim: 6
         act_seq: 100
         n_heads: 4
         dropout: 0.1
