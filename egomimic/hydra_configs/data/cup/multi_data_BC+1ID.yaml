@@ -1,0 +1,86 @@
+_target_: egomimic.pl_utils.pl_data_utils.MultiDataModuleWrapper
+train_datasets:
+  dataset1:
+    _target_: rldb.utils.MultiRLDBDataset
+    datasets:
+      original:
+        _target_: rldb.utils.RLDBDataset
+        repo_id: "cup_lerobot_base_frame1"
+        root: "/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/release_2_0/50hz/pg1_cl75_clout100/redo_original/cup_lerobot_base_frame"
+        local_files_only: True
+        mode: "train"
+      additional:
+        _target_: rldb.utils.RLDBDataset
+        repo_id: "cup_lerobot_base_frame2"
+        root: "/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/release_2_0/50hz/pg1_cl75_clout100/redo_additional/cup_lerobot_base_frame"
+        local_files_only: True
+        mode: "train"
+    embodiment: "eve_bimanual"
+
+  dataset2:
+    _target_: egomimic.rldb.utils.MultiRLDBDataset
+    datasets:
+      indomain:
+        _target_: egomimic.rldb.utils.S3RLDBDataset
+        bucket_name: "rldb"
+        mode: "train"
+        embodiment: "aria_bimanual"
+        filters: 
+          task: "cup_on_saucer_in_domain"
+          lab: "eth"
+        local_files_only: True
+        valid_ratio: 0.6
+    embodiment: "aria_bimanual"
+
+valid_datasets:
+  dataset1:
+    _target_: rldb.utils.MultiRLDBDataset
+    datasets:
+      original:
+        _target_: rldb.utils.RLDBDataset
+        repo_id: "cup_lerobot_base_frame3"
+        root: "/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/release_2_0/50hz/pg1_cl75_clout100/redo_original/cup_lerobot_base_frame"
+        local_files_only: True
+        mode: "valid"
+      additional:
+        _target_: rldb.utils.RLDBDataset
+        repo_id: "cup_lerobot_base_frame4"
+        root: "/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/release_2_0/50hz/pg1_cl75_clout100/redo_additional/cup_lerobot_base_frame"
+        local_files_only: True
+        mode: "valid"
+    embodiment: "eve_bimanual"
+
+  dataset2:
+    _target_: egomimic.rldb.utils.MultiRLDBDataset
+    datasets:
+      indomain:
+        _target_: egomimic.rldb.utils.S3RLDBDataset
+        bucket_name: "rldb"
+        mode: "valid"
+        embodiment: "aria_bimanual"
+        filters: 
+          task: "cup_on_saucer_in_domain"
+          lab: "eth"
+        local_files_only: True
+        valid_ratio: 0.6
+    embodiment: "aria_bimanual"
+
+train_dataloader_params:
+  dataset1:
+    batch_size: 32
+    num_workers: 20
+    prefetch_factor: 4  # Number of batches loaded in advance by each worker
+  # dataset2:
+  #   batch_size: 32
+  #   num_workers: 10
+  #   prefetch_factor: 2
+
+valid_dataloader_params:
+  dataset1:
+    batch_size: 32
+    num_workers: 20
+    prefetch_factor: 4  # Number of batches loaded in advance by each worker
+  # dataset2:
+  #   batch_size: 32
+  #   num_workers: 10
+  #   prefetch_factor: 2
