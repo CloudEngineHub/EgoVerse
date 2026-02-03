@@ -249,12 +249,57 @@ class S3EpisodeResolver(EpisodeResolver):
         return paths
 
     @classmethod
+    def episode_already_present_for_progress_bar(
+        cls, local_dir: Path, episode_hash: str
+    ) -> bool:
+        """True if this episode is already on disk. For progress bar polling only."""
+        return cls._episode_already_present(local_dir, episode_hash)
+
+    @classmethod
+    def get_to_sync_paths_for_progress_bar(
+        cls,
+        filters: dict,
+        local_dir: Path,
+        debug: bool = False,
+    ) -> tuple[list[tuple[str, str]], list[str]]:
+        """
+        Resolve DB filter and split into to_sync vs already present.
+        For progress bar only: use this to get total count and list before running sync in a thread.
+        Returns (to_sync, already) where to_sync is list of (processed_path, episode_hash).
+        """
+        filtered_paths = cls._get_filtered_paths(filters, debug=debug)
+        to_sync = []
+        already = []
+        for processed_path, episode_hash in filtered_paths:
+            if cls._episode_already_present(local_dir, episode_hash):
+                already.append(episode_hash)
+            else:
+                to_sync.append((processed_path, episode_hash))
+        return (to_sync, already)
+
+    @classmethod
+    def run_sync_for_progress_bar(
+        cls,
+        bucket_name: str,
+        to_sync: list[tuple[str, str]],
+        local_dir: Path,
+        numworkers: int = 128,
+    ) -> None:
+        """Run s5cmd sync for the given to_sync list. For progress bar: call this in a background thread."""
+        cls._sync_s3_to_local(
+            bucket_name=bucket_name,
+            s3_paths=to_sync,
+            local_dir=local_dir,
+            numworkers=numworkers,
+        )
+
+    @classmethod
     def _sync_s3_to_local(
         cls,
         bucket_name: str,
         s3_paths: list[tuple[str, str]],
         local_dir: Path,
-        numworkers: int = 10,
+        numworkers: int = 128,
     ):
         if not s3_paths:
             return
@@ -304,18 +349,12 @@ class S3EpisodeResolver(EpisodeResolver):
 
             load_env()
             rl2_endpoint_url = os.environ.get("R2_ENDPOINT_URL")
-            access_key_id = os.environ.get("R2_ACCESS_KEY_ID")
-            secret_access_key = os.environ.get("R2_SECRET_ACCESS_KEY")
-            if not all([rl2_endpoint_url, access_key_id, secret_access_key]):
-                raise ValueError(
-                    "R2 credentials missing. Ensure ~/.egoverse_env has "
-                    "R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY."
-                )
-            s5cmd_env = os.environ.copy()
-            s5cmd_env["AWS_ACCESS_KEY_ID"] = access_key_id
-            s5cmd_env["AWS_SECRET_ACCESS_KEY"] = secret_access_key
-            s5cmd_env["AWS_DEFAULT_REGION"] = "auto"
-            s5cmd_env["AWS_REGION"] = "auto"
+            access_key_id = os.environ["R2_ACCESS_KEY_ID"]
+            secret_access_key = os.environ["R2_SECRET_ACCESS_KEY"]
+            os.environ["AWS_ACCESS_KEY_ID"] = access_key_id
+            os.environ["AWS_SECRET_ACCESS_KEY"] = secret_access_key
+            os.environ["AWS_DEFAULT_REGION"] = "auto"
+            os.environ["AWS_REGION"] = "auto"
             cmd = [
                 "s5cmd",
                 "--endpoint-url",
@@ -325,8 +364,25 @@ class S3EpisodeResolver(EpisodeResolver):
                 "run",
                 str(batch_path),
             ]
-            logger.info("Running s5cmd batch (%d lines): %s", len(lines), " ".join(cmd))
-            subprocess.run(cmd, check=True, env=s5cmd_env)
+            # Uncomment to log downloads
+            # logger.info(
+            #     "Running s5cmd batch (%d episodes to sync, numworkers=%s): %s",
+            #     len(lines),
+            #     numworkers,
+            #     " ".join(cmd),
+            # )
+            result = subprocess.run(
+                cmd,
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            if result.returncode != 0:
+                err = (result.stderr or "").strip()
+                raise subprocess.CalledProcessError(
+                    result.returncode, cmd, stderr=err or None
+                )
 
         finally:
             try:
@@ -341,17 +397,17 @@ class S3EpisodeResolver(EpisodeResolver):
         bucket_name: str,
         filters: dict,
         local_dir: Path,
-        numworkers: int = 10,
+        numworkers: int = 128,
         debug: bool = False,
     ):
         """
         Public API:
         - resolves episodes from DB using filters
         - runs a single aws s3 sync with includes
-        - downloads into local_dir
+        - downloads into local_dir (skips episodes already present locally)
 
         Args:
-            numworkers: Number of parallel workers for s5cmd.
+            numworkers: Number of parallel workers for s5cmd (default 128).
 
         Returns:
             List[(processed_path, episode_hash)]
@@ -368,11 +424,12 @@ class S3EpisodeResolver(EpisodeResolver):
             f"Syncing S3 datasets with filters {filters} to local directory {local_dir}..."
         )
 
-        # 3) Sync
+        # 3) Sync (already-present episodes are skipped inside _sync_s3_to_local)
         cls._sync_s3_to_local(
             bucket_name=bucket_name,
             s3_paths=filtered_paths,
             local_dir=local_dir,
+            numworkers=numworkers,
             numworkers=numworkers,
         )
 
