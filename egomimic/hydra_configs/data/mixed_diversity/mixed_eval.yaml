@@ -12,22 +12,22 @@ valid_datasets:
         local_files_only: True
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
         filters: {lab: "song", task: "fold clothes"}
-      lab2:
-        _target_: egomimic.rldb.utils.S3RLDBDataset
-        bucket_name: "rldb"
-        mode: valid
-        embodiment: "aria_bimanual"
-        local_files_only: True
-        temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
-        filters: {lab: "wang", task: "fold clothes"}
-      lab3:
-        _target_: egomimic.rldb.utils.S3RLDBDataset
-        bucket_name: "rldb"
-        mode: valid
-        embodiment: "aria_bimanual"
-        local_files_only: True
-        temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
-        filters: {lab: "eth", task: "fold clothes"}
+      # lab2:
+      #   _target_: egomimic.rldb.utils.S3RLDBDataset
+      #   bucket_name: "rldb"
+      #   mode: valid
+      #   embodiment: "aria_bimanual"
+      #   local_files_only: True
+      #   temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+      #   filters: {lab: "wang", task: "fold clothes"}
+      # lab3:
+      #   _target_: egomimic.rldb.utils.S3RLDBDataset
+      #   bucket_name: "rldb"
+      #   mode: valid
+      #   embodiment: "aria_bimanual"
+      #   local_files_only: True
+      #   temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
+      #   filters: {lab: "eth", task: "fold clothes"}
 
     embodiment: "aria_bimanual"
 

@@ -2,7 +2,7 @@
 #SBATCH --job-name=scene_diversity_8_30
 #SBATCH --output=sbatch_logs/scene_diversity_8_30.out
 #SBATCH --error=sbatch_logs/scene_diversity_8_30.err
-#SBATCH --partition="rl2-lab"
+#SBATCH --partition="overcap"
 #SBATCH --account="rl2-lab"
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -21,20 +21,19 @@ echo "Using node: $SLURM_NODELIST, GPUs per node: $NUM_GPUS_PER_NODE, total GPUs
 # Set PyTorch memory allocation to reduce fragmentation
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-python egomimic/trainHydra.py \
-    --config-name=train.yaml \
-    data=scene_diversity/scene_diversity_8_30 \
-    logger.wandb.project=everse_scenes_diveristy_fold_clothes \
-    name=fold-clothes \
-    description=scenes-8-time-30 \
-    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/scene_diversity/scenes-8-time-30_2026-01-21_21-36-39/everse_scenes_diveristy_fold_clothes/fold-clothes_scenes-8-time-30_2026-01-21_21-36-39/checkpoints/last.ckpt
-
 # python egomimic/trainHydra.py \
 #     --config-name=train.yaml \
-#     data=scene_diversity/scene_eval \
-#     logger.wandb.project=everse_scene_diversity_fold_clothes \
-#     name=eval-fold-clothes-scene-diversity \
+#     data=scene_diversity/scene_diversity_8_30 \
+#     logger.wandb.project=everse_scenes_diveristy_fold_clothes \
+#     name=fold-clothes \
 #     description=scenes-8-time-30 \
-#     train=false \
-#     validate=true \
-#     ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/scene_diversity/scenes-8-time-30_2026-01-21_21-36-39/everse_scenes_diveristy_fold_clothes/fold-clothes_scenes-8-time-30_2026-01-21_21-36-39/checkpoints/last.ckpt
+
+python egomimic/trainHydra.py \
+    --config-name=train.yaml \
+    data=scene_diversity/scene_eval \
+    logger.wandb.project=everse_scene_diversity_fold_clothes \
+    name=eval-fold-clothes-scene-diversity \
+    description=scenes-8-time-30 \
+    train=false \
+    validate=true \
+    ckpt_path="/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/scene_diversity/scenes-8-time-30_2026-01-26_13-55-44/checkpoints/epoch_epoch\=1999.ckpt"

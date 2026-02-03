@@ -2,11 +2,11 @@
 #SBATCH --job-name=scene_diversity_2_7_5
 #SBATCH --output=sbatch_logs/scene_diversity_2_7_5.out
 #SBATCH --error=sbatch_logs/scene_diversity_2_7_5.err
-#SBATCH --partition="overcap"
-#SBATCH --account="rl2-lab"
+#SBATCH --partition="hoffman-lab"
+#SBATCH --account="hoffman-lab"
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=12
+#SBATCH --cpus-per-task=8
 #SBATCH --gpus-per-node="a40:1"
 #SBATCH --qos="short"
 #SBATCH --exclude="clippy"
@@ -36,4 +36,4 @@ python egomimic/trainHydra.py \
     description=scenes-2-time-7_5 \
     train=false \
     validate=true \
-    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/scene_diversity/scenes-2-time-7_5_2026-01-21_22-00-34/everse_scenes_diveristy_fold_clothes/fold-clothes_scenes-2-time-7_5_2026-01-21_22-00-34/checkpoints/last.ckpt
+    ckpt_path="/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/scene_diversity/scenes-2-time-7_5_2026-01-21_22-00-34/everse_scenes_diveristy_fold_clothes/fold-clothes_scenes-2-time-7_5_2026-01-21_22-00-34/checkpoints/last.ckpt"

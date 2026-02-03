@@ -108,7 +108,7 @@ def main():
     """Main function to extract metrics and create tables."""
     
     # Source directory with experiment results
-    source_dir = Path("/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/scene_diversity")
+    source_dir = Path("/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/eval-fold-clothes-scene-diversity-ood-1")
     
     # Output directory for CSV files
     output_dir = Path("/coc/flash7/bli678/Shared/EgoVerse/results/scene_diversity_fold_clothes")

@@ -2,8 +2,8 @@
 #SBATCH --job-name=mixed_diversity_6_8_5
 #SBATCH --output=sbatch_logs/mixed_diversity_6_8_5.out
 #SBATCH --error=sbatch_logs/mixed_diversity_6_8_5.err
-#SBATCH --partition="overcap"
-#SBATCH --account="rl2-lab"
+#SBATCH --partition="hoffman-lab"
+#SBATCH --account="hoffman-lab"
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=12
@@ -36,4 +36,4 @@ python egomimic/trainHydra.py \
     description=6-8-5 \
     train=false \
     validate=true \
-    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/mixed_diversity/mixed-diversity-6-8-5_2026-01-23_02-21-19/checkpoints/last.ckpt
+    ckpt_path="/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/mixed_diversity/mixed-diversity-6-8-5_2026-01-23_02-21-19/checkpoints/epoch_epoch\=1399.ckpt"

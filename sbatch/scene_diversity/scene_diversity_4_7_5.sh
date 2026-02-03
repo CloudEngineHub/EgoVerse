@@ -36,4 +36,4 @@ python egomimic/trainHydra.py \
     description=scenes-4-time-7_5 \
     train=false \
     validate=true \
-    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/scene_diversity/scenes-4-time-7_5_2026-01-21_21-57-56/everse_scenes_diveristy_fold_clothes/fold-clothes_scenes-4-time-7_5_2026-01-21_21-57-56/checkpoints/last.ckpt
+    ckpt_path="/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/scene_diversity/scenes-4-time-7_5_2026-01-21_21-57-56/everse_scenes_diveristy_fold_clothes/fold-clothes_scenes-4-time-7_5_2026-01-21_21-57-56/checkpoints/last.ckpt"

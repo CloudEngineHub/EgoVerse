@@ -2,7 +2,7 @@
 #SBATCH --job-name=scene_diversity_16_15
 #SBATCH --output=sbatch_logs/scene_diversity_16_15.out
 #SBATCH --error=sbatch_logs/scene_diversity_16_15.err
-#SBATCH --partition="overcap"
+#SBATCH --partition="rl2-lab"
 #SBATCH --account="rl2-lab"
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
@@ -36,4 +36,4 @@ python egomimic/trainHydra.py \
     description=scenes-16-time-15 \
     train=false \
     validate=true \
-    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/scene_diversity/scenes-16-time-15_2026-01-23_00-06-01/checkpoints/last.ckpt
+    ckpt_path="/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/scene_diversity/scenes-16-time-15_2026-01-23_00-06-01/checkpoints/epoch_epoch\=1999.ckpt"

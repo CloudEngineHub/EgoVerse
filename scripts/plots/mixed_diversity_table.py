@@ -175,7 +175,7 @@ def main():
     print(f"Found {len(metrics_by_config)} experiment configurations")
     
     # Define expected scenes and operators
-    expected_scenes = [4, 6, 8]
+    expected_scenes = [4, 5, 6, 7, 8]
     expected_operators = [4, 8]
     
     # Report which configurations were found

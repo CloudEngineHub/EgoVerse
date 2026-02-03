@@ -2,12 +2,12 @@
 #SBATCH --job-name=mixed_diversity_4_4_15
 #SBATCH --output=sbatch_logs/mixed_diversity_4_4_15.out
 #SBATCH --error=sbatch_logs/mixed_diversity_4_4_15.err
-#SBATCH --partition="rl2-lab"
-#SBATCH --account="rl2-lab"
+#SBATCH --partition="hoffman-lab"
+#SBATCH --account="hoffman-lab"
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --gpus-per-node="l40s:1"
+#SBATCH --gpus-per-node="a40:1"
 #SBATCH --qos="short"
 #SBATCH --exclude="clippy"
 
@@ -36,4 +36,4 @@ python egomimic/trainHydra.py \
     description=4-4-15 \
     train=false \
     validate=true \
-    ckpt_path=/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/mixed_diversity/mixed-diversity-4-4-15_2026-01-23_02-19-57/checkpoints/last.ckpt
+    ckpt_path="/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/mixed_diversity/mixed-diversity-4-4-15_2026-01-23_02-19-57/checkpoints/epoch_epoch\=1999.ckpt"

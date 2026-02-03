@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=mixed_diversity_8_8_3_75
-#SBATCH --output=sbatch_logs/mixed_diversity_8_8_3_75.out
-#SBATCH --error=sbatch_logs/mixed_diversity_8_8_3_75.err
+#SBATCH --job-name=mixed_diversity_5_4_12_5
+#SBATCH --output=sbatch_logs/mixed_diversity_5_4_12_5.out
+#SBATCH --error=sbatch_logs/mixed_diversity_5_4_12_5.err
 #SBATCH --partition="hoffman-lab"
 #SBATCH --account="hoffman-lab"
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=12
+#SBATCH --cpus-per-task=8
 #SBATCH --gpus-per-node="a40:1"
 #SBATCH --qos="short"
 #SBATCH --exclude="clippy"
@@ -23,17 +23,17 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
 # python egomimic/trainHydra.py \
 #     --config-name=train.yaml \
-#     data=mixed_diversity/mixed_diversity_8_8_3_75 \
+#     data=mixed_diversity/mixed_diversity_4_4_15 \
 #     logger.wandb.project=everse_mixed_diversity_fold_clothes \
 #     name=fold-clothes \
-#     description=mixed-diversity-8-8-3-75
+#     description=mixed-diversity-4-4-15
 
 python egomimic/trainHydra.py \
     --config-name=train.yaml \
     data=mixed_diversity/mixed_eval \
     logger.wandb.project=everse_mixed_diversity_fold_clothes \
     name=eval-fold-clothes-mixed-diversity \
-    description=8-8-3-75 \
+    description=5-4-12_5 \
     train=false \
     validate=true \
-    ckpt_path="/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold_clothes/mixed_diversity/mixed-diversity-8-8-3-75_2026-01-23_02-22-38/checkpoints/epoch_epoch\=1399.ckpt"
+    ckpt_path="/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/fold-clothes/mixed-diversity-5-4-12_5_2026-01-28_03-08-26/0/checkpoints/epoch_epoch\=1399.ckpt"
