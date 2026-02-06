@@ -137,19 +137,19 @@ valid_datasets:
 train_dataloader_params:
   dataset1:
     batch_size: 32
-    num_workers: 20
-    prefetch_factor: 4
+    num_workers: 10
+    prefetch_factor: 2
   dataset2:
     batch_size: 32
-    num_workers: 20
-    prefetch_factor: 4
+    num_workers: 10
+    prefetch_factor: 2
 
 valid_dataloader_params:
   dataset1:
     batch_size: 32
-    num_workers: 20
-    prefetch_factor: 4
+    num_workers: 10
+    prefetch_factor: 2
   dataset2:
     batch_size: 32
-    num_workers: 20
-    prefetch_factor: 4
+    num_workers: 10
+    prefetch_factor: 2

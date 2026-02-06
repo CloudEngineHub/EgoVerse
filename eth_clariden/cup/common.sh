@@ -11,13 +11,19 @@ ulimit -c 0
 : "${VARIANT:?VARIANT must be set}"
 : "${DATA_CONFIG:?DATA_CONFIG must be set}"
 : "${CONFIG_SUFFIX:?CONFIG_SUFFIX must be set (use _BC or _BC_aria)}"
-: "${SBATCH_TIME:?SBATCH_TIME must be set}"
 : "${RLDB_WORKERS:?RLDB_WORKERS must be set}"
+: "${frame_type:?frame_type must be set (base_frame, cam_frame, or ee_frame)}"
 
+# Resolve data config path for clickable link
+export DATA_CONFIG_PATH="/capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/egomimic/hydra_configs/data/${DATA_CONFIG}.yaml"
+
+export PG=${PG:-1}
+export CL=${CL:-75}
+export CL_OUT=${CL_OUT:-100}
 echo $PG # POINT_GAP_ACT
 echo $CL # CHUNK_LENGTH_ACT, need to change action horizon
 echo $CL_OUT # CHUNK_LENGTH_ACT_OUT, need to change action horizon
-if [ "$CL_OUT" = "None" ]; then
+if [ -z "$CL_OUT" ] || [ "$CL_OUT" = "None" ]; then
     export PG_CL_EXPERIMENT=pg${PG}_cl${CL}
 else
     export PG_CL_EXPERIMENT=pg${PG}_cl${CL}_clout${CL_OUT}
@@ -55,13 +61,14 @@ nvidia-smi --query-gpu=memory.total --format=csv
 
 ##################### SET THESE VARIABLES #####################
 export task=cup
-export frame_type=base_frame
 export arm=bimanual # right_arm, left_arm, bimanual
+# frame_type is set in run_*.sh (base_frame, cam_frame, or ee_frame)
 # debug is set via --debug flag in the variant script
 
-export quat=false
-export actions_for_qpos=false
-# export delta=false
+# Defaults (can be overridden in run_*.sh before sourcing common.sh)
+export quat=${quat:-false}
+export actions_for_qpos=${actions_for_qpos:-false}
+export delta=${delta:-false}
 ###############################################################
 
 # Set ee_pose_dim based on arm type and quat
@@ -80,26 +87,9 @@ else
 fi
 export joint_dim=34
 
-# Build description from enabled flags
-description=""
-[ "$quat" = "true" ] && description="${description}quat_"
-[ "$actions_for_qpos" = "true" ] && description="${description}actions_for_qpos_"
-[ "$delta" = "true" ] && description="${description}delta_"
-# Remove trailing underscore, or set default if empty
-description=${description%_}
-[ -z "$description" ] && description="default"
-export description
-
-# Define an EXPERIMENT name that is a combination of PG_CL_EXPERIMENT and flags for quat, actions_for_qpos, and delta
-if [ "$quat" = "true" ]; then
-    export EXPERIMENT=${PG_CL_EXPERIMENT}_quat
-elif [ "$actions_for_qpos" = "true" ]; then
-    export EXPERIMENT=${PG_CL_EXPERIMENT}_afq
-elif [ "$delta" = "true" ]; then
-    export EXPERIMENT=${PG_CL_EXPERIMENT}_delta
-else
-    export EXPERIMENT=${PG_CL_EXPERIMENT}
-fi
+# Define EXPERIMENT: combines VARIANT (data config) with PG_CL_EXPERIMENT (training params)
+# e.g., BC+2ID+8EV_pg1_cl75_clout100
+export EXPERIMENT=${VARIANT}_${PG_CL_EXPERIMENT}
 
 if [ "$debug" = true ]; then
     export trainer=debug
@@ -115,7 +105,7 @@ if [ "$debug" = true ]; then
 else
     export debug_folder=''
 fi
-export hydra_run_dir=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_v2/50hz/${debug_folder}${VARIANT}${RESTART}/${EXPERIMENT}/${task}/${task}_${frame_type}
+export hydra_run_dir=/iopsstor/scratch/cscs/jiaqchen/egomim_out/zeta/50hz_outputs/${debug_folder}${EXPERIMENT}/${task}/${task}_${frame_type}
 ##################################################
 
 export config_name=train_eth_${arm}${CONFIG_SUFFIX}
@@ -151,12 +141,11 @@ echo "CHECKPOINT PATH! ckpt_path: $ckpt_path"
 
 ################ WANDB RUN ID #####################
 # Use job_id_for_wandb (either SLURM_JOB_ID or RESUME_JOB_ID) for W&B run continuity
-# WANDB_VARIANT_TAG is set by the variant script (empty for BC, "BC+1ID_" for BC+1ID, etc.)
-export WANDB_RUN_ID=${task}_${frame_type}_${description}_${WANDB_VARIANT_TAG}${PG_CL_EXPERIMENT}_${arm}_${job_id_for_wandb}
+export WANDB_RUN_ID=${task}_${frame_type}_${EXPERIMENT}_${arm}_${job_id_for_wandb}
 echo "WANDB_RUN_ID: $WANDB_RUN_ID"
 ###############################################################
 
-if [ "$CL_OUT" = "None" ]; then
+if [ -z "$CL_OUT" ] || [ "$CL_OUT" = "None" ]; then
     export CL_param=${CL}
 else
     export CL_param=${CL_OUT}
@@ -217,7 +206,7 @@ if [ "${skip_preflight:-false}" = false ]; then
     echo "[PATHS]"
     echo "  Hydra Dir: ${hydra_run_dir}"
     echo "  Config: ${config_name}"
-    echo "  Data: ${DATA_CONFIG}"
+    echo "  Data Config: ${DATA_CONFIG_PATH}"
 
     echo ""
     echo "============================================================"

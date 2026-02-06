@@ -1,0 +1,80 @@
+defaults:
+  - model: hpt_cotrain_enc_dec_base
+  - paths: default
+  - trainer: ddp
+  - debug: null
+  - logger: wandb
+  - data: multi_data
+  - callbacks: checkpoints
+  - override hydra/launcher: submitit
+  - _self_
+
+name: null #cup_lerobot_ee_frame
+description: null #cup_lerobot_ee_frame
+chosen_frame: null #ee_frame # [ee_frame, base_frame, or cam_frame]
+ckpt_path: null #/iopsstor/scratch/cscs/jiaqchen/egomim_out/logs/cup_lerobot_ee_frame/cup_lerobot_ee_frame_2025-12-14_10-45-01/checkpoints/last.ckpt
+wandb_run_id: null # deterministic hash for wandb experiment grouping (set by run_req.sh)
+train: true
+eval: false
+
+eval_class:
+  _target_ : egomimic.scripts.evaluation.Eve
+  mode: real
+  arm: right
+  eval_path: "./logs/eval/${name}_${now:%Y-%m-%d_%H-%M-%S}"
+
+hydra:
+  run:
+    # Dir should be experiment_name/description_{timestamp}
+    dir: ./logs/${name}/${description}_${now:%Y-%m-%d_%H-%M-%S}
+  sweep:
+    dir: ./logs/${name}/${description}_${now:%Y-%m-%d_%H-%M-%S}
+
+launch_params:
+  gpus_per_node: 4
+  nodes: 1
+
+data_schematic: # Dynamically fill in these shapes from the dataset
+  _target_: egomimic.rldb.utils.DataSchematic
+  norm_mode: quantile
+  schematic_dict:
+    # aria_right_arm:
+    #   front_img_1:
+    #     key_type: camera_keys
+    #     lerobot_key: observations.images.front_img_1
+    #   ee_pose:
+    #     key_type: proprio_keys
+    #     lerobot_key: observations.state.ee_pose
+    #   actions_cartesian:
+    #     key_type: action_keys
+    #     lerobot_key: actions_cartesian
+    #   embodiment:
+    #     key_type: metadata_keys
+    #     lerobot_key: metadata.embodiment
+
+    eve_bimanual:
+      front_img_1:
+        key_type: camera_keys
+        lerobot_key: observations.images.aria_rgb_cam
+      ee_pose:
+        key_type: proprio_keys
+        lerobot_key: observations.state.ee_pose
+      cartesian_arm:
+        key_type: proprio_keys
+        lerobot_key: observations.state.cartesian_arm
+      joint_positions:
+        key_type: proprio_keys
+        lerobot_key: observations.state.joints_hand
+      actions_cartesian:
+        key_type: action_keys
+        lerobot_key: actions_cartesian
+      actions_joints:
+        key_type: action_keys
+        lerobot_key: actions_joints
+      embodiment:
+        key_type: metadata_keys
+        lerobot_key: metadata.embodiment
+
+  viz_img_key: 
+    eve_bimanual:
+      front_img_1

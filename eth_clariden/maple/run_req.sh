@@ -32,10 +32,13 @@ set -eo pipefail
 
 ulimit -c 0
 
+export PG=${PG:-1}
+export CL=${CL:-75}
+export CL_OUT=${CL_OUT:-100}
 echo $PG # POINT_GAP_ACT
 echo $CL # CHUNK_LENGTH_ACT, need to change action horizon
 echo $CL_OUT # CHUNK_LENGTH_ACT_OUT, need to change action horizon
-if [ "$CL_OUT" = "None" ]; then
+if [ -z "$CL_OUT" ] || [ "$CL_OUT" = "None" ]; then
     export PG_CL_EXPERIMENT=pg${PG}_cl${CL}
 else
     export PG_CL_EXPERIMENT=pg${PG}_cl${CL}_clout${CL_OUT}
@@ -154,7 +157,7 @@ export ckpt_path=${hydra_run_dir}/checkpoints/last.ckpt
 ckpt_path=$( [[ -f "$ckpt_path" ]] && echo "\\\"$ckpt_path\\\"" || echo null )
 echo "CHECKPOINT PATH! ckpt_path: $ckpt_path"
 
-if [ "$CL_OUT" = "None" ]; then
+if [ -z "$CL_OUT" ] || [ "$CL_OUT" = "None" ]; then
     export CL_param=${CL}
 else
     export CL_param=${CL_OUT}

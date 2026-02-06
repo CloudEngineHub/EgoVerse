@@ -1,8 +1,8 @@
 #!/bin/bash
-#SBATCH --job-name=T_cup_BC+2ID+8EV_cam
+#SBATCH --job-name=T_cup_BCpp_cam
 #SBATCH --account=a144
-#SBATCH --output=/iopsstor/scratch/cscs/jiaqchen/egomim_out/zeta/50hz/BC+2ID+8EV/cup/slurm-cup-%j.out
-#SBATCH --error=/iopsstor/scratch/cscs/jiaqchen/egomim_out/zeta/50hz/BC+2ID+8EV/cup/slurm-cup-%j.err
+#SBATCH --output=/iopsstor/scratch/cscs/jiaqchen/egomim_out/zeta/50hz/BCpp/cup/slurm-cup-%j.out
+#SBATCH --error=/iopsstor/scratch/cscs/jiaqchen/egomim_out/zeta/50hz/BCpp/cup/slurm-cup-%j.err
 #SBATCH --partition=normal
 #SBATCH --environment=/users/jiaqchen/.edf/faive2lerobot.toml
 #SBATCH --requeue
@@ -15,11 +15,11 @@
 ############################################################
 
 ##################### EXPERIMENT CONFIG ####################
-export VARIANT="BC+2ID+8EV"
-export DATA_CONFIG="cup/multi_data_BC+2ID+8EV"
-# Data config: /capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/egomimic/hydra_configs/data/cup/multi_data_BC+2ID+8EV.yaml
-export CONFIG_SUFFIX="_BC_aria"  # _BC (EVE-only) or _BC_aria (EVE + Aria)
-# train config: /capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/egomimic/hydra_configs/train_eth_bimanual_BC_aria.yaml
+export VARIANT="BCpp"
+export DATA_CONFIG="cup/multi_data_BCpp"
+# Data config: /capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/egomimic/hydra_configs/data/cup/multi_data_BCpp.yaml
+export CONFIG_SUFFIX="_BC"  # _BC (EVE-only) or _BC_aria (EVE + Aria)
+# train config: /capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/egomimic/hydra_configs/train_eth_bimanual_BC.yaml
 export RLDB_WORKERS=10
 export frame_type="cam_frame"  # base_frame, cam_frame, or ee_frame
 ############################################################

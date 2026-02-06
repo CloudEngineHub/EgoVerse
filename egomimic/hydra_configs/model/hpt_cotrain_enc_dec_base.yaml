@@ -6,15 +6,14 @@ robomimic_model:
     _target_: egomimic.utils.egomimicUtils.CameraTransforms
     intrinsics_key: "base" # change to base_half if using half res 
     extrinsics_key: "ethOct14"
-  chosen_frame: ${chosen_frame}
-  reverse_kl_samples: 8
   ac_keys:
-    # aria_bimanual: "actions_cartesian"
-    # aria_right_arm: "actions_cartesian"
-
     eve_bimanual: "actions_cartesian"
   auxiliary_ac_keys:
     eve_bimanual: ["actions_joints"]
+
+
+  reverse_kl_samples: 8
+
   6dof: true
   trunk:
     embed_dim: 256
@@ -49,49 +48,7 @@ robomimic_model:
           crossattn_modality_dropout: 0.1
           modality_embed_dim: 256
   
-  stem_specs:
-    # aria_right_arm:
-    #   state_ee_pose:
-    #     _target_: egomimic.models.hpt_nets.MLPPolicyStem
-    #     input_dim: 6
-    #     output_dim: 256
-    #     widths: [256]
-    #     specs:
-    #       random_horizon_masking: false
-    #       cross_attn:
-    #         crossattn_latent: 16
-    #         crossattn_heads: 8
-    #         crossattn_dim_head: 64
-    #         crossattn_modality_dropout: 0.1
-    #         modality_embed_dim: 256
-      
-    # eve_right_arm:
-    #   state_ee_pose:
-    #     _target_: egomimic.models.hpt_nets.MLPPolicyStem
-    #     input_dim: 6
-    #     output_dim: 256
-    #     widths: [256]
-    #     specs:
-    #       random_horizon_masking: false
-    #       cross_attn:
-    #         crossattn_latent: 16
-    #         crossattn_heads: 8
-    #         crossattn_dim_head: 64
-    #         crossattn_modality_dropout: 0.1
-    #         modality_embed_dim: 256
-    #   state_joint_positions:
-    #     _target_: egomimic.models.hpt_nets.MLPPolicyStem
-    #     input_dim: 17
-    #     output_dim: 256
-    #     widths: [256]
-    #     specs:
-    #       random_horizon_masking: false
-    #       cross_attn:
-    #         crossattn_latent: 16
-    #         crossattn_heads: 8
-    #         crossattn_dim_head: 64
-    #         crossattn_modality_dropout: 0.1
-    #         modality_embed_dim: 256
+  stem_specs:    
     eve_bimanual:
       state_ee_pose:
         _target_: egomimic.models.hpt_nets.MLPPolicyStem
@@ -121,41 +78,31 @@ robomimic_model:
             modality_embed_dim: 256
 
 
-  # head_specs:
-  #   aria_bimanual:
-  #     _target_: egomimic.models.hpt_nets.MultiBlockTransformerDecoder
-  #     input_dim: 256
-  #     output_dim: 12
-  #     action_horizon: 100
-  #     latent_token_len: 8
-  #     num_heads: 8
-  #     dim_head: 64
-  #     dropout: 0.1
-  #     num_layers: 8
-  #     final_norm: true
-  #   eve_right_arm:
-  #     _target_: egomimic.models.hpt_nets.MultiBlockTransformerDecoder
-  #     input_dim: 256
-  #     output_dim: 12
-  #     action_horizon: 100
-  #     latent_token_len: 8
-  #     num_heads: 8
-  #     dim_head: 64
-  #     dropout: 0.1
-  #     num_layers: 8
-  #     final_norm: true
-  #   eve_right_arm_actions_joints:
-  #     _target_: egomimic.models.hpt_nets.MultiBlockTransformerDecoder
-  #     input_dim: 256
-  #     output_dim: 34
-  #     action_horizon: 100
-  #     latent_token_len: 8
-  #     num_heads: 8
-  #     dim_head: 64
-  #     dropout: 0.1
-  #     num_layers: 8
-  #     final_norm: true
-  #   shared: null
+
+  head_specs:
+    eve_bimanual:
+      _target_: egomimic.models.hpt_nets.MultiBlockTransformerDecoder
+      input_dim: 256
+      output_dim: 12
+      action_horizon: 100
+      latent_token_len: 64
+      num_heads: 8
+      dim_head: 64
+      dropout: 0.1
+      num_layers: 8
+      final_norm: true
+    eve_bimanual_actions_joints:
+      _target_: egomimic.models.hpt_nets.MultiBlockTransformerDecoder
+      input_dim: 256
+      output_dim: 34
+      action_horizon: 100
+      latent_token_len: 64
+      num_heads: 8
+      dim_head: 64
+      dropout: 0.1
+      num_layers: 8
+      final_norm: true
+    shared: null
 
 
   encoder_specs:
@@ -163,14 +110,6 @@ robomimic_model:
       _target_: egomimic.models.hpt_nets.ResNet
       output_dim: 256
       num_of_copy: 1
-    # right_wrist_img:
-    #   _target_: egomimic.models.hpt_nets.ResNet
-    #   output_dim: 256
-    #   num_of_copy: 1
-    # left_wrist_img:
-    #   _target_: egomimic.models.hpt_nets.ResNet
-    #   output_dim: 256
-    #   num_of_copy: 1
 
   train_image_augs:
     _target_: torchvision.transforms.Compose
@@ -196,3 +135,8 @@ optimizer:
   lr: 5e-5
   weight_decay: 0.0001
 
+scheduler:
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
+  _partial_: true
+  T_max: 1400
+  eta_min: 1e-5

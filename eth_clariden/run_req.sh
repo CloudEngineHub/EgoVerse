@@ -1,11 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=T_cup_BC_split
+#SBATCH --job-name=T_cup_BC_small_dset
 #SBATCH --account=a144
-#SBATCH --output=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_slurm_out_v2/50hz/cup_BC_split/slurm-cup-%j.out
-#SBATCH --error=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_slurm_out_v2/50hz/cup_BC_split/slurm-cup-%j.err
+#SBATCH --output=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_slurm_out_v2/50hz/cup_BC_small_dset/slurm-cup-%j.out
+#SBATCH --error=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_slurm_out_v2/50hz/cup_BC_small_dset/slurm-cup-%j.err
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --gpus-per-node=4
+#SBATCH --cpus-per-task=10
 #SBATCH --time=5:00:00
 #SBATCH --partition=normal
 #SBATCH --environment=/users/jiaqchen/.edf/faive2lerobot.toml
@@ -32,10 +33,13 @@ set -eo pipefail
 
 ulimit -c 0
 
+export PG=${PG:-1}
+export CL=${CL:-75}
+export CL_OUT=${CL_OUT:-100}
 echo $PG # POINT_GAP_ACT
 echo $CL # CHUNK_LENGTH_ACT, need to change action horizon
 echo $CL_OUT # CHUNK_LENGTH_ACT_OUT, need to change action horizon
-if [ "$CL_OUT" = "None" ]; then
+if [ -z "$CL_OUT" ] || [ "$CL_OUT" = "None" ]; then
     export PG_CL_EXPERIMENT=pg${PG}_cl${CL}
 else
     export PG_CL_EXPERIMENT=pg${PG}_cl${CL}_clout${CL_OUT}
@@ -134,8 +138,8 @@ fi
 
 
 ##################### MAYBE CHANGE THIS PATH #####################
-export hydra_run_dir=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_v2/50hz/${EXPERIMENT}_recheck_split/${task}/${task}_${frame_type}
-export dataset_root=/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/release_2_0/50hz/${EXPERIMENT}/${task}_lerobot_${frame_type}
+export hydra_run_dir=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_v2/50hz/${EXPERIMENT}_debug_small_dset/${task}/${task}_${frame_type}
+export dataset_root=/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/release_2_0/50hz/${EXPERIMENT}/small_dset/${task}_lerobot_${frame_type}
 # export dataset_root=/iopsstor/scratch/cscs/jiaqchen/data/EGOMIM/srl_data/output/debug_2_0/${task}_lerobot_${frame_type}_1_debug
 ##################################################################
 
@@ -147,13 +151,13 @@ else
     export logger=wandb
 fi
 
-export config_name=train_eth_${arm}
+export config_name=train_regression
 export ckpt_path=${hydra_run_dir}/checkpoints/last.ckpt
 # export ckpt_path='/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_v2/50hz/pg2_cl75_clout100/cup/cup_base_frame/checkpoints/epoch_epoch=799.ckpt' # INCASE WE NEED TO USE A SPECIFIC CHECKPOINT
 ckpt_path=$( [[ -f "$ckpt_path" ]] && echo "\\\"$ckpt_path\\\"" || echo null )
 echo "CHECKPOINT PATH! ckpt_path: $ckpt_path"
 
-if [ "$CL_OUT" = "None" ]; then
+if [ -z "$CL_OUT" ] || [ "$CL_OUT" = "None" ]; then
     export CL_param=${CL}
 else
     export CL_param=${CL_OUT}
@@ -224,21 +228,7 @@ python /capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/egomimic/trai
     ckpt_path=${ckpt_path} \
     wandb_run_id=${WANDB_RUN_ID} \
     hydra.run.dir=${hydra_run_dir} \
-    trainer.num_nodes=${SLURM_NNODES} \
-    data.train_datasets.dataset1.root=${dataset_root} \
-    data.valid_datasets.dataset1.root=${dataset_root} \
-    model.robomimic_model.head_specs.eve_${arm}.action_horizon=${CL_param} \
-    model.robomimic_model.head_specs.eve_${arm}.model.act_seq=${CL_param} \
-    model.robomimic_model.head_specs.eve_${arm}_actions_joints.action_horizon=${CL_param} \
-    model.robomimic_model.head_specs.eve_${arm}_actions_joints.model.act_seq=${CL_param} \
-    model.robomimic_model.stem_specs.eve_${arm}.state_ee_pose.input_dim=${ee_pose_dim} \
-    model.robomimic_model.stem_specs.eve_${arm}.state_joint_positions.input_dim=${joint_dim} \
-    model.robomimic_model.head_specs.eve_${arm}.infer_ac_dims.eve_${arm}=${ee_pose_dim} \
-    model.robomimic_model.head_specs.eve_${arm}.model.act_dim=${ee_pose_dim} \
-    model.robomimic_model.head_specs.eve_${arm}_actions_joints.infer_ac_dims.eve_${arm}=${joint_dim} \
-    model.robomimic_model.head_specs.eve_${arm}_actions_joints.model.act_dim=${joint_dim} \
-    model.robomimic_model.use_quat=${quat} \
-    model.robomimic_model.use_delta=${delta} \
+    trainer.num_nodes=${SLURM_NNODES}
     $@
 "
 srun bash -lc "$CMD"

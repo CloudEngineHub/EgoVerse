@@ -1,39 +1,38 @@
 #!/bin/bash
-#SBATCH --job-name=T_cup_BC+0ID+8EV
+#SBATCH --job-name=T_cup_BC+0ID+8EV_cam
 #SBATCH --account=a144
-#SBATCH --output=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_slurm_out_v2/50hz/BC+0ID+8EV/cup/slurm-cup-%j.out
-#SBATCH --error=/iopsstor/scratch/cscs/jiaqchen/egomim_out/multi_node_slurm_out_v2/50hz/BC+0ID+8EV/cup/slurm-cup-%j.err
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=4
-#SBATCH --gpus-per-node=4
-#SBATCH --time=05:00:00
+#SBATCH --output=/iopsstor/scratch/cscs/jiaqchen/egomim_out/zeta/50hz/BC+0ID+8EV/cup/slurm-cup-%j.out
+#SBATCH --error=/iopsstor/scratch/cscs/jiaqchen/egomim_out/zeta/50hz/BC+0ID+8EV/cup/slurm-cup-%j.err
 #SBATCH --partition=normal
 #SBATCH --environment=/users/jiaqchen/.edf/faive2lerobot.toml
 #SBATCH --requeue
 #SBATCH --signal=USR1@600
+##################### SBATCH RESOURCES #####################
+#SBATCH --time=10:00:00
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=4
+#SBATCH --gpus-per-node=4
+############################################################
 
-# Parse command-line arguments
-export debug=false
-export new_wandb=false
-export skip_preflight=false
-while [[ $# -gt 0 ]]; do
-    case $1 in
-        --debug) export debug=true; shift ;;
-        --new-wandb) export new_wandb=true; shift ;;
-        --skip-preflight) export skip_preflight=true; shift ;;
-        *) shift ;;
+##################### EXPERIMENT CONFIG ####################
+export VARIANT="BC+0ID+8EV"
+export DATA_CONFIG="cup/multi_data_BC+0ID+8EV"
+# Data config: /capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/egomimic/hydra_configs/data/cup/multi_data_BC+0ID+8EV.yaml
+export CONFIG_SUFFIX="_BC_aria"  # _BC (EVE-only) or _BC_aria (EVE + Aria)
+# train config: /capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/egomimic/hydra_configs/train_eth_bimanual_BC_aria.yaml
+export RLDB_WORKERS=10
+export frame_type="cam_frame"  # base_frame, cam_frame, or ee_frame
+############################################################
+
+# Parse command-line arguments (--debug, --new-wandb, --skip-preflight)
+for arg in "$@"; do
+    case $arg in
+        --debug) export debug=true ;;
+        --new-wandb) export new_wandb=true ;;
+        --skip-preflight) export skip_preflight=true ;;
     esac
 done
 
-##################### VARIANT CONFIG #####################
-export VARIANT="BC+0ID+8EV"
-export DATA_CONFIG="cup/multi_data_BC+0ID+8EV"
-export CONFIG_SUFFIX="_BC_aria"
-export SBATCH_TIME="05:00:00"
-export RLDB_WORKERS=32
-export WANDB_VARIANT_TAG="BC+0ID+8EV_"
-##########################################################
-
 # Source common logic
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="/capstor/store/cscs/swissai/a144/jiaqchen/egoverse/EgoVerse/eth_clariden/cup/"
 source "${SCRIPT_DIR}/common.sh"
