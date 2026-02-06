@@ -132,6 +132,8 @@ def split_dataset_names(dataset_names, valid_ratio=0.2, seed=SEED):
 
     valid = set(names[:n_valid])
     train = set(names[n_valid:])
+
+    print(f">>>>>>>>>> length of train: {len(train)}, length of valid: {len(valid)}")
     return train, valid
 
 
@@ -190,9 +192,12 @@ class RLDBDataset(LeRobotDataset):
         valid_ratio: float = 0.2,
         **kwargs,
     ):
+        import time
+        t0 = time.time()
         dataset_meta = LeRobotDatasetMetadata(
             repo_id=repo_id, root=root, local_files_only=local_files_only
         )
+        logger.info(f"[RLDBDataset] LeRobotDatasetMetadata loaded in {time.time() - t0:.2f}s for {repo_id}")
         dataset_meta._update_splits(valid_ratio=valid_ratio)
 
         dataset_splits = dataset_meta.info["splits"]
@@ -263,12 +268,14 @@ class RLDBDataset(LeRobotDataset):
             )
 
         if mode == "train":
+            t0 = time.time()
             super().__init__(
                 repo_id=repo_id,
                 root=root,
                 local_files_only=local_files_only,
                 episodes=train_indices,
             )
+            logger.info(f"[RLDBDataset] LeRobotDataset loaded in {time.time() - t0:.2f}s for {repo_id} (mode={mode})")
 
         elif mode == "valid":
             assert "valid" in dataset_splits, (
@@ -276,12 +283,14 @@ class RLDBDataset(LeRobotDataset):
                 f"Please include a 'valid' key by updating your dataset metadata in {dataset_meta.root}.info.json ."
             )
             valid_indices = dataset_splits["valid"]
+            t0 = time.time()
             super().__init__(
                 repo_id=repo_id,
                 root=root,
                 local_files_only=local_files_only,
                 episodes=valid_indices,
             )
+            logger.info(f"[RLDBDataset] LeRobotDataset loaded in {time.time() - t0:.2f}s for {repo_id} (mode={mode})")
 
         elif mode == "sample" and episodes is not None:
             super().__init__(
@@ -674,12 +683,18 @@ class S3RLDBDataset(MultiRLDBDataset):
         local_files_only=True,
         key_map=None,
         valid_ratio=0.2,
-        temp_root="/coc/flash7/scratch/egoverseS3Dataset",  # "/coc/flash7/scratch/rldb_temp"
-        cache_root="/coc/flash7/scratch/.cache",
+        temp_root=None,  # defaults to S3_TEMP_ROOT env var
+        cache_root=None,  # defaults to HF_HOME env var
         filters={},
         debug=False,
         **kwargs,
     ):
+        # Default to environment variables if not provided
+        if temp_root is None:
+            temp_root = os.environ.get("S3_TEMP_ROOT", "/iopsstor/scratch/cscs/jiaqchen/.s3_temp")
+        if cache_root is None:
+            cache_root = os.environ.get("HF_HOME", "/iopsstor/scratch/cscs/jiaqchen/.hf_cache")
+
         temp_root += "/S3_rldb_data"
         filters["robot_name"] = embodiment
         filters["is_deleted"] = False
@@ -714,6 +729,15 @@ class S3RLDBDataset(MultiRLDBDataset):
             filters=filters,
             local_dir=temp_root,
         )
+
+        # Clear HuggingFace datasets cache to avoid stale file listings
+        # s5cmd uses temp files during download which can get cached
+        try:
+            from datasets import disable_caching
+            disable_caching()
+            logger.info("Disabled HuggingFace datasets caching to avoid stale file listings")
+        except Exception as e:
+            logger.warning(f"Could not disable HF caching: {e}")
 
         search_path = temp_root
 
@@ -1029,14 +1053,48 @@ class S3RLDBDataset(MultiRLDBDataset):
             logger.info("Running s5cmd batch (%d lines): %s", len(lines), " ".join(cmd))
             subprocess.run(cmd, check=True)
 
+            # Wait for filesystem to settle after s5cmd sync
+            # s5cmd uses temp files during download and renames them after
+            time.sleep(2)
+
         finally:
             try:
                 batch_path.unlink(missing_ok=True)
             except Exception as e:
                 logger.warning("Failed to delete batch file %s: %s", batch_path, e)
 
+    @staticmethod
+    def _is_valid_parquet(file_path: Path) -> bool:
+        """
+        Check if a parquet file is valid by verifying magic bytes.
+        Parquet files have 'PAR1' at the start and end of the file.
+        This is a fast check that doesn't load the entire file.
+        """
+        try:
+            size = file_path.stat().st_size
+            if size < 12:  # Minimum valid parquet is at least 12 bytes (4 + 4 + 4)
+                return False
+
+            with open(file_path, 'rb') as f:
+                # Check start magic bytes
+                start_magic = f.read(4)
+                if start_magic != b'PAR1':
+                    return False
+
+                # Check end magic bytes
+                f.seek(-4, 2)  # Seek 4 bytes from end
+                end_magic = f.read(4)
+                if end_magic != b'PAR1':
+                    return False
+
+            return True
+        except Exception:
+            return False
+
     @classmethod
     def _episode_already_present(cls, local_dir: Path, episode_hash: str) -> bool:
+        import json
+
         ep = local_dir / episode_hash
         meta = ep / "meta"
         chunk0 = ep / "data" / "chunk-000"
@@ -1047,8 +1105,30 @@ class S3RLDBDataset(MultiRLDBDataset):
         try:
             if not any(meta.iterdir()):
                 return False
-            if not any(chunk0.iterdir()):
+
+            # Get parquet files in chunk-000
+            parquet_files = list(chunk0.glob("*.parquet"))
+            if not parquet_files:
                 return False
+
+            # Check if we have all expected episodes by reading info.json
+            info_json = meta / "info.json"
+            if info_json.exists():
+                with open(info_json, 'r') as f:
+                    info = json.load(f)
+                expected_episodes = info.get("total_episodes", 0)
+                if len(parquet_files) < expected_episodes:
+                    logger.warning(
+                        f"Incomplete download in {episode_hash}: "
+                        f"found {len(parquet_files)}/{expected_episodes} parquet files, will re-download"
+                    )
+                    return False
+
+            # Validate at least the first parquet file to detect corruption
+            if not cls._is_valid_parquet(parquet_files[0]):
+                logger.warning(f"Corrupted parquet detected in {episode_hash}, will re-download")
+                return False
+
         except FileNotFoundError:
             return False
 

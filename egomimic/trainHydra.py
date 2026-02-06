@@ -53,21 +53,31 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     if cfg.get("seed"):
         L.seed_everything(cfg.seed, workers=True)
 
+    import time
+    
     log.info(f"Instantiating data schematic <{cfg.data_schematic._target_}>")
+    t0 = time.time()
     data_schematic: DataSchematic = hydra.utils.instantiate(cfg.data_schematic)
+    log.info(f"DataSchematic instantiated in {time.time() - t0:.2f}s")
 
     # Modify dataset configs to include `data_schematic` dynamically at runtime
     train_datasets = {}
     for dataset_name in cfg.data.train_datasets:
+        log.info(f"Loading train dataset: {dataset_name}")
+        t0 = time.time()
         train_datasets[dataset_name] = hydra.utils.instantiate(
             cfg.data.train_datasets[dataset_name]
         )
+        log.info(f"Train dataset {dataset_name} loaded in {time.time() - t0:.2f}s")
 
     valid_datasets = {}
     for dataset_name in cfg.data.valid_datasets:
+        log.info(f"Loading valid dataset: {dataset_name}")
+        t0 = time.time()
         valid_datasets[dataset_name] = hydra.utils.instantiate(
             cfg.data.valid_datasets[dataset_name]
         )
+        log.info(f"Valid dataset {dataset_name} loaded in {time.time() - t0:.2f}s")
 
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
     assert "MultiDataModuleWrapper" in cfg.data._target_, (
