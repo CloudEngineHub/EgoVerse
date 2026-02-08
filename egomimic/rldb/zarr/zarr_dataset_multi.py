@@ -83,6 +83,8 @@ from egomimic.rldb.data_utils import (
     _slow_down_slerp_quat,
 )
 
+from egomimic.rldb.zarr.action_chunk_transforms import get_action_chunk_transform
+
 logger = logging.getLogger(__name__)
 
 class EMBODIMENT(Enum):
@@ -547,6 +549,7 @@ class ZarrDataset(torch.utils.data.Dataset):
         self,
         Episode_path: str,
         action_horizon: int | None = None,
+        chunk_length: int | None = None,
     ):
         """
         Args:
@@ -555,13 +558,24 @@ class ZarrDataset(torch.utils.data.Dataset):
                 If specified, actions_base_cartesian and actions_joints will be loaded
                 as sequences of shape (action_horizon, action_dim) instead of single frames.
                 If None, actions are loaded as single frames (action_dim,).
+            chunk_length: Target number of frames after interpolation. When both
+                action_horizon and chunk_length are set, the loaded action_horizon
+                frames are interpolated to chunk_length frames using an
+                embodiment-specific transform (euler-aware for cartesian actions,
+                linear for joint actions). If None, no interpolation is applied.
         """
         self.episode_path = Episode_path
         self.metadata = None
         self.action_horizon = action_horizon
+        self.chunk_length = chunk_length
         self.action_keys = {"actions_cartesian", "actions_joints"}
         self._image_keys = None  # Lazy-loaded set of JPEG-encoded keys
         self.init_episode()
+        self.action_transform = (
+            get_action_chunk_transform(self.embodiment)
+            if self.chunk_length is not None
+            else None
+        )
         super().__init__()
 
     def init_episode(self):
@@ -623,6 +637,12 @@ class ZarrDataset(torch.utils.data.Dataset):
                         last_frame = data[k][-1:]  # Keep dims: (1, action_dim)
                         padding = np.repeat(last_frame, pad_len, axis=0)
                         data[k] = np.concatenate([data[k], padding], axis=0)
+
+        # Apply embodiment-specific interpolation to action chunks
+        if self.action_horizon is not None and self.chunk_length is not None:
+            for k in self.action_keys:
+                if k in data and isinstance(data[k], np.ndarray):
+                    data[k] = self.action_transform.transform(data[k], self.chunk_length, key=k)
 
         # Decode JPEG-encoded image data and normalize to [0, 1]
         import simplejpeg
