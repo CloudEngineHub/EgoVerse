@@ -111,15 +111,7 @@ def plot_metric_in_subplot(ax, df: pd.DataFrame, metric_name: str):
 def main():
     """Main function to plot all metrics from CSV files."""
     
-    # Base results directory
-    base_results_dir = Path("/coc/flash7/bli678/Shared/EgoVerse/results")
-    
-    # Try to find CSV files in subdirectories or directly in results
-    # Check for mixed_diversity_fold_clothes subdirectory first
-    results_dir = base_results_dir / "mixed_diversity_fold_clothes"
-    if not results_dir.exists():
-        # Fall back to base results directory
-        results_dir = base_results_dir
+    results_dir = Path("/coc/flash7/bli678/Shared/EgoVerse/results/cup_saucer/mixed_diversity")
     
     # Output directory for plots (same as where CSV files are)
     output_dir = results_dir

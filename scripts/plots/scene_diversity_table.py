@@ -22,7 +22,7 @@ def parse_directory_name(dirname: str) -> Optional[Tuple[int, float]]:
         Tuple of (scenes, time) or None if parsing fails
     """
     # Pattern that handles both decimal points and underscores in time
-    pattern = r'scenes-(\d+)-time-([\d._]+)_'
+    pattern = r'(\d+)-([\d._]+)_'
     match = re.match(pattern, dirname)
     if match:
         scenes = int(match.group(1))
@@ -108,10 +108,10 @@ def main():
     """Main function to extract metrics and create tables."""
     
     # Source directory with experiment results
-    source_dir = Path("/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/eval-fold-clothes-scene-diversity-ood-1")
+    source_dir = Path("/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/eval-cup-saucer-scene")
     
     # Output directory for CSV files
-    output_dir = Path("/coc/flash7/bli678/Shared/EgoVerse/results/scene_diversity_fold_clothes")
+    output_dir = Path("/coc/flash7/bli678/Shared/EgoVerse/results/cup_saucer/scene_diversity")
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Collect all metrics by configuration

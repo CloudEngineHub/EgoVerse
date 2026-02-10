@@ -1,39 +1,34 @@
 _target_: egomimic.pl_utils.pl_data_utils.MultiDataModuleWrapper
 
 valid_datasets:
-  dataset1: 
+  dataset1:
     _target_: egomimic.rldb.utils.MultiRLDBDataset
     datasets:
-      # song record 2
-      op1_scene1_ep1:
+      valid_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
-        bucket_name: "rldb"
+        bucket_name: rldb
         mode: total
-        embodiment: "aria_bimanual"
-        local_files_only: True
-        temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
-        filters: {episode_hash: '2025-11-11-23-06-20-738000'}
-
-    embodiment: "aria_bimanual"
-
+        embodiment: aria_bimanual
+        local_files_only: true
+        temp_root: /coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer
+        filters:
+          episode_hash: 2025-11-14-17-24-52-962000
+    embodiment: aria_bimanual
 
 train_datasets:
   dataset1:
     _target_: egomimic.rldb.utils.MultiRLDBDataset
     datasets:
-
-      # Ryan
-      op1_scene1_ep1:
+      # Operator 17: RyanC
+      op17_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
-        bucket_name: "rldb"
+        bucket_name: rldb
         mode: total
-        embodiment: "aria_bimanual"
-        local_files_only: True
-        temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity"
-        filters: {episode_hash: '2025-10-12-23-59-38-361000'}
-        percent: 0.7
-
-
+        embodiment: aria_bimanual
+        local_files_only: true
+        temp_root: /coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer
+        filters:
+          episode_hash: 2026-01-16-19-16-39-636000
     embodiment: "aria_bimanual"
 
 train_dataloader_params:

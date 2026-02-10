@@ -128,7 +128,7 @@ def main():
     """Main function to plot scene diversity metrics from CSV files."""
     
     # Input directory with CSV files
-    results_dir = Path("/coc/flash7/bli678/Shared/EgoVerse/results/scene_diversity_fold_clothes")
+    results_dir = Path("/coc/flash7/bli678/Shared/EgoVerse/results/cup_saucer/scene_diversity")
     
     # Output directory for plots (same as CSV location)
     output_dir = results_dir

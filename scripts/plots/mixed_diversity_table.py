@@ -24,7 +24,7 @@ def parse_directory_name(dirname: str) -> Optional[Tuple[int, int]]:
     # Pattern to extract scenes and operators (ignore minutes)
     # Handles both formats: "mixed-diversity-{scenes}-{operators}-" and "{scenes}-{operators}-"
     pattern1 = r'mixed-diversity-(\d+)-(\d+)-'
-    pattern2 = r'^(\d+)-(\d+)-'
+    pattern2 = r'^(\d+)-(\d+)'
     
     # Try pattern with "mixed-diversity-" prefix first
     match = re.match(pattern1, dirname)
@@ -115,10 +115,10 @@ def main():
     """Main function to extract metrics and create tables."""
     
     # Source directory with experiment results
-    source_dir = Path("/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/eval-fold-clothes-mixed-diversity")
+    source_dir = Path("/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/eval-cup-saucer-mixed")
     
     # Output directory for CSV files
-    output_dir = Path("/coc/flash7/bli678/Shared/EgoVerse/results/mixed_diversity_fold_clothes")
+    output_dir = Path("/coc/flash7/bli678/Shared/EgoVerse/results/cup_saucer/mixed_diversity")
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Collect all metrics by configuration

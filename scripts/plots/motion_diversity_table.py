@@ -20,7 +20,7 @@ def parse_directory_name(dirname: str) -> Optional[int]:
     Returns:
         Operator number or None if parsing fails
     """
-    pattern = r'operator-(\d+)-time-'
+    pattern = r'(\d+)'
     match = re.match(pattern, dirname)
     if match:
         operators = int(match.group(1))
@@ -114,10 +114,10 @@ def main():
     """Main function to extract metrics and create table."""
     
     # Source directory with experiment results
-    source_dir = Path("/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/eval-fold-clothes-motion-diversity")
+    source_dir = Path("/coc/cedarp-dxu345-0/bli678/EgoVerse/logs/eval-cup-saucer-motion-2")
     
     # Output directory for CSV file
-    output_dir = Path("/coc/flash7/bli678/Shared/EgoVerse/results/motion_diversity_fold_clothes")
+    output_dir = Path("/coc/flash7/bli678/Shared/EgoVerse/results/cup_saucer/motion_diversity")
     output_dir.mkdir(parents=True, exist_ok=True)
     
     # Collect all metrics by operator count

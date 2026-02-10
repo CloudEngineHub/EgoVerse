@@ -1477,3 +1477,14 @@ class DataSchematic(object):
                 denorm_data[key] = tensor
 
         return denorm_data
+
+if __name__ == "__main__":
+    dataset = S3RLDBDataset(
+        embodiment="eva_bimanual",
+        mode="train",
+        local_files_only=True,
+        temp_root='/coc/cedarp-dxu345-0/bli678/data/egoverse_2',
+        cache_root='/coc/cedarp-dxu345-0/bli678/.cache',
+        # filters={"task": "cup_on_saucer", "lab": "rl2"}
+        filters={"episode_hash": "2026-01-22-18-57-54-150000"}
+    )

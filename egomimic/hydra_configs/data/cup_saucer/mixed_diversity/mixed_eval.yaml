@@ -1,0 +1,55 @@
+_target_: egomimic.pl_utils.pl_data_utils.MultiDataModuleWrapper
+
+valid_datasets:
+  dataset1:
+    _target_: egomimic.rldb.utils.MultiRLDBDataset
+    datasets:
+      lab1:
+        _target_: egomimic.rldb.utils.S3RLDBDataset
+        bucket_name: "rldb"
+        mode: valid
+        embodiment: "aria_bimanual"
+        local_files_only: True
+        temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
+        filters: {lab: "song", task: "cup on saucer"}
+      lab2:
+        _target_: egomimic.rldb.utils.S3RLDBDataset
+        bucket_name: "rldb"
+        mode: valid
+        embodiment: "aria_bimanual"
+        local_files_only: True
+        temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
+        filters: {lab: "wang", task: "cup on saucer"}
+      lab3:
+        _target_: egomimic.rldb.utils.S3RLDBDataset
+        bucket_name: "rldb"
+        mode: valid
+        embodiment: "aria_bimanual"
+        local_files_only: True
+        temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
+        filters: {lab: "eth", task: "cup on saucer"}
+    embodiment: aria_bimanual
+
+train_datasets:
+  dataset1:
+    _target_: egomimic.rldb.utils.MultiRLDBDataset
+    datasets:
+      op17_scene1_ep1:
+        _target_: egomimic.rldb.utils.S3RLDBDataset
+        bucket_name: rldb
+        mode: total
+        embodiment: aria_bimanual
+        local_files_only: true
+        temp_root: /coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer
+        filters:
+          episode_hash: 2026-01-16-19-16-39-636000
+    embodiment: aria_bimanual
+
+train_dataloader_params:
+  dataset1:
+    batch_size: 32
+    num_workers: 10
+valid_dataloader_params:
+  dataset1:
+    batch_size: 32
+    num_workers: 10

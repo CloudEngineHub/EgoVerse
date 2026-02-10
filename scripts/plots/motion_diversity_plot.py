@@ -113,7 +113,7 @@ def main():
     """Main function to plot motion diversity metrics from CSV file."""
     
     # Input CSV file
-    csv_path = Path("/coc/flash7/bli678/Shared/EgoVerse/results/motion_diversity_fold_clothes/motion_diversity_metrics.csv")
+    csv_path = Path("/coc/flash7/bli678/Shared/EgoVerse/results/cup_saucer/motion_diversity/motion_diversity_metrics.csv")
     
     # Output directory for plots (same as CSV location)
     output_dir = csv_path.parent

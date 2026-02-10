@@ -5,6 +5,7 @@ train_datasets:
     _target_: egomimic.rldb.utils.MultiRLDBDataset
     datasets:
 
+      # Operator 1: Jenny
       op1_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -423,6 +424,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2025-11-25-23-58-57-708000'}
 
+      # Operator 2: Aniketh
       op2_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -674,6 +676,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2026-01-19-21-43-11-000000'}
 
+      # Operator 3: Baoyu
       op3_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -959,6 +962,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2025-11-30-16-26-34-752000'}
 
+      # Operator 4: Lawrence
       op4_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -1252,6 +1256,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2026-01-14-23-23-43-614000'}
 
+      # Operator 5: Pranav_2
       op5_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -1615,6 +1620,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2026-01-24-05-29-04-696000'}
 
+      # Operator 6: Elmo
       op6_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -1938,6 +1944,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2026-01-19-21-57-33-482000'}
 
+      # Operator 7: Yangcen
       op7_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -2293,6 +2300,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2026-01-20-21-22-29-604000'}
 
+      # Operator 8: Zhenyang
       op8_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -2429,6 +2437,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2025-11-27-23-18-17-895000'}
 
+      # Operator 9: Mengying
       op9_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -2565,6 +2574,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2025-11-25-00-01-18-577000'}
 
+      # Operator 10: Vaibhav
       op10_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -2693,6 +2703,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2025-11-26-18-59-27-631000'}
 
+      # Operator 11: Shuo
       op11_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -2829,6 +2840,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2025-11-27-22-58-26-554000'}
 
+      # Operator 12: Xinchen
       op12_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -2855,6 +2867,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2025-11-30-16-19-06-040000'}
 
+      # Operator 13: David
       op13_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -2889,6 +2902,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2025-11-30-16-16-59-430000'}
 
+      # Operator 14: Aiden
       op14_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -3112,6 +3126,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2026-01-17-00-35-14-964000'}
 
+      # Operator 15: Woochul
       op15_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -3146,6 +3161,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2025-11-27-23-23-20-540000'}
 
+      # Operator 16: Lawrence sitting
       op16_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
@@ -3163,6 +3179,7 @@ train_datasets:
         temp_root: "/coc/cedarp-dxu345-0/datasets/egoverse/offline_eval_diversity_cup_on_saucer"
         filters: {episode_hash: '2026-01-20-21-15-54-151000'}
 
+      # Operator 17: RyanC
       op17_scene1_ep1:
         _target_: egomimic.rldb.utils.S3RLDBDataset
         bucket_name: "rldb"
