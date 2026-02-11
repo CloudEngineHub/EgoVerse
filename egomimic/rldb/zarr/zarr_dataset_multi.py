@@ -163,7 +163,7 @@ class EpisodeResolver:
         direct = local_dir / episode_hash
         if direct.is_dir():
             return True
-
+        return False
 
 
 class S3EpisodeResolver(EpisodeResolver):
@@ -184,13 +184,13 @@ class S3EpisodeResolver(EpisodeResolver):
         self,
         embodiment: str,
         action_horizon: int = 100,
-        filters: dict = {},
-    ) -> list[tuple[str, str]]:
+        filters: dict | None = None,
+    ) -> dict[str, "ZarrDataset"]:
         """
-        Outputs a list of ZarrDatasets with relevant filters.
-        If sync_from_s3 is True, sync S3 paths to local_root before indexing.
-        If not True, assumes folders already exist locally.
+        Outputs a dict of ZarrDatasets with relevant filters.
+        Syncs S3 paths to local_root before indexing.
         """
+        filters = dict(filters) if filters is not None else {}
         filters["robot_name"] = embodiment
         filters["is_deleted"] = False
 
@@ -371,7 +371,11 @@ class LocalEpisodeResolver(EpisodeResolver):
                 continue
 
             if key == "robot_name":
-                meta_value = metadata.get("robot_name", metadata.get("robot_type"))
+                meta_value = (
+                    metadata.get("robot_name")
+                    or metadata.get("robot_type")
+                    or metadata.get("embodiment")
+                )
             elif key == "is_deleted":
                 meta_value = metadata.get("is_deleted", False)
             else:
@@ -415,15 +419,15 @@ class LocalEpisodeResolver(EpisodeResolver):
         embodiment,
         sync_from_s3=False,
         action_horizon=100,
-        filters={},
-    ) -> list[tuple[str, str]]:
+        filters=None,
+    ) -> dict[str, "ZarrDataset"]:
         """
-        Outputs a list of ZarrDatasets with relevant filters from local data.
+        Outputs a dict of ZarrDatasets with relevant filters from local data.
         """
         if sync_from_s3:
             logger.warning("LocalEpisodeResolver does not sync from S3; ignoring sync_from_s3=True.")
 
-        filters = dict(filters or {})
+        filters = dict(filters) if filters is not None else {}
         filters.setdefault("robot_name", embodiment)
         filters.setdefault("is_deleted", False)
 
@@ -438,7 +442,7 @@ class LocalEpisodeResolver(EpisodeResolver):
 
         datasets = self._load_zarr_datasets(
             search_path=self.folder_path,
-            valid_hashes=valid_hashes,
+            valid_folder_names=valid_hashes,
             action_horizon=action_horizon,
         )
 
@@ -469,19 +473,11 @@ class MultiDataset(torch.utils.data.Dataset):
             valid_ratio (float, optional): Validation split ratio for datasets that support a train/valid split.
             **kwargs: Additional keyword arguments passed to underlying dataset constructors if needed.
         """
-        self.datasets = datasets
-        self.key_map = key_map
-
         self.embodiment = get_embodiment_id(embodiment)
-        for dataset_name, dataset in self.datasets.items():
+        for dataset_name, dataset in datasets.items():
             assert dataset.embodiment == self.embodiment, (
                 f"Dataset {dataset_name} has embodiment {dataset.embodiment}, expected {self.embodiment}."
             )
-
-        self.index_map = []
-        for dataset_name, dataset in self.datasets.items():
-            for local_idx in range(len(dataset)):
-                self.index_map.append((dataset_name, local_idx))
 
         self.train_collections, self.valid_collections = split_dataset_names(
             datasets.keys(), valid_ratio=valid_ratio, seed=SEED
@@ -505,12 +501,16 @@ class MultiDataset(torch.utils.data.Dataset):
         else:
             raise ValueError(f"Unknown mode: {mode}")
 
-        datasets = {rid: ds for rid, ds in datasets.items() if rid in chosen}
-        assert datasets, "No datasets left after applying mode split."
+        # Filter datasets BEFORE building index_map
+        self.datasets = {rid: ds for rid, ds in datasets.items() if rid in chosen}
+        assert self.datasets, "No datasets left after applying mode split."
 
-        self.key_map = (
-            {dataset_name: key_map for dataset_name in datasets} if key_map else None
-        )
+        self.index_map = []
+        for dataset_name, dataset in self.datasets.items():
+            for local_idx in range(len(dataset)):
+                self.index_map.append((dataset_name, local_idx))
+
+        self.key_map = key_map
 
 
         super().__init__()
@@ -549,12 +549,20 @@ class MultiDataset(torch.utils.data.Dataset):
         sync_from_s3 = kwargs.pop("sync_from_s3", False)
         filters = kwargs.pop("filters", {}) or {}
 
-        resolved = resolver.resolve(
-            embodiment=embodiment,
-            sync_from_s3=sync_from_s3,
-            action_horizon=action_horizon,
-            filters=filters,
-        )
+        # S3EpisodeResolver always syncs by design; only LocalEpisodeResolver accepts sync_from_s3
+        if isinstance(resolver, LocalEpisodeResolver):
+            resolved = resolver.resolve(
+                embodiment=embodiment,
+                sync_from_s3=sync_from_s3,
+                action_horizon=action_horizon,
+                filters=filters,
+            )
+        else:
+            resolved = resolver.resolve(
+                embodiment=embodiment,
+                action_horizon=action_horizon,
+                filters=filters,
+            )
 
 
         return cls(datasets=resolved, embodiment=embodiment, **kwargs)
@@ -606,7 +614,13 @@ class ZarrDataset(torch.utils.data.Dataset):
         self.metadata = self.episode_reader.metadata
         self.total_frames = self.metadata["total_frames"]
         self.keys_dict = {k: (0, None) for k in self.episode_reader._collect_keys()}
-        self.embodiment = int(get_embodiment_id(self.metadata["robot_type"]))
+        robot_type = self.metadata.get("robot_type") or self.metadata.get("embodiment")
+        if robot_type is None:
+            raise KeyError(
+                f"Episode metadata missing both 'robot_type' and 'embodiment'. "
+                f"Available keys: {list(self.metadata.keys())}"
+            )
+        self.embodiment = int(get_embodiment_id(robot_type))
 
         # Detect JPEG-encoded image keys from metadata
         self._image_keys = self._detect_image_keys()
@@ -641,10 +655,14 @@ class ZarrDataset(torch.utils.data.Dataset):
         return data
 
 
+    _SKIP_KEYS = frozenset({"language_annotations"})
+
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         # Build keys_dict with ranges based on whether action chunking is enabled
         keys_dict = {}
         for k in self.episode_reader._collect_keys():
+            if k in self._SKIP_KEYS:
+                continue
             # Apply action horizon to action keys
             if self.action_horizon is not None and k in self.action_keys:
                 # Load action sequence from idx to idx + action_horizon
