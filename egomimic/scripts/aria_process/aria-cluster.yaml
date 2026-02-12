@@ -11,9 +11,6 @@ auth:
   ssh_user: ubuntu
   ssh_private_key: ~/.ssh/rldb-base-pem.pem
 
-file_mounts:
-  "/home/ubuntu/EgoVerse": "/home/elmo/Documents/projects/EgoVerse"
-
 rsync_exclude:
   - "emimic/"
   - ".git/"
@@ -22,7 +19,7 @@ rsync_exclude:
   - "logs/"
   - "*.parquet"
 
-max_workers: 60
+max_workers: 140
 idle_timeout_minutes: 5
 
 available_node_types:
@@ -31,7 +28,7 @@ available_node_types:
       InstanceType: t3a.2xlarge
       KeyName: rldb-base-pem
       ImageId: ami-08c4d70c31f91a5ac
-      IamInstanceProfile: 
+      IamInstanceProfile:
         Arn: arn:aws:iam::556885871428:instance-profile/ray-autoscaler-v1
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
@@ -45,28 +42,28 @@ available_node_types:
       InstanceType: r6a.2xlarge
       KeyName: rldb-base-pem
       ImageId: ami-08c4d70c31f91a5ac
-      IamInstanceProfile: 
+      IamInstanceProfile:
         Arn: arn:aws:iam::556885871428:instance-profile/ray-autoscaler-v1
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
-          Ebs: { VolumeSize: 50 }
-    resources: { CPU: 8, aria_small: 1 }
+          Ebs: { VolumeSize: 150 }
+    resources: { CPU: 2, aria_small: 1 }
     min_workers: 0
-    max_workers: 3
+    max_workers: 120
 
   worker_big:
     node_config:
       InstanceType: r6a.8xlarge
-      IamInstanceProfile: 
+      IamInstanceProfile:
         Arn: arn:aws:iam::556885871428:instance-profile/ray-autoscaler-v1
       KeyName: rldb-base-pem
       ImageId: ami-08c4d70c31f91a5ac
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
-          Ebs: { VolumeSize: 100 } # often worth bumping
-    resources: { CPU: 32, aria_big: 1 }
+          Ebs: { VolumeSize: 200 } # often worth bumping
+    resources: { CPU: 8, aria_big: 1 }
     min_workers: 0
-    max_workers: 0
+    max_workers: 7
 
 head_node_type: head_node
 
@@ -107,8 +104,6 @@ initialization_commands:
     pip3 install --no-input -e .
 
 setup_commands:
-  - sudo mkdir -p /mnt/raw /mnt/processed
-
   - |
     chmod +x ~/EgoVerse/egomimic/utils/aws/setup_secret.sh
     R2_SECRET_NAME=r2/rldb/credentials DB_SECRET_NAME=rds/appdb/appuser REGION=us-east-2 \

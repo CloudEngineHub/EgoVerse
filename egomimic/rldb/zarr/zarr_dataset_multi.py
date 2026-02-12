@@ -19,7 +19,6 @@ Each episode is self-contained with its own metadata, enabling:
 """
 
 from __future__ import annotations
-import json
 import logging
 import random
 from pathlib import Path
@@ -542,7 +541,6 @@ class ZarrDataset(torch.utils.data.Dataset):
 
         # Detect JPEG-encoded image keys from metadata
         self._image_keys = self._detect_image_keys()
-        self._json_keys = self._detect_json_keys()
 
     def _detect_image_keys(self) -> set[str]:
         """
@@ -658,11 +656,6 @@ class ZarrDataset(torch.utils.data.Dataset):
                 decoded = simplejpeg.decode_jpeg(jpeg_bytes, colorspace='RGB')
                 # data[k] = torch.from_numpy(np.transpose(decoded, (2, 0, 1))).to(torch.float32) / 255.0
                 data[k] = np.transpose(decoded, (2, 0, 1)) / 255.0
-            elif zarr_key in self._json_keys:
-                if isinstance(data[k], np.ndarray):
-                    data[k] = [self._decode_json_entry(v) for v in data[k]]
-                else:
-                    data[k] = self._decode_json_entry(data[k])
                     
         # Convert all numpy arrays in data to torch tensors
 

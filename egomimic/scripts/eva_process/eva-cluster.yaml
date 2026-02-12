@@ -20,9 +20,10 @@ rsync_exclude:
   - "**/__pycache__/"
   - "*.pyc"
   - "logs/"
+  - "*.parquet"
 
-max_workers: 50
-idle_timeout_minutes: 10
+max_workers: 60
+idle_timeout_minutes: 5
 
 available_node_types:
   head_node:
@@ -30,6 +31,8 @@ available_node_types:
       InstanceType: t3a.2xlarge
       KeyName: rldb-base-pem
       ImageId: ami-08c4d70c31f91a5ac
+      IamInstanceProfile: 
+        Arn: arn:aws:iam::556885871428:instance-profile/ray-autoscaler-v1
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
           Ebs: { VolumeSize: 50 }
@@ -37,17 +40,33 @@ available_node_types:
     min_workers: 0
     max_workers: 0
 
-  worker_node:
+  worker_small:
     node_config:
-      InstanceType: c5.18xlarge
+      InstanceType: r6a.2xlarge
+      KeyName: rldb-base-pem
+      ImageId: ami-08c4d70c31f91a5ac
+      IamInstanceProfile: 
+        Arn: arn:aws:iam::556885871428:instance-profile/ray-autoscaler-v1
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs: { VolumeSize: 50 }
+    resources: { CPU: 8, eva_small: 1 }
+    min_workers: 0
+    max_workers: 3
+
+  worker_big:
+    node_config:
+      InstanceType: r6a.8xlarge
+      IamInstanceProfile: 
+        Arn: arn:aws:iam::556885871428:instance-profile/ray-autoscaler-v1
       KeyName: rldb-base-pem
       ImageId: ami-08c4d70c31f91a5ac
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
-          Ebs: { VolumeSize: 50 }
-    resources: { CPU: 72 }
+          Ebs: { VolumeSize: 100 } # often worth bumping
+    resources: { CPU: 32, eva_big: 1 }
     min_workers: 0
-    max_workers: 50
+    max_workers: 0
 
 head_node_type: head_node
 
@@ -126,6 +145,7 @@ setup_commands:
           -o nonempty
       fi
 
+head_setup_commands:
   - |
       (crontab -l 2>/dev/null \
        | grep -v run_eva_conversion.py \
