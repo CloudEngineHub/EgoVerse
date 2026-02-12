@@ -53,7 +53,7 @@ def zarr_job(
     dataset_name: str,
     arm: str,
     description: str = "",
-) -> None:
+) -> tuple[Path, Path] | None:
     """
     Convert one <vrs, vrs.json, mps_*> trio to a Zarr dataset.
     """
@@ -71,7 +71,9 @@ def zarr_job(
         nthreads=2,
         debug=False,
         benchmark=False,
-        save_mp4=True
+        save_mp4=True,
+        description=description,
+        dataset_name=dataset_name
     )
 
-    aria_zarr_main(args)
+    return aria_zarr_main(args)

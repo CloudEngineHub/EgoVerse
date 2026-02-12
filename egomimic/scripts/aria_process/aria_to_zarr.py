@@ -1426,29 +1426,29 @@ class DatasetConverter:
             enable_sharding=False,
             task="",
         )            
-        # with writer.write_incremental(total_frames=total_frames) as inc:
-        #     image_frames = []
-        #     for i, frame in enumerate(AriaVRSExtractor.iter_episode_frames(episode_path, self.features, self.image_compressed, self.arm, self.prestack, self.benchmark)):
-        #         self.buffer.append(frame)
-        #         if self._mp4_path is not None:
-        #             image = frame["observations.images.front_img_1"]
-        #             image_frames.append(image)
+        with writer.write_incremental(total_frames=total_frames) as inc:
+            image_frames = []
+            for i, frame in enumerate(AriaVRSExtractor.iter_episode_frames(episode_path, self.features, self.image_compressed, self.arm, self.prestack, self.benchmark)):
+                self.buffer.append(frame)
+                if self._mp4_path is not None:
+                    image = frame["observations.images.front_img_1"]
+                    image_frames.append(image)
 
-        #         if len(self.buffer) == EPISODE_LENGTH:
+                if len(self.buffer) == EPISODE_LENGTH:
                     
-        #             for f in self.buffer:
-        #                 self.dataset.add_frame(f)
+                    for f in self.buffer:
+                        self.dataset.add_frame(f)
                     
                     
-        #             self.logger.info(f"Saving Episode after {i + 1} frames...")
-        #             self.dataset.save_episode(task=task_description)
-        #             self.buffer.clear()
-        #     if self._mp4_path is not None:
-        #         ep_stem = Path(episode_path).stem
-        #         mp4_path = self._mp4_path / f"{ep_stem}_video.mp4"
-        #         self.save_preview_mp4(image_frames, mp4_path, self.fps, self.image_compressed)
+                    self.logger.info(f"Saving Episode after {i + 1} frames...")
+                    self.dataset.save_episode(task=task_description)
+                    self.buffer.clear()
+            if self._mp4_path is not None:
+                ep_stem = Path(episode_path).stem
+                mp4_path = self._mp4_path / f"{ep_stem}_video.mp4"
+                self.save_preview_mp4(image_frames, mp4_path, self.fps, self.image_compressed)
 
-    def extract_episode(self, episode_path, task_description: str = "", output_dir: Path = Path(".")):
+    def extract_episode(self, episode_path, task_description: str = "", output_dir: Path = Path("."), dataset_name: str = ""):
         """
         Extracts frames from an episode and saves them to the dataset.
         Parameters
@@ -1461,7 +1461,7 @@ class DatasetConverter:
         -------
         None
         """
-        episode_name = Path(episode_path).stem
+        episode_name = dataset_name
         
         episode_feats = AriaVRSExtractor.process_episode(
             episode_path=episode_path,
@@ -1502,9 +1502,10 @@ class DatasetConverter:
                 p.stdin.write(image.tobytes())
         p.stdin.close()
         p.wait()
+        return zarr_path, mp4_path
         
 
-    def extract_episodes(self, episode_description: str = "", output_dir: Path = Path(".")):
+    def extract_episodes(self, episode_description: str = "", output_dir: Path = Path("."), dataset_name: str = ""):
         """
         Extracts episodes from the episode list and processes them.
         Parameters
@@ -1524,20 +1525,21 @@ class DatasetConverter:
         with mem_section("extract_episodes", enabled=self.benchmark):
             for episode_path in self.episode_list:
                 try:
-                    self.extract_episode(episode_path, task_description=episode_description, output_dir=output_dir)
+                    return self.extract_episode(episode_path, task_description=episode_description, output_dir=output_dir, dataset_name=dataset_name)
                 except Exception as e:
                     self.logger.error(f"Error processing episode {episode_path}: {e}")
                     traceback.print_exc()
                     continue
         
-
+        return None
+        
 def argument_parse():
     parser = argparse.ArgumentParser(
         description="Convert Aria VRS dataset to LeRobot-Robomimic hybrid and push to Hugging Face hub."
     )
 
     # Required arguments
-    parser.add_argument("--name", type=str, required=True, help="Name for dataset")
+    parser.add_argument("--dataset-name", type=str, required=True, help="Name for dataset")
     parser.add_argument(
         "--raw-path",
         type=Path,
@@ -1641,7 +1643,7 @@ def main(args):
     gc.collect()
     ctypes.CDLL("libc.so.6").malloc_trim(0)
     # Extract episodes
-    converter.extract_episodes(episode_description=args.description, output_dir=args.output_dir)
+    return converter.extract_episode(episode_description=args.description, output_dir=args.output_dir, dataset_name=args.dataset_name)
 
 if __name__ == "__main__":
     args = argument_parse()

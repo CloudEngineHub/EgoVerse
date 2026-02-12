@@ -48,13 +48,13 @@ from egomimic.utils.aws.aws_sql import (
 )
 
 # --- Paths -------------------------------------------------------------------
-RAW_REMOTE_PREFIX = os.environ.get("RAW_REMOTE_PREFIX", "s3://rldb/raw_v2/test_aria/").rstrip("/")
+RAW_REMOTE_PREFIX = os.environ.get("RAW_REMOTE_PREFIX", "s3://rldb/raw_v2/aria/").rstrip("/")
 PROCESSED_ROOT = Path("/home/ubuntu/processed")
 PROCESSED_LOCAL_ROOT = Path(
     os.environ.get("PROCESSED_LOCAL_ROOT", "/home/ubuntu/processed")
 ).resolve()
 PROCESSED_REMOTE_PREFIX = os.environ.get(
-    "PROCESSED_REMOTE_PREFIX", "s3://rldb/processed_v2/test_aria/"
+    "PROCESSED_REMOTE_PREFIX", "s3://rldb/processed_v3/aria/"
 ).rstrip(
     "/"
 )
@@ -341,11 +341,11 @@ def convert_one_bundle_impl(
             # TODO remove dataset_name we no longer use it for path or anything
             ds_parent = Path(out_dir)
             ds_parent.mkdir(parents=True, exist_ok=True)
-            ds_path = ds_parent / f"{stem}.zarr"
+            ds_path = ds_parent / f"{dataset_name}.zarr"
 
             try:
                 print(f"[INFO] Converting: {stem} → {ds_path} (arm={arm})", flush=True)
-                zarr_job(
+                zarr_path, mp4_path = zarr_job(
                     raw_path=str(tmp_dir),
                     output_dir=str(ds_parent),
                     dataset_name=dataset_name,
@@ -353,21 +353,19 @@ def convert_one_bundle_impl(
                 )
 
                 frames = -1
-                info = ds_parent / f"{stem}.zarr" / "zarr.json"
-                print(f"[DEBUG] Info path: {info}")
+                info = zarr_path / "zarr.json"
                 
                 if info.exists():
                     try:
                         meta = json.loads(info.read_text())
-                        print(f"[DEBUG] Meta: {meta}")
                         frames = int(meta.get("attributes", {}).get("total_frames", -1))
-                    except Exception:
+                    except Exception as e:
                         print(f"[ERR] Failed to load info: {e}")
                         frames = -1
                 else:
                     print(f"[ERR] Info not found: {info}")
 
-                candidate = ds_parent / f"{stem}_video.mp4"
+                candidate = mp4_path
                 if candidate.exists():
                     mp4_str = str(candidate)
                 else:
@@ -383,6 +381,7 @@ def convert_one_bundle_impl(
                     )
                     ds_s3_prefix = f"{out_prefix.rstrip('/')}/{ds_rel}".strip("/")
                     upload_dir_to_s3(str(ds_path), out_bucket, prefix=ds_s3_prefix)
+                    shutil.rmtree(str(ds_path), ignore_errors=True)
                     if mp4_str:
                         mp4_path = Path(mp4_str)
                         if mp4_path.exists():
@@ -396,6 +395,7 @@ def convert_one_bundle_impl(
                             )
                             try:
                                 boto3_client.upload_file(str(mp4_path), out_bucket, mp4_s3_key)
+                                mp4_path.unlink(missing_ok=True)
                             except Exception as e:
                                 raise Exception(
                                     f"Failed to upload mp4 {mp4_path} to S3: {e}"
@@ -415,12 +415,12 @@ def convert_one_bundle_impl(
                 shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
-@ray.remote(num_cpus=8, resources={"aria_small": 1})
+@ray.remote(num_cpus=2, resources={"aria_small": 1})
 def convert_one_bundle_small(*args, **kwargs):
     return convert_one_bundle_impl(*args, **kwargs)
 
 
-@ray.remote(num_cpus=32, resources={"aria_big": 1})
+@ray.remote(num_cpus=8, resources={"aria_big": 1})
 def convert_one_bundle_big(*args, **kwargs):
     return convert_one_bundle_impl(*args, **kwargs)
 
