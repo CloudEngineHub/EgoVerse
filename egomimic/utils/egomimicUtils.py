@@ -673,6 +673,144 @@ def render_3d_traj_frames(
     plt.close(fig)
     return frames
 
+def render_3d_traj_frames_NT3(
+    trajs,
+    labels=None,
+    stride=1,
+    mode="time",          # "time" or "rotate"
+    elev=20,
+    azim_start=0,
+    azim_end=360,
+    tail=None,
+    equal_axes=True,
+    figsize=(6, 6),
+    dpi=150,
+):
+    """
+    Render frames (uint8 RGB) for multiple 3D trajectories where each traj is shaped (N, T, 3):
+      - N: number of frames (global time)
+      - T: action chunk length (per-frame mini-trajectory)
+      - 3: xyz
+
+    Semantics:
+      - In "time" mode: frame i shows the chunk traj[i, ...] (optionally with tail over i).
+      - In "rotate" mode: renders a single camera rotation using the chunk at the last frame (or
+        an aggregated chunk if tail is set).
+
+    Args:
+        trajs: list of array-like, each shape (N, T, 3)
+        labels: list[str], same length as trajs
+        stride: stride over N (frames)
+        mode: "time" or "rotate"
+        elev, azim_start, azim_end: camera params
+        tail: if set in "time" mode, overlay last `tail` chunks (over N) on each frame
+        equal_axes: lock x/y/z ranges
+        figsize, dpi: output frame size
+
+    Returns:
+        frames: list[np.ndarray] each (H, W, 3) uint8
+    """
+    if not isinstance(trajs, (list, tuple)) or len(trajs) == 0:
+        raise ValueError("trajs must be a non-empty list of arrays shaped (N, T, 3).")
+
+    trajs_np = [np.asarray(a) for a in trajs]
+    base = trajs_np[0]
+    if base.ndim != 3 or base.shape[-1] != 3:
+        raise ValueError(f"Expected (N, T, 3). Got {base.shape}")
+
+    n_frames, t_chunk, _ = base.shape
+    for k, a in enumerate(trajs_np):
+        if a.shape != base.shape:
+            raise ValueError(f"All trajs must share shape. traj0={base.shape}, traj{k}={a.shape}")
+
+    if labels is None:
+        labels = [f"traj{k}" for k in range(len(trajs_np))]
+    if len(labels) != len(trajs_np):
+        raise ValueError("labels must have the same length as trajs.")
+
+    if mode not in ("time", "rotate"):
+        raise ValueError('mode must be "time" or "rotate".')
+
+    ns = np.arange(0, n_frames, stride)
+    n_len = len(ns)
+
+    fig = plt.figure(figsize=figsize, dpi=dpi)
+    ax = fig.add_subplot(111, projection="3d")
+    ax.set_xlabel("x")
+    ax.set_ylabel("y")
+    ax.set_zlabel("z")
+    ax.view_init(elev=elev, azim=azim_start)
+
+    # Fixed axis limits to prevent jitter
+    if equal_axes:
+        all_pts = np.concatenate([a[ns].reshape(-1, 3) for a in trajs_np], axis=0)
+        mins = all_pts.min(axis=0)
+        maxs = all_pts.max(axis=0)
+        center = (mins + maxs) / 2.0
+        span = (maxs - mins).max()
+        half = span / 2.0 if span > 0 else 1.0
+        ax.set_xlim(center[0] - half, center[0] + half)
+        ax.set_ylim(center[1] - half, center[1] + half)
+        ax.set_zlim(center[2] - half, center[2] + half)
+
+    lines = []
+    for lab in labels:
+        (ln,) = ax.plot([], [], [], label=lab)
+        lines.append(ln)
+    ax.legend()
+
+    def set_line_from_xyz(ln, xyz):
+        x, y, z = xyz.T
+        ln.set_data(x, y)
+        ln.set_3d_properties(z)
+
+    if mode == "rotate":
+        # Choose which chunk to show while rotating:
+        # - if tail is None: show the last chunk
+        # - else: show an aggregated polyline by concatenating last `tail` chunks
+        if tail is None:
+            xyzs = [a[ns[-1]] for a in trajs_np]  # (T, 3)
+        else:
+            start = max(0, len(ns) - int(tail))
+            xyzs = [a[ns[start:]].reshape(-1, 3) for a in trajs_np]  # (tail*T, 3)
+
+        for ln, xyz in zip(lines, xyzs):
+            set_line_from_xyz(ln, xyz)
+
+        n_frames_rot = int(abs(azim_end - azim_start)) + 1 if azim_end != azim_start else 360
+        azims = np.linspace(azim_start, azim_end, n_frames_rot)
+
+        def draw_frame(fi):
+            ax.view_init(elev=elev, azim=float(azims[fi]))
+
+        out_len = len(azims)
+
+    else:
+        # time mode: frame i shows chunk at ns[i]; optionally overlay last `tail` chunks
+        def draw_frame(fi):
+            n_idx = ns[fi]
+            if tail is None:
+                for ln, a in zip(lines, trajs_np):
+                    set_line_from_xyz(ln, a[n_idx])  # (T, 3)
+            else:
+                start_f = max(0, fi + 1 - int(tail))
+                for ln, a in zip(lines, trajs_np):
+                    xyz = a[ns[start_f:fi + 1]].reshape(-1, 3)  # (tail*T, 3)
+                    set_line_from_xyz(ln, xyz)
+
+        out_len = n_len
+
+    frames = []
+    canvas = fig.canvas
+    for fi in range(out_len):
+        draw_frame(fi)
+        canvas.draw()
+        rgba = np.asarray(canvas.buffer_rgba())
+        frames.append(rgba[..., :3].copy())
+
+    plt.close(fig)
+    return frames
+
 def xyzw_to_wxyz(xyzw):
     return np.concatenate([xyzw[..., 3:4], xyzw[..., :3]], axis=-1)
 

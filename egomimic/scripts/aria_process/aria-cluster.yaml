@@ -11,9 +11,6 @@ auth:
   ssh_user: ubuntu
   ssh_private_key: ~/.ssh/rldb-base-pem.pem
 
-file_mounts:
-  "/home/ubuntu/EgoVerse": "/home/elmo/Documents/projects/EgoVerse"
-
 rsync_exclude:
   - "emimic/"
   - ".git/"
@@ -31,7 +28,7 @@ available_node_types:
       InstanceType: t3a.2xlarge
       KeyName: rldb-base-pem
       ImageId: ami-08c4d70c31f91a5ac
-      IamInstanceProfile: 
+      IamInstanceProfile:
         Arn: arn:aws:iam::556885871428:instance-profile/ray-autoscaler-v1
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
@@ -45,7 +42,7 @@ available_node_types:
       InstanceType: r6a.2xlarge
       KeyName: rldb-base-pem
       ImageId: ami-08c4d70c31f91a5ac
-      IamInstanceProfile: 
+      IamInstanceProfile:
         Arn: arn:aws:iam::556885871428:instance-profile/ray-autoscaler-v1
       BlockDeviceMappings:
         - DeviceName: /dev/sda1
@@ -57,7 +54,7 @@ available_node_types:
   worker_big:
     node_config:
       InstanceType: r6a.8xlarge
-      IamInstanceProfile: 
+      IamInstanceProfile:
         Arn: arn:aws:iam::556885871428:instance-profile/ray-autoscaler-v1
       KeyName: rldb-base-pem
       ImageId: ami-08c4d70c31f91a5ac
@@ -107,8 +104,6 @@ initialization_commands:
     pip3 install --no-input -e .
 
 setup_commands:
-  - sudo mkdir -p /mnt/raw /mnt/processed
-
   - |
     chmod +x ~/EgoVerse/egomimic/utils/aws/setup_secret.sh
     R2_SECRET_NAME=r2/rldb/credentials DB_SECRET_NAME=rds/appdb/appuser REGION=us-east-2 \
@@ -122,7 +117,7 @@ head_setup_commands:
       | grep -v ray_worker_gaurdrails.py \
       | grep -v ray_worker_gaurdrails.lock ; \
      echo 'CRON_TZ=America/New_York'; \
-     echo '0 20 * * * flock -n /tmp/run_aria_conversion.lock /bin/bash -lc "set -a; . /home/ubuntu/.egoverse_env; set +a; /usr/bin/python3 ~/EgoVerse/egomimic/scripts/aria_process/run_aria_conversion.py --skip-if-done" >> ~/aria_conversion.log 2>&1'; \
+     echo '0 20 * * * flock -n /tmp/run_aria_conversion.lock /bin/bash -lc "set -a; . /home/ubuntu/.egoverse_env; set +a; /usr/bin/python3 ~/EgoVerse/egomimic/scripts/aria_process/run_aria_conversion.py --skip-if-done --debug" >> ~/aria_conversion.log 2>&1'; \
      echo '*/10 * * * * flock -n /tmp/ray_worker_gaurdrails.lock /usr/bin/python3 /home/ubuntu/EgoVerse/egomimic/utils/aws/budget_guardrails/ray_worker_gaurdrails.py >> /home/ubuntu/ray_worker_gaurdrails.log 2>&1') \
      | crontab - || true
 
