@@ -1,0 +1,42 @@
+# Cosmos-Policy Integration Requirements
+# 
+# This file contains dependencies needed for the cosmos-policy integration in egomimic.
+# Install with: uv pip install -r requirements-cosmos.txt
+# 
+# Note: Some packages may conflict with egomimic requirements.txt versions.
+# This file prioritizes cosmos-policy compatibility.
+# 
+# The current egomimic uv environment can install these packages alongside existing dependencies.
+# Version conflicts are documented in comments below.
+
+# Core cosmos dependencies
+# Note: cosmos-predict2 is only needed for model inference, not for dataset loading.
+# If you only need dataset functionality (CosmosPolicyRLDBDataset), you can skip this.
+cosmos-predict2>=0.1.0
+
+# Core Python libraries
+attrs>=25.0.0
+pillow>=11.0.0
+
+# Data processing and I/O
+# Note: h5py, einops are already in egomimic requirements.txt
+h5py>=3.0.0
+imageio[pyav,ffmpeg]>=2.30.0
+# Note: egomimic uses opencv-python==4.7.0.72, cosmos-policy requires opencv-contrib-python>=4.10.0
+# You may need to uninstall opencv-python before installing opencv-contrib-python
+opencv-contrib-python>=4.10.0
+# Note: egomimic uses av==12.0.0, cosmos-policy requires av>=16.0.0
+av>=16.0.0
+cloudpickle>=3.0.0
+
+# Configuration and utilities
+# Note: hydra-core, pyyaml, wandb are already in egomimic requirements.txt
+omegaconf>=2.3.0
+draccus>=0.11.0
+loguru>=0.7.2
+tqdm>=4.66.0
+
+# Text embeddings
+# Note: egomimic uses transformers==4.57.3, cosmos-policy requires >=4.51.3 (compatible)
+transformers>=4.51.3
+sentencepiece>=0.2.0

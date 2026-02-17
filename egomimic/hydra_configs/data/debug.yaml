@@ -2,7 +2,7 @@ _target_: egomimic.pl_utils.pl_data_utils.MultiDataModuleWrapper
 
 train_datasets:
   dataset1:
-    _target_: egomimic.rldb.utils.S3RLDBDataset
+    _target_: egomimic.rldb.cosmos_policy_dataset.CosmosPolicyRLDBDataset
     bucket_name: "rldb"
     mode: total
     embodiment: "eva_bimanual"
@@ -12,7 +12,7 @@ train_datasets:
 
 valid_datasets:
   dataset1:
-    _target_: egomimic.rldb.utils.S3RLDBDataset
+    _target_: egomimic.rldb.cosmos_policy_dataset.CosmosPolicyRLDBDataset
     bucket_name: "rldb"
     mode: total
     embodiment: "eva_bimanual"

@@ -20,6 +20,7 @@ train_datasets:
       task: "put cup on saucer indomain"
     local_files_only: True
 
+
 valid_datasets:
   dataset1:
     _target_: egomimic.rldb.utils.S3RLDBDataset
