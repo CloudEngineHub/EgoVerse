@@ -1,8 +1,12 @@
 _target_: egomimic.pl_utils.pl_data_utils.MultiDataModuleWrapper
 
+# use_tokenizer: True
+# collate_max_length: 128
+# model_name: "google/paligemma-3b-mix-224"
+
 train_datasets:
   dataset1:
-    _target_: egomimic.rldb.cosmos_policy_dataset.CosmosPolicyRLDBDataset
+    _target_: egomimic.rldb.utils.S3RLDBDataset
     bucket_name: "rldb"
     mode: total
     embodiment: "eva_bimanual"
@@ -12,7 +16,7 @@ train_datasets:
 
 valid_datasets:
   dataset1:
-    _target_: egomimic.rldb.cosmos_policy_dataset.CosmosPolicyRLDBDataset
+    _target_: egomimic.rldb.utils.S3RLDBDataset
     bucket_name: "rldb"
     mode: total
     embodiment: "eva_bimanual"

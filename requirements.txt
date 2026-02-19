@@ -13,7 +13,7 @@ hydra-core
 hydra-submitit-launcher==1.2.0
 black
 gpustat
-pynvml
+nvidia-ml-py
 termcolor
 pyquaternion
 rospkg
