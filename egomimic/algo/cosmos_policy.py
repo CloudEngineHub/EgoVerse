@@ -41,12 +41,9 @@ class CosmosPolicy(Algo):
         train_image_augs,
         eval_image_augs,
         # ---------------------------
-        # Model params
-        # ---------------------------
-        model_config,
-        # ---------------------------
         # Cosmos Policy specific params
         # ---------------------------
+        model_config,
         chunk_size: int = 8,
         use_proprio: bool = True,
         use_wrist_images: bool = True,
@@ -73,6 +70,7 @@ class CosmosPolicy(Algo):
         self.use_third_person_images = use_third_person_images
         self.num_history_frames = num_history_frames
         self.final_image_size = final_image_size
+        self.model_config = model_config
         
         # Initialize camera, proprio, and language keys per embodiment
         self.camera_keys = {}
@@ -98,30 +96,53 @@ class CosmosPolicy(Algo):
                     self.lang_keys[embodiment_id].append(key)
         
         # Cosmos Policy model initialization
-        # Use the same pattern as cosmos_policy/scripts/train.py: instantiate(config.model)
-        # Convert nested config dicts to LazyCall objects before creating config object
-        model_config_dict = OmegaConf.to_container(model_config, resolve=True)
+        cosmos_config = self._get_cosmos_policy_config()
+        self.model = CosmosPolicyVideo2WorldModel(config=cosmos_config)
+        self.nets["policy"] = self.model
+        self.model_config = self.model.config if hasattr(self.model, 'config') else None
+    
+    
+    def _initialize_model(self, device):
+        """Move the cosmos_policy model to the given device."""
+        # Model is already initialized in __init__, just move to device
+        if self.model is not None:
+            self.model = self.model.to(device)
+            self.device = device
+    
+    def _get_cosmos_policy_config(self):
+        """
+        Create a CosmosPolicyVideo2WorldConfig object from the model_config.
+        
+        This method handles the conversion of nested config dictionaries to their proper types:
+        - sde: dict -> L(HybridEDMSDE)(...) LazyCall
+        - tokenizer: dict -> L(Wan2pt1VAEInterface)(...) LazyCall
+        - conditioner: dict -> L(Video2WorldConditioner)(...) LazyCall (with nested text -> L(TextAttr)(...))
+        - ema: dict -> EMAConfig object
+        - net: dict -> L(WanModel)(...) LazyCall (with nested sac_config -> L(SACConfig)(...))
+        
+        Returns:
+            CosmosPolicyVideo2WorldConfig: Properly configured config object with all nested
+                configs converted to the correct types
+        """
+        model_config_dict = OmegaConf.to_container(self.model_config, resolve=True)
         
         # Convert SDE config dict to LazyCall (required by config class)
-        if isinstance(model_config_dict, dict) and "sde" in model_config_dict:
+        if "sde" in model_config_dict:
             sde_config = model_config_dict["sde"]
-            if isinstance(sde_config, dict):
-                model_config_dict["sde"] = L(HybridEDMSDE)(**sde_config)
+            model_config_dict["sde"] = L(HybridEDMSDE)(**sde_config)
         
         # Convert tokenizer config dict to LazyCall (required by config class - expects LazyDict)
-        if isinstance(model_config_dict, dict) and "tokenizer" in model_config_dict:
+        if "tokenizer" in model_config_dict:
             tokenizer_config = model_config_dict["tokenizer"]
-            if isinstance(tokenizer_config, dict):
-                model_config_dict["tokenizer"] = L(Wan2pt1VAEInterface)(**tokenizer_config)
+            model_config_dict["tokenizer"] = L(Wan2pt1VAEInterface)(**tokenizer_config)
         
         # Convert conditioner config dict to LazyCall (handle nested text config)
-        if isinstance(model_config_dict, dict) and "conditioner" in model_config_dict:
+        if "conditioner" in model_config_dict:
             conditioner_config = model_config_dict["conditioner"]
             if isinstance(conditioner_config, dict):
                 processed_conditioner = {}
                 for key, value in conditioner_config.items():
-                    if key == "text" and isinstance(value, dict):
-                        # Convert text dict to L(TextAttr)(...) with defaults
+                    if key == "text":
                         text_config = {"input_key": ["t5_text_embeddings"], "use_empty_string": False}
                         text_config.update(value)  # Override with provided values
                         processed_conditioner[key] = L(TextAttr)(**text_config)
@@ -130,19 +151,17 @@ class CosmosPolicy(Algo):
                 model_config_dict["conditioner"] = L(Video2WorldConditioner)(**processed_conditioner)
         
         # Convert ema config dict to EMAConfig object (required by config class)
-        if isinstance(model_config_dict, dict) and "ema" in model_config_dict:
+        if "ema" in model_config_dict:
             ema_config = model_config_dict["ema"]
-            if isinstance(ema_config, dict):
-                model_config_dict["ema"] = EMAConfig(**ema_config)
+            model_config_dict["ema"] = EMAConfig(**ema_config)
         
         # Convert net config dict to LazyCall (required by config class - expects LazyDict)
-        if isinstance(model_config_dict, dict) and "net" in model_config_dict:
+        if "net" in model_config_dict:
             net_config = model_config_dict["net"]
             if isinstance(net_config, dict):
-                # Handle nested sac_config if present
                 processed_net = {}
                 for key, value in net_config.items():
-                    if key == "sac_config" and isinstance(value, dict):
+                    if key == "sac_config":
                         processed_net[key] = L(SACConfig)(**value)
                     else:
                         processed_net[key] = value
@@ -150,23 +169,10 @@ class CosmosPolicy(Algo):
         
         # Filter out None values to use config class defaults
         filtered_config = {k: v for k, v in model_config_dict.items() if v is not None}
-        
-        # Create CosmosPolicyVideo2WorldConfig object from the filtered dict
-        # This will fill in all default values (like precision) from the attrs dataclass
         cosmos_config = CosmosPolicyVideo2WorldConfig(**filtered_config)
         
-        # Use instantiate() to initialize the model, same as cosmos_policy/scripts/train.py line 56
-        self.model = CosmosPolicyVideo2WorldModel(config=cosmos_config)
-        self.nets["policy"] = self.model
-        self.model_config = self.model.config if hasattr(self.model, 'config') else None
-        import pdb; pdb.set_trace()
+        return cosmos_config
     
-    def _initialize_model(self, device):
-        """Move the cosmos_policy model to the given device."""
-        # Model is already initialized in __init__, just move to device
-        if self.model is not None:
-            self.model = self.model.to(device)
-            self.device = device
     
     @override
     def process_batch_for_training(self, batch):
