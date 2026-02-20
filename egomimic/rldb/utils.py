@@ -7,6 +7,7 @@ from pprint import pprint
 import random
 import shutil
 import psutil
+import pickle
 
 from datetime import datetime, timezone
 from enum import Enum
@@ -525,6 +526,7 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
         self.use_future = use_future
         self.action_chunk = action_chunk
         self.wm_root = wm_root
+        self.success = True # all demonstration data
 
         self.embodiment = get_embodiment_id(embodiment)
         for dataset_name, dataset in self.datasets.items():
@@ -540,6 +542,9 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
                 #TODO: preprocess the wm dataset
                 dataset = self._load_or_process_future_observations(dataset)
                 self.datasets[dataset_name] = dataset
+        
+        if self.use_future:
+            self.command_emb = self._get_command_and_emb()
 
         self.hf_dataset = self._merge_hf_datasets()
 
@@ -676,7 +681,7 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
         
         # Add future_steps and success to metadata only
         dataset.meta.info["future_steps"] = self.action_chunk
-        dataset.meta.info["success"] = True
+        dataset.meta.info["success"] = self.success
         
         # Save the processed dataset to wm_root if specified
         if self.wm_root is not None:
@@ -743,29 +748,42 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
         return dataset
     
     
-    def _load_episode_task_descriptions(self):
+    def _get_command_and_emb(self):
         """
-        Load episode task descriptions from lerobot dataset metadata.
+        Get episode command and T5 embedding.
+        Assume single task setting.
+        """
+        def get_text_emb(command):
+            from cosmos_policy._src.predict2.inference.get_t5_emb import get_text_embedding
+            return get_text_embedding(command, device="cpu", max_length=512)
         
-        Returns:
-            Dictionary mapping episode_index (int) to task description (str).
-            Returns empty string for episodes with missing or empty tasks list.
-        """
-        episode_task_map = {}
+        wm_root = Path(self.wm_root)
+        wm_root.mkdir(parents=True, exist_ok=True)
+        command_emb_path = wm_root / "t5_embeddings.pkl"
+        
+        if os.path.exists(command_emb_path):
+            with open(command_emb_path, 'rb') as f:
+                command_emb = pickle.load(f)
+        else:
+            command_emb = {}
         
         for dataset_name, dataset in self.datasets.items():
             meta = getattr(dataset, 'meta', None)
             episodes = getattr(meta, 'episodes', None)
-            for episode_dict in episodes:
-                episode_index = episode_dict.get("episode_index")
-                tasks = episode_dict.get("tasks", [])
-                
-                if episode_index is not None:
-                    task_description = tasks[0] if tasks else ""
-                    if episode_index not in episode_task_map:
-                        episode_task_map[episode_index] = task_description
+            command = episodes[0]["tasks"][0]
+            if command_emb.get(command) is not None:
+                continue
+            
+            text_emb = get_text_emb(command) # (1, 512, 1024)
+            command_emb[command] = torch.tensor(text_emb, dtype=torch.float32) 
         
-        return episode_task_map
+        # save the command_emb dict
+        with open(command_emb_path, 'wb') as f:
+            pickle.dump(command_emb, f)
+        
+        return command_emb
+            
+        
 
 
 
