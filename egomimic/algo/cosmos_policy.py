@@ -194,8 +194,10 @@ class CosmosPolicy(Algo):
                 if key_name is not None:
                     processed_batch[embodiment_id][key_name] = value
             
-            # Carry through language tokenization tensors produced by collate_fn
-            for tk in ("tokenized_prompt", "tokenized_mask", "token_loss_mask", "token_ar_mask"):
+            # Pass through pre-processed fields from wm collate function
+            for tk in ("tokenized_prompt", "tokenized_mask", "token_loss_mask", "token_ar_mask",
+                       "t5_text_embeddings", "t5_text_mask", "action_chunk", "future_action_chunk",
+                       "future_proprio", "future_images"):
                 if tk in _batch:
                     processed_batch[embodiment_id][tk] = _batch[tk]
             
@@ -241,11 +243,16 @@ class CosmosPolicy(Algo):
         device = batch[ac_key].device
         B = batch[ac_key].shape[0]
         
-        # Extract action chunk from sequence
-        # Actions are (B, S, D) where S is sequence length
-        actions = batch[ac_key]  # (B, S, D)
-        # Take first chunk_size actions as the action chunk
-        action_chunk = actions[:, :self.chunk_size, :]  # (B, chunk_size, D)
+        # Use pre-processed action chunk from collate function
+        if "action_chunk" in batch:
+            action_chunk = batch["action_chunk"]  # (B, chunk_size, D)
+        else:
+            # Fallback: extract from action sequence if not pre-processed
+            actions = batch[ac_key]  # (B, S, D)
+            if actions.ndim == 3 and actions.shape[1] >= self.chunk_size:
+                action_chunk = actions[:, :self.chunk_size, :]  # (B, chunk_size, D)
+            else:
+                raise ValueError(f"Action chunk not found in batch and cannot be extracted from actions shape {actions.shape}")
         
         # Handle images: convert single frames to video sequences
         # Cosmos policy expects (B, C, T, H, W) format
@@ -285,17 +292,18 @@ class CosmosPolicy(Algo):
             else:
                 proprio = torch.zeros(B, 0, device=device)
         
-        # Handle text embeddings
-        t5_text_embeddings = None
-        t5_text_mask = None
-        if lang_keys and "tokenized_prompt" in batch:
-            # Use pre-tokenized prompts if available
+        # Handle text embeddings - use pre-processed T5 embeddings from collate function
+        if "t5_text_embeddings" in batch and "t5_text_mask" in batch:
+            t5_text_embeddings = batch["t5_text_embeddings"]  # (B, 512, 1024)
+            t5_text_mask = batch["t5_text_mask"]  # (B, 512)
+        elif lang_keys and "tokenized_prompt" in batch:
+            # Fallback: Use pre-tokenized prompts if available (legacy)
             t5_text_embeddings = batch["tokenized_prompt"]  # (B, seq_len)
             t5_text_mask = batch.get("tokenized_mask", torch.ones_like(t5_text_embeddings))
         else:
-            # Create empty embeddings
-            t5_text_embeddings = torch.zeros(B, 512, device=device, dtype=torch.float32)
-            t5_text_mask = torch.zeros(B, 512, device=device, dtype=torch.int64)
+            # Create empty embeddings as fallback
+            t5_text_embeddings = torch.zeros(B, 512, 1024, device=device, dtype=torch.float32)
+            t5_text_mask = torch.zeros(B, 512, device=device, dtype=torch.bool)
         
         # Calculate latent indices
         # These indices specify where different elements go in the latent sequence
@@ -331,9 +339,12 @@ class CosmosPolicy(Algo):
         value_function_return = torch.zeros(B, device=device, dtype=torch.float32)
         
         # Future proprio (for world model prediction)
+        # Try to use pre-processed future proprio from collate function
         future_proprio = None
-        if self.use_proprio and proprio is not None:
-            # Use next timestep proprio if available, otherwise repeat current
+        if "future_proprio" in batch:
+            future_proprio = batch["future_proprio"]
+        elif self.use_proprio and proprio is not None:
+            # Fallback: Use next timestep proprio if available, otherwise repeat current
             if len(proprio_keys) > 0 and proprio_keys[0] in batch:
                 prop = batch[proprio_keys[0]]
                 if len(prop.shape) == 3 and prop.shape[1] > 1:
@@ -404,7 +415,6 @@ class CosmosPolicy(Algo):
             lang_keys = self.lang_keys[embodiment_id]
             ac_key = self.ac_keys[embodiment_id]
             embodiment_name = get_embodiment(embodiment_id).lower()
-            import pdb; pdb.set_trace()
             
             # Transform to cosmos_policy format
             cosmos_batch = self._robomimic_to_cosmos_policy_data(

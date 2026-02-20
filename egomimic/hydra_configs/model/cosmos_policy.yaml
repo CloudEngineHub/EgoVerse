@@ -18,7 +18,7 @@ robomimic_model:
   domains: ["eva_bimanual"]
 
   # Cosmos Policy specific parameters
-  chunk_size: 8  # Action chunk size
+  chunk_size: 25  # Action chunk size
   use_proprio: true  # Whether to use proprioception
   use_wrist_images: true  # Whether to use wrist camera images
   use_third_person_images: true  # Whether to use third-person camera images

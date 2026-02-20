@@ -1,9 +1,5 @@
 _target_: egomimic.pl_utils.pl_data_utils.MultiDataModuleWrapper
 
-# use_tokenizer: True
-# collate_max_length: 128
-# model_name: "google/paligemma-3b-mix-224"
-
 train_datasets:
   dataset1:
     _target_: egomimic.rldb.utils.S3RLDBDataset
@@ -13,6 +9,8 @@ train_datasets:
     filters: 
       episode_hash: "2026-01-22-18-57-54-150000"
     local_files_only: True
+    use_future: True
+    action_chunk: 25
 
 valid_datasets:
   dataset1:
@@ -23,6 +21,8 @@ valid_datasets:
     filters: 
       episode_hash: "2026-01-22-18-57-54-150000"
     local_files_only: True
+    use_future: True
+    action_chunk: 25
 
 train_dataloader_params:
   dataset1:
@@ -33,3 +33,4 @@ valid_dataloader_params:
   dataset1:
     batch_size: 32
     num_workers: 10
+

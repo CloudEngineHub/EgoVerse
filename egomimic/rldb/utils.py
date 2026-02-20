@@ -1,4 +1,5 @@
 import ast
+import copy
 import logging
 import os
 from pprint import pprint
@@ -14,6 +15,7 @@ from unittest import result
 
 
 import boto3
+import jsonlines
 import numpy as np
 import pandas as pd
 import pyarrow as pa
@@ -26,6 +28,13 @@ import huggingface_hub
 from lerobot.common.datasets.lerobot_dataset import (
     LeRobotDataset,
     LeRobotDatasetMetadata,
+)
+from lerobot.common.datasets.utils import (
+    DEFAULT_CHUNK_SIZE,
+    DEFAULT_PARQUET_PATH,
+    INFO_PATH,
+    write_json,
+    write_parquet,
 )
 from sqlalchemy import (
     Boolean,
@@ -507,9 +516,14 @@ class AnnotationLoader:
 
 
 class MultiRLDBDataset(torch.utils.data.Dataset):
-    def __init__(self, datasets, embodiment, key_map=None):
+    def __init__(self, datasets, embodiment, key_map=None,
+                 use_future=False, action_chunk=25, wm_root=None):
         self.datasets = datasets
         self.key_map = key_map
+        
+        self.use_future = use_future
+        self.action_chunk = action_chunk
+        self.wm_root = wm_root
 
         self.embodiment = get_embodiment_id(embodiment)
         for dataset_name, dataset in self.datasets.items():
@@ -521,6 +535,9 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
         for dataset_name, dataset in self.datasets.items():
             for local_idx in range(len(dataset)):
                 self.index_map.append((dataset_name, local_idx))
+            if self.use_future:
+                dataset = self._process_future_observations(dataset)
+                self.datasets[dataset_name] = dataset
 
         self.hf_dataset = self._merge_hf_datasets()
 
@@ -562,6 +579,161 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
         merged_dataset = concatenate_datasets(dataset_list)
 
         return merged_dataset
+    
+    def _process_future_observations(self, dataset):
+        """
+        Process a dataset to add future observation columns.
+        """
+        hf_dataset = dataset.hf_dataset
+        sample = hf_dataset[0]
+        obs_keys = [key for key in sample.keys() if key.startswith("observations.")]
+        
+        episode_data_index = getattr(dataset, 'episode_data_index', None)
+        num_episodes = len(episode_data_index["from"])
+        
+        # Build future frames index map
+        future_idx_map = {}
+        for episode_idx in range(num_episodes):
+            episode_from = episode_data_index["from"][episode_idx].item()
+            episode_to = episode_data_index["to"][episode_idx].item()
+            episode_length = episode_to - episode_from
+            
+            for global_idx in range(episode_from, episode_to):
+                current_frame_idx = global_idx - episode_from  # Frame index within episode
+                
+                future_frame_idx = current_frame_idx + self.action_chunk
+                if future_frame_idx < episode_length:
+                    future_global_idx = episode_from + future_frame_idx
+                else:
+                    future_global_idx = episode_to - 1  # Last frame of episode
+                future_idx_map[global_idx] = future_global_idx
+        
+        # Pre-compute all future values to avoid repeated dataset access
+        hf_dataset_numpy = hf_dataset.with_format("numpy")
+        future_obs_dict = {f"future.{key}": [] for key in obs_keys}
+        
+        for global_idx in range(len(hf_dataset)):
+            future_global_idx = future_idx_map[global_idx]
+            future_frame = hf_dataset_numpy[future_global_idx]
+            for obs_key in obs_keys:
+                value = future_frame[obs_key]
+                future_obs_dict[f"future.{obs_key}"].append(value)
+        
+        # Map future observations back to the dataset in batches
+        def add_future_obs_batched(batch, indices):
+            result = {}
+            for obs_key in obs_keys:
+                # Extract values for this batch
+                result[f"future.{obs_key}"] = [future_obs_dict[f"future.{obs_key}"][idx] for idx in indices]
+            return result
+        
+        hf_dataset = hf_dataset.map(
+            add_future_obs_batched, 
+            with_indices=True, 
+            batched=True,
+            batch_size=10000,
+            desc="Adding future observations"
+        )
+        dataset.hf_dataset = hf_dataset
+        
+        # Update dataset metadata features to include future observations
+        for obs_key in obs_keys:
+            future_key = f"future.{obs_key}"
+            future_feature = copy.deepcopy(dataset.meta.info["features"][obs_key])
+            dataset.meta.info["features"][future_key] = future_feature
+        
+        # Add future_steps and success to metadata only
+        dataset.meta.info["future_steps"] = self.action_chunk
+        dataset.meta.info["success"] = True
+        
+        # Save the processed dataset to wm_root if specified
+        if self.wm_root is not None:
+            wm_root = Path(self.wm_root)
+            wm_root.mkdir(parents=True, exist_ok=True)
+            
+            # Create directory for this dataset (using repo_id)
+            repo_id = dataset.repo_id
+            dataset_save_dir = wm_root / repo_id
+            dataset_save_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Save HuggingFace dataset as parquet files split by episodes (same format as temp_root)
+            hf_dataset_no_transform = hf_dataset.with_format(None)  # Remove transforms for saving
+            
+            # Get episode data index to split by episodes
+            episode_data_index = getattr(dataset, 'episode_data_index', None)
+            num_episodes = len(episode_data_index["from"])
+            
+            total_chunks = num_episodes // DEFAULT_CHUNK_SIZE
+            if num_episodes % DEFAULT_CHUNK_SIZE != 0:
+                total_chunks += 1
+            
+            for episode_idx in range(num_episodes):
+                episode_from = episode_data_index["from"][episode_idx].item()
+                episode_to = episode_data_index["to"][episode_idx].item()
+                
+                episode_data = hf_dataset_no_transform.select(range(episode_from, episode_to))
+                episode_chunk = episode_idx // DEFAULT_CHUNK_SIZE
+                
+                parquet_path_str = DEFAULT_PARQUET_PATH.format(
+                    episode_chunk=episode_chunk, episode_index=episode_idx
+                )
+                parquet_path = dataset_save_dir / parquet_path_str
+                chunk_dir = parquet_path.parent
+                chunk_dir.mkdir(parents=True, exist_ok=True)
+                
+                write_parquet(episode_data, parquet_path)
+            
+            # Save updated metadata
+            meta_dir = dataset_save_dir / "meta"
+            meta_dir.mkdir(parents=True, exist_ok=True)
+            write_json(dataset.meta.info, meta_dir / "info.json")
+            
+            # Copy episodes.jsonl if it exists
+            if hasattr(dataset.meta, 'root') and dataset.meta.root:
+                source_episodes = Path(dataset.meta.root) / "meta" / "episodes.jsonl"
+                if source_episodes.exists():
+                    shutil.copy2(source_episodes, meta_dir / "episodes.jsonl")
+            
+            # Copy tasks.jsonl if it exists
+            if hasattr(dataset.meta, 'root') and dataset.meta.root:
+                source_tasks = Path(dataset.meta.root) / "meta" / "tasks.jsonl"
+                if source_tasks.exists():
+                    shutil.copy2(source_tasks, meta_dir / "tasks.jsonl")
+            
+            # Copy stats.json if it exists
+            if hasattr(dataset.meta, 'root') and dataset.meta.root:
+                source_stats = Path(dataset.meta.root) / "meta" / "stats.json"
+                if source_stats.exists():
+                    shutil.copy2(source_stats, meta_dir / "stats.json")
+            
+            logger.info(f"Saved processed dataset with future observations to {dataset_save_dir}")
+            
+        return dataset
+    
+    
+    def load_episode_task_descriptions(self):
+        """
+        Load episode task descriptions from lerobot dataset metadata.
+        
+        Returns:
+            Dictionary mapping episode_index (int) to task description (str).
+            Returns empty string for episodes with missing or empty tasks list.
+        """
+        episode_task_map = {}
+        
+        for dataset_name, dataset in self.datasets.items():
+            meta = getattr(dataset, 'meta', None)
+            episodes = getattr(meta, 'episodes', None)
+            for episode_dict in episodes:
+                episode_index = episode_dict.get("episode_index")
+                tasks = episode_dict.get("tasks", [])
+                
+                if episode_index is not None:
+                    task_description = tasks[0] if tasks else ""
+                    if episode_index not in episode_task_map:
+                        episode_task_map[episode_index] = task_description
+        
+        return episode_task_map
 
 
 # TODO: add S3 mode where it directly downloads dataset folder from S3
@@ -575,6 +747,9 @@ class FolderRLDBDataset(MultiRLDBDataset):
         local_files_only=True,
         key_map=None,
         valid_ratio=0.2,
+        use_future=False,
+        action_chunk=25,
+        wm_root="/coc/flash7/scratch/egowm/wmprocessedDataset",
         **kwargs,
     ):
         folder_path = Path(folder_path)
@@ -638,6 +813,9 @@ class FolderRLDBDataset(MultiRLDBDataset):
             datasets=datasets,
             embodiment=embodiment,
             key_map=key_map_per_dataset,
+            use_future=use_future,
+            action_chunk=action_chunk,
+            wm_root=wm_root,
         )
 
         if skipped:
@@ -688,6 +866,9 @@ class S3RLDBDataset(MultiRLDBDataset):
         cache_root="/coc/flash7/scratch/egowm/.cache",  # "/coc/flash7/scratch/.cache"
         filters={},
         debug=False,
+        use_future=False,
+        action_chunk=25,
+        wm_root="/coc/flash7/scratch/egowm/wmprocessedDataset",
         **kwargs,
     ):
         filters["robot_name"] = embodiment
@@ -785,6 +966,9 @@ class S3RLDBDataset(MultiRLDBDataset):
             datasets=datasets,
             embodiment=embodiment,
             key_map=key_map_per_dataset,
+            use_future=use_future,
+            action_chunk=action_chunk,
+            wm_root=wm_root,
         )
 
         if skipped:
@@ -1479,12 +1663,14 @@ class DataSchematic(object):
         return denorm_data
 
 
+
+
 if __name__ == "__main__":
     dataset = S3RLDBDataset(
         embodiment="eva_bimanual",
         mode="total",
         local_files_only=True,
-        temp_root='/coc/flash7/scratch/egowm/egoverseS3Dataset',
-        cache_root='/coc/flash7/scratch/egowm/.cache',
-        filters={"episode_hash": "2026-01-22-18-57-54-150000"}
+        filters={"episode_hash": "2026-01-22-18-57-54-150000"},
+        use_future=True,
+        action_chunk=25
     )
