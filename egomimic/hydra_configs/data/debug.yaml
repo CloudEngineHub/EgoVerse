@@ -26,11 +26,11 @@ valid_datasets:
 
 train_dataloader_params:
   dataset1:
-    batch_size: 32
+    batch_size: 1
     num_workers: 10
 
 valid_dataloader_params:
   dataset1:
-    batch_size: 32
+    batch_size: 1
     num_workers: 10
 

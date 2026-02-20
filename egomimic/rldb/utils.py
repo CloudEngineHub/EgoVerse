@@ -370,8 +370,6 @@ class RLDBDataset(LeRobotDataset):
 
         return frame_item
 
-
-
     def _get_frame_annotation(
         self,
         episode_idx: int,
@@ -517,6 +515,7 @@ class AnnotationLoader:
         return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+
 class MultiRLDBDataset(torch.utils.data.Dataset):
     def __init__(self, datasets, embodiment, key_map=None,
                  use_future=False, action_chunk=25, wm_root=None):
@@ -533,6 +532,9 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
             assert dataset.embodiment == self.embodiment, (
                 f"Dataset {dataset_name} has embodiment {dataset.embodiment}, expected {self.embodiment}."
             )
+        
+        if self.use_future:
+            self.command_emb = self._get_command_and_emb()
 
         self.index_map = []
         for dataset_name, dataset in self.datasets.items():
@@ -543,9 +545,6 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
                 dataset = self._load_or_process_future_observations(dataset)
                 self.datasets[dataset_name] = dataset
         
-        if self.use_future:
-            self.command_emb = self._get_command_and_emb()
-
         self.hf_dataset = self._merge_hf_datasets()
 
         super().__init__()
@@ -624,6 +623,7 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
         hf_dataset = dataset.hf_dataset
         sample = hf_dataset[0]
         obs_keys = [key for key in sample.keys() if key.startswith("observations.")]
+        action_keys = [key for key in sample.keys() if key.startswith("actions_")]
         
         episode_data_index = getattr(dataset, 'episode_data_index', None)
         num_episodes = len(episode_data_index["from"])
@@ -648,6 +648,7 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
         # Pre-compute all future values to avoid repeated dataset access
         hf_dataset_numpy = hf_dataset.with_format("numpy")
         future_obs_dict = {f"future.{key}": [] for key in obs_keys}
+        future_action_dict = {f"future.{key}": [] for key in action_keys}
         
         for global_idx in range(len(hf_dataset)):
             future_global_idx = future_idx_map[global_idx]
@@ -655,13 +656,19 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
             for obs_key in obs_keys:
                 value = future_frame[obs_key]
                 future_obs_dict[f"future.{obs_key}"].append(value)
+            for action_key in action_keys:
+                value = future_frame[action_key]
+                future_action_dict[f"future.{action_key}"].append(value)
         
-        # Map future observations back to the dataset in batches
+        # Map future observations and actions back to the dataset in batches
         def add_future_obs_batched(batch, indices):
             result = {}
             for obs_key in obs_keys:
                 # Extract values for this batch
                 result[f"future.{obs_key}"] = [future_obs_dict[f"future.{obs_key}"][idx] for idx in indices]
+            for action_key in action_keys:
+                # Extract values for this batch
+                result[f"future.{action_key}"] = [future_action_dict[f"future.{action_key}"][idx] for idx in indices]
             return result
         
         hf_dataset = hf_dataset.map(
@@ -669,7 +676,7 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
             with_indices=True, 
             batched=True,
             batch_size=10000,
-            desc="Adding future observations"
+            desc="Adding future observations and actions"
         )
         dataset.hf_dataset = hf_dataset
         
@@ -677,6 +684,12 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
         for obs_key in obs_keys:
             future_key = f"future.{obs_key}"
             future_feature = copy.deepcopy(dataset.meta.info["features"][obs_key])
+            dataset.meta.info["features"][future_key] = future_feature
+        
+        # Update dataset metadata features to include future actions
+        for action_key in action_keys:
+            future_key = f"future.{action_key}"
+            future_feature = copy.deepcopy(dataset.meta.info["features"][action_key])
             dataset.meta.info["features"][future_key] = future_feature
         
         # Add future_steps and success to metadata only
@@ -1732,4 +1745,4 @@ if __name__ == "__main__":
         use_future=True,
         action_chunk=25
     )
-    import pdb; pdb.set_trace()  # Check
+    import pdb; pdb.set_trace()
