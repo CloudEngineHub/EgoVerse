@@ -1,5 +1,6 @@
 import ast
 import copy
+import json
 import logging
 import os
 from pprint import pprint
@@ -536,7 +537,8 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
             for local_idx in range(len(dataset)):
                 self.index_map.append((dataset_name, local_idx))
             if self.use_future:
-                dataset = self._process_future_observations(dataset)
+                #TODO: preprocess the wm dataset
+                dataset = self._load_or_process_future_observations(dataset)
                 self.datasets[dataset_name] = dataset
 
         self.hf_dataset = self._merge_hf_datasets()
@@ -579,6 +581,36 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
         merged_dataset = concatenate_datasets(dataset_list)
 
         return merged_dataset
+    
+    def _load_or_process_future_observations(self, dataset):
+        """
+        Check if processed dataset exists in wm_root with matching future_steps.
+        If so, load it; otherwise, process the dataset.
+        """
+        if self.wm_root is not None:
+            wm_root = Path(self.wm_root)
+            repo_id = dataset.repo_id
+            dataset_save_dir = wm_root / repo_id
+            info_json_path = dataset_save_dir / "meta" / "info.json"
+            
+            # Check if the dataset directory and info.json exist
+            if dataset_save_dir.exists() and info_json_path.exists():
+                with open(info_json_path, 'r') as f:
+                    saved_info = json.load(f)
+                
+                saved_future_steps = saved_info.get("future_steps")
+                if saved_future_steps == self.action_chunk:
+                    loaded_dataset = RLDBDataset(
+                        repo_id=repo_id,
+                        root=dataset_save_dir,
+                        local_files_only=True,
+                        mode="total",  # Load all episodes (processed dataset has all episodes)
+                        percent=1.0,
+                        valid_ratio=0.0,
+                    )
+                    return loaded_dataset
+                
+        return self._process_future_observations(dataset)
     
     def _process_future_observations(self, dataset):
         """
@@ -711,7 +743,7 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
         return dataset
     
     
-    def load_episode_task_descriptions(self):
+    def _load_episode_task_descriptions(self):
         """
         Load episode task descriptions from lerobot dataset metadata.
         
@@ -736,6 +768,10 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
         return episode_task_map
 
 
+
+###################################################################
+#      Multi-Dataset Wrappers and Loaders in S3
+###################################################################
 # TODO: add S3 mode where it directly downloads dataset folder from S3
 class FolderRLDBDataset(MultiRLDBDataset):
     def __init__(
@@ -971,8 +1007,8 @@ class S3RLDBDataset(MultiRLDBDataset):
             wm_root=wm_root,
         )
 
-        if skipped:
-            logger.warning(f"Skipped {len(skipped)} datasets: {skipped}")
+        # if skipped:
+        #     logger.warning(f"Skipped {len(skipped)} datasets: {skipped}")
 
     @classmethod
     def _load_rldb_dataset_one(
@@ -1293,6 +1329,10 @@ class S3RLDBDataset(MultiRLDBDataset):
         return filtered_paths
 
 
+
+#############################################################
+#       Data Schematic and Normalization Utils
+#############################################################
 class DataSchematic(object):
     def __init__(self, schematic_dict, viz_img_key, norm_mode="zscore"):
         """
@@ -1674,3 +1714,4 @@ if __name__ == "__main__":
         use_future=True,
         action_chunk=25
     )
+    import pdb; pdb.set_trace()  # Check
