@@ -3,12 +3,12 @@ robomimic_model:
   _target_: egomimic.algo.cosmos_policy.CosmosPolicy
   data_schematic: _${data.dataset.data_schematic}
   camera_transforms:
-    eva_bimanual:
-      _target_: egomimic.utils.egomimicUtils.CameraTransforms
-      intrinsics_key: "base" # change to base_half if using half res 
-      extrinsics_key: "x5Dec13_2"
+    _target_: egomimic.utils.egomimicUtils.CameraTransforms
+    intrinsics_key: "base" # change to base_half if using half res 
+    extrinsics_key: "x5Dec13_2"
   
   domains: ["eva_bimanual"]
+  
 
   # Cosmos Policy specific parameters
   action_chunk: 25 # Should match the dataset config

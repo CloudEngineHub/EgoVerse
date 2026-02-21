@@ -1707,21 +1707,31 @@ class DataSchematic(object):
                     )
 
                 stats = self.norm_stats[embodiment][key]
+
+                def _slice_stats_to_tensor_shape(stat_tensor):
+                    """Slice stat along sequence dim if it exceeds tensor length (e.g. policy predicts 25 steps, stats computed over 100)."""
+                    need_len = tensor.shape[1]
+                    if stat_tensor.dim() == 2 and stat_tensor.shape[0] > need_len:
+                        return stat_tensor[:need_len, :].contiguous()
+                    if stat_tensor.dim() >= 3 and stat_tensor.shape[1] > need_len:
+                        return stat_tensor[:, :need_len, ...].contiguous()
+                    return stat_tensor
+
                 if self.norm_mode == "zscore":
-                    mean = stats["mean"].to(tensor.device)
-                    std = stats["std"].to(tensor.device)
+                    mean = _slice_stats_to_tensor_shape(stats["mean"].to(tensor.device))
+                    std = _slice_stats_to_tensor_shape(stats["std"].to(tensor.device))
                     denorm_data[key] = tensor * (std + 1e-6) + mean
 
                 elif self.norm_mode == "minmax":
-                    min_val = stats["min"].to(tensor.device)
-                    max_val = stats["max"].to(tensor.device)
+                    min_val = _slice_stats_to_tensor_shape(stats["min"].to(tensor.device))
+                    max_val = _slice_stats_to_tensor_shape(stats["max"].to(tensor.device))
                     denorm_data[key] = (tensor + 1) * 0.5 * (
                         max_val - min_val + 1e-6
                     ) + min_val
 
                 elif self.norm_mode == "quantile":
-                    quantile_1 = stats["quantile_1"].to(tensor.device)
-                    quantile_99 = stats["quantile_99"].to(tensor.device)
+                    quantile_1 = _slice_stats_to_tensor_shape(stats["quantile_1"].to(tensor.device))
+                    quantile_99 = _slice_stats_to_tensor_shape(stats["quantile_99"].to(tensor.device))
                     denorm_data[key] = (tensor + 1) * 0.5 * (
                         quantile_99 - quantile_1 + 1e-6
                     ) + quantile_1

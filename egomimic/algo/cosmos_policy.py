@@ -28,6 +28,7 @@ from cosmos_policy._src.predict2.networks.minimal_v4_dit import SACConfig
 from cosmos_policy._src.imaginaire.lazy_config import LazyCall as L
 from cosmos_policy._src.imaginaire.utils.checkpoint_db import get_checkpoint_path
 from cosmos_policy.datasets.dataset_utils import preprocess_image, resize_images
+from cosmos_policy.experiments.robot.cosmos_utils import extract_action_chunk_from_latent_sequence
 
 logger = logging.getLogger(__name__)
 
@@ -862,20 +863,31 @@ class CosmosPolicy(Algo):
                     _batch, cam_keys, proprio_keys, lang_keys, ac_keys, embodiment_name
                 )
                 
-                # Call cosmos_policy model inference.
-                pred_actions = self.model.generate_samples_from_batch(cosmos_batch)
-                import pdb; pdb.set_trace()
+                # Call cosmos_policy model inference. Returns latent (B, C, T, H, W).
+                generated_latent = self.model.generate_samples_from_batch(cosmos_batch)
+                # Extract action chunk from latent: (B, action_chunk, action_dim).
+                action_shape = (
+                    cosmos_batch["actions"].shape[1],
+                    cosmos_batch["actions"].shape[2],
+                )
+                extracted_actions = extract_action_chunk_from_latent_sequence(
+                    generated_latent,
+                    action_shape=action_shape,
+                    action_indices=cosmos_batch["action_latent_idx"],
+                ) # (B, action_chunk, action_dim)
                 
-                # Unnormalize predictions
-                pred_dict = {ac_key: pred_actions}
+                # Split concatenated actions back into per-ac_key tensors for unnormalization.
+                pred_dict = {}
+                offset = 0
+                for _ac_key in ac_keys:
+                    if _ac_key in _batch and "future" not in _ac_key.lower():
+                        d = _batch[_ac_key].shape[-1]
+                        pred_dict[_ac_key] = extracted_actions[:, :, offset:offset + d]
+                
                 unnorm_preds = self.data_schematic.unnormalize_data(pred_dict, embodiment_id)
-                
-                for key in unnorm_preds:
-                    predictions[f"{embodiment_name}_{key}"] = unnorm_preds[key]
-        
-        return predictions
-    
-    @override
+                predictions[f"{embodiment_name}_{ac_key}"] = unnorm_preds[ac_key]        
+                return predictions
+            
     def forward_eval_logging(self, batch):
         """
         Called by pl_model to generate a dictionary of metrics and an image visualization
@@ -900,13 +912,13 @@ class CosmosPolicy(Algo):
             pred_key = f"{embodiment_name}_{ac_key}"
             
             if pred_key in preds:
-                metrics[f"Valid/{pred_key}_paired_mse_avg"] = mse(
-                    preds[pred_key].cpu(),
-                    _batch[ac_key].cpu()
-                )
+                # Cosmos policy predicts action_chunk steps; GT may have longer horizon (e.g. 100). Slice to same length for MSE.
+                pred_action = preds[pred_key].cpu()
+                gt_action_full = _batch[ac_key].cpu()
+                gt_action = gt_action_full[:, : pred_action.shape[1], :]
+                metrics[f"Valid/{pred_key}_paired_mse_avg"] = mse(pred_action, gt_action)
                 metrics[f"Valid/{pred_key}_final_mse_avg"] = mse(
-                    preds[pred_key][:, -1].cpu(),
-                    _batch[ac_key][:, -1].cpu()
+                    pred_action[:, -1], gt_action[:, -1]
                 )
             
             ims = self.visualize_preds(preds, _batch)
@@ -939,8 +951,12 @@ class CosmosPolicy(Algo):
         pred_key = f"{embodiment_name}_{ac_key}"
         if pred_key in predictions:
             preds = predictions[pred_key]
-            gt = batch[ac_key]
+            gt_full = batch[ac_key]
+            gt = gt_full[:, : preds.shape[1], :]
             
+            gt, gt_rot = self._extract_xyz(gt)
+            preds, preds_rot = self._extract_xyz(preds)
+
             for b in range(ims.shape[0]):
                 if preds.shape[-1] == 7 or preds.shape[-1] == 14:
                     ac_type = "joints"
@@ -955,7 +971,7 @@ class CosmosPolicy(Algo):
                     self.camera_transforms.extrinsics, self.camera_transforms.intrinsics, arm=arm
                 )
                 ims[b] = draw_actions(
-                    ims[b], ac_type, "Greens", gt[b].cpu().numpy(),
+                    ims[b], ac_type, "Greens", gt[b].cpu().numpy(), 
                     self.camera_transforms.extrinsics, self.camera_transforms.intrinsics, arm=arm
                 )
         
@@ -1016,4 +1032,38 @@ class CosmosPolicy(Algo):
             log["Policy_Grad_Norms"] = info["policy_grad_norms"]
         
         return log
+    
+    def _extract_xyz(self, x):
+        """
+        Extract xyz (3D position) and rotation from 6DoF or 6DoF+gripper actions.
 
+        Supports:
+        - 6: 6DoF (single arm)
+        - 7: 6DoF + gripper (single arm)
+        - 12: 2 arms × 6DoF
+        - 14: 2 arms × (6DoF + gripper)
+
+        Returns:
+            xyz: Tensor with only xyz per arm (shape: ..., 3) or (..., 6) for dual-arm.
+            rot: Tensor with only rotation per arm (shape: ..., 3) or (..., 6) for dual-arm.
+        """
+        if x.shape[-1] == 6:
+            return x[..., :3], x[..., 3:6]
+        elif x.shape[-1] == 7:
+            return x[..., :3], x[..., 3:6]
+        elif x.shape[-1] == 12:
+            xyz_right = x[..., :3]
+            rot_right = x[..., 3:6]
+            xyz_left = x[..., 6:9]
+            rot_left = x[..., 9:12]
+            return torch.cat([xyz_right, xyz_left], dim=-1), torch.cat([rot_right, rot_left], dim=-1)
+        elif x.shape[-1] == 14:
+            xyz_right = x[..., :3]
+            rot_right = x[..., 3:6]
+            xyz_left = x[..., 7:10]
+            rot_left = x[..., 10:13]
+            return torch.cat([xyz_right, xyz_left], dim=-1), torch.cat([rot_right, rot_left], dim=-1)
+        else:
+            raise ValueError(f"Unexpected shape for 6DoF input: {x.shape}")
+
+    

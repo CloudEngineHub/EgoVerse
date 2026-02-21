@@ -33,7 +33,7 @@ class ModelWrapper(LightningModule):
             model (PolicyAlgo): robomimic model to wrap.
         """
         super().__init__()
-        self.save_hyperparameters()
+        self.save_hyperparameters(ignore=["robomimic_model"])
 
         self.model = robomimic_model
         self.nets = (
@@ -248,3 +248,48 @@ class ModelWrapper(LightningModule):
             log_all[f"Optimizer/param_group_{i}_lr"] = param_group["lr"]
 
         return super().on_train_epoch_start()
+    
+    def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        """Remove non-pickleable objects (e.g. torch.cuda.Stream) from checkpoint so torch.save succeeds."""
+        checkpoint.pop("loops", None)
+        if "state_dict" in checkpoint:
+            sd = checkpoint["state_dict"]
+            checkpoint["state_dict"] = {
+                k: v for k, v in sd.items()
+                if isinstance(v, torch.Tensor)
+            }
+        self._remove_streams_from_obj(checkpoint)
+
+    def _remove_streams_from_obj(self, obj: Any) -> None:
+        """Recursively remove or replace torch.cuda.Stream from dicts/lists/tuples."""
+        if not hasattr(torch.cuda, "Stream"):
+            return
+        if isinstance(obj, dict):
+            to_remove = []
+            for k, v in obj.items():
+                if isinstance(v, torch.cuda.Stream):
+                    to_remove.append(k)
+                elif isinstance(v, tuple):
+                    obj[k] = tuple(
+                        None if isinstance(x, torch.cuda.Stream) else x for x in v
+                    )
+                    for x in obj[k]:
+                        if x is not None:
+                            self._remove_streams_from_obj(x)
+                else:
+                    self._remove_streams_from_obj(v)
+            for k in to_remove:
+                del obj[k]
+        elif isinstance(obj, list):
+            for i, v in enumerate(obj):
+                if isinstance(v, torch.cuda.Stream):
+                    obj[i] = None
+                elif isinstance(v, tuple):
+                    obj[i] = tuple(
+                        None if isinstance(x, torch.cuda.Stream) else x for x in v
+                    )
+                    for x in obj[i]:
+                        if x is not None:
+                            self._remove_streams_from_obj(x)
+                else:
+                    self._remove_streams_from_obj(v)
