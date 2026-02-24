@@ -114,6 +114,7 @@ class CosmosPolicy(Algo):
         p_world_model: float = 0.5,
         return_value_function_returns: bool = False,
         val_num_inference_steps: int = 35,
+        debug: bool = False,
         **kwargs
     ):
         super().__init__()
@@ -140,6 +141,8 @@ class CosmosPolicy(Algo):
         self.p_world_model = p_world_model
         self.return_value_function_returns = return_value_function_returns
         self.val_num_inference_steps = val_num_inference_steps
+        
+        self.debug = debug
         
         # Initialize camera, proprio, and language keys per embodiment
         self.ac_keys = {}
@@ -806,85 +809,113 @@ class CosmosPolicy(Algo):
             batch (dict): dictionary with torch.Tensors sampled
                 from a data loader and filtered by @process_batch_for_training
         Returns:
-            predictions (dict): {ac_key: torch.Tensor (B, Seq, D), loss_key_name: torch.Tensor (1)}
+            predictions (dict): {ac_key: Tensor, loss_key: Tensor, cosmos sub-losses…}
         """
         if self.device is None:
-            # Set device from batch
             first_tensor = next(iter(batch.values())) if isinstance(batch, dict) else None
             if first_tensor is not None:
                 self.device = first_tensor.device
                 self._initialize_model(self.device)
-        
+
         predictions = OrderedDict()
-        
-        # batch: dict_keys(['front_img_1', 'left_wrist_img', 'right_wrist_img', 
-        # 'joint_positions', 'ee_pose', 'actions_joints', 'actions_cartesian', 'embodiment', 'pad_mask'])
+
         for embodiment_id, _batch in batch.items():
             cam_keys = self.camera_keys[embodiment_id]
             proprio_keys = self.proprio_keys[embodiment_id]
             lang_keys = self.lang_keys[embodiment_id]
             ac_keys = self.ac_keys[embodiment_id]
             embodiment_name = get_embodiment(embodiment_id).lower()
-            
-            # Transform to cosmos_policy format
+
             cosmos_batch = self._robomimic_to_cosmos_policy_data(
                 _batch, cam_keys, proprio_keys, lang_keys, ac_keys, embodiment_name
             )
-            
-            # Call cosmos_policy model training_step
+
             iteration = getattr(self, "_current_iteration", 0)
 
-            # Pre-call input NaN diagnostics (for debug)
-            if isinstance(cosmos_batch, dict):
-                nan_input_keys = [
-                    k for k, v in cosmos_batch.items()
-                    if torch.is_tensor(v) and torch.isnan(v).any()
-                ]
-                if nan_input_keys:
-                    logger.warning(
-                        f"[iter {iteration}] NaN in cosmos_batch inputs for embodiment "
-                        f"'{embodiment_name}': {nan_input_keys}"
-                    )
+            # Pre-call NaN diagnostics (for debug)
+            if self.debug:
+                if isinstance(cosmos_batch, dict):
+                    nan_input_keys = [
+                        k for k, v in cosmos_batch.items()
+                        if torch.is_tensor(v) and torch.isnan(v).any()
+                    ]
+                    if nan_input_keys:
+                        logger.warning(
+                            "[iter %d] NaN in cosmos_batch inputs for embodiment '%s': %s",
+                            iteration, embodiment_name, nan_input_keys,
+                        )
 
             output_batch, loss = self.model.training_step(cosmos_batch, iteration)
 
-            # Post-call NaN diagnostics: log (but do not raise) so training is not interrupted
-            if torch.is_tensor(loss) and torch.isnan(loss).any():
-                logger.warning(
-                    f"[iter {iteration}] NaN loss detected for embodiment '{embodiment_name}': "
-                    f"loss={loss.item() if loss.numel() == 1 else loss}"
-                )
-            if isinstance(output_batch, dict):
-                nan_keys = [
-                    k for k, v in output_batch.items()
-                    if torch.is_tensor(v) and torch.isnan(v).any()
-                ]
-                if nan_keys:
+            # Post-call NaN diagnostics (for debug)
+            if self.debug:
+                if torch.is_tensor(loss) and torch.isnan(loss).any():
                     logger.warning(
-                        f"[iter {iteration}] NaN in output_batch keys for embodiment "
-                        f"'{embodiment_name}': {nan_keys}"
+                        "[iter %d] NaN loss for embodiment '%s': %s",
+                        iteration, embodiment_name,
+                        loss.item() if loss.numel() == 1 else loss,
                     )
+                if isinstance(output_batch, dict):
+                    nan_keys = [
+                        k for k, v in output_batch.items()
+                        if torch.is_tensor(v) and torch.isnan(v).any()
+                    ]
+                    if nan_keys:
+                        logger.warning(
+                            "[iter %d] NaN in output_batch keys for embodiment '%s': %s",
+                            iteration, embodiment_name, nan_keys,
+                        )
 
             for ac_key in ac_keys:
                 if ac_key in output_batch:
                     predictions[f"{embodiment_name}_{ac_key}"] = output_batch[ac_key]
             predictions[f"{embodiment_name}_loss"] = loss
-            
+
+            # Propagate rich cosmos sub-losses (demo / WM / VF breakdowns) into
+            # predictions so compute_losses can log them to TensorBoard.
+            # Keys that are NaN (e.g. no WM samples in this batch) are still passed
+            # through; compute_losses will filter them out before logging.
+            _sub_loss_keys = (
+                "edm_loss",
+                "mse_loss",
+                "demo_sample_action_mse_loss",
+                "demo_sample_action_l1_loss",
+                "demo_sample_future_image_mse_loss",
+                "demo_sample_future_image_l1_loss",
+                "demo_sample_future_wrist_image_mse_loss",
+                "demo_sample_future_wrist_image_l1_loss",
+                "demo_sample_future_proprio_mse_loss",
+                "demo_sample_future_proprio_l1_loss",
+                "demo_sample_value_mse_loss",
+                "demo_sample_value_l1_loss",
+                "world_model_sample_future_image_mse_loss",
+                "world_model_sample_future_image_l1_loss",
+                "world_model_sample_future_wrist_image_mse_loss",
+                "world_model_sample_future_wrist_image_l1_loss",
+                "world_model_sample_future_proprio_mse_loss",
+                "world_model_sample_future_proprio_l1_loss",
+                "world_model_sample_value_mse_loss",
+                "world_model_sample_value_l1_loss",
+                "value_function_sample_value_mse_loss",
+                "value_function_sample_value_l1_loss",
+            )
+            for k in _sub_loss_keys:
+                if k in output_batch:
+                    predictions[f"{embodiment_name}_{k}"] = output_batch[k]
+
         return predictions
-    
-    
+
     @override
     def forward_eval(self, batch, return_wm_data=False):
         """
         Compute forward pass and return network outputs in @predictions dict.
         Args:
-            batch (dict): dictionary with torch.Tensors sampled
-                from a data loader and filtered by @process_batch_for_training
-            return_wm_data (bool): when True also return a wm_data_dict keyed by
-                embodiment_id containing {"cosmos_batch", "generated_latent",
-                "orig_clean_latent_frames"} for downstream WM visualization.
+            batch (dict): processed batch from @process_batch_for_training
+            return_wm_data (bool): when True also return wm_data_dict keyed by
+                embodiment_id with "cosmos_batch", "generated_latent",
+                "orig_clean_latent_frames" for WM visualization.
         Returns:
-            predictions (dict): {ac_key: torch.Tensor (B, Seq, D)}
+            predictions (dict): {ac_key: Tensor}
             wm_data_dict (dict): only returned when return_wm_data=True
         """
         if self.device is None:
@@ -892,29 +923,26 @@ class CosmosPolicy(Algo):
             if first_tensor is not None:
                 self.device = first_tensor.device
                 self._initialize_model(self.device)
-        
+
         predictions = OrderedDict()
         wm_data_dict = {}
-        
+
         with torch.no_grad():
             for embodiment_id, _batch in batch.items():
                 cam_keys = self.camera_keys[embodiment_id]
                 proprio_keys = self.proprio_keys[embodiment_id]
                 lang_keys = self.lang_keys[embodiment_id]
                 ac_keys = self.ac_keys[embodiment_id]
-                ac_key = ac_keys[0]  # single key for batch indexing
+                ac_key = ac_keys[0]
                 embodiment_name = get_embodiment(embodiment_id).lower()
-                
-                # Transform to cosmos_policy format
+
                 cosmos_batch = self._robomimic_to_cosmos_policy_data(
                     _batch, cam_keys, proprio_keys, lang_keys, ac_keys, embodiment_name
                 )
-                
-                # Call cosmos_policy model inference. Returns latent (B, C, T, H, W).
-                # val_num_inference_steps lets us trade quality for speed: fewer steps
-                # (e.g., 5) are ~7× faster and allow full-episode validation videos.
-                # When return_wm_data=True we also retrieve the unmodified GT latent
-                # frames (pre-injection) needed to undo latent artifacts before decoding.
+
+                # val_num_inference_steps lets us trade quality for speed; fewer steps
+                # (e.g., 5) are ~7x faster and allow full-episode validation videos.
+                # return_orig_clean_latent_frames is needed for WM visualization.
                 if return_wm_data:
                     generated_latent, orig_clean_latent_frames = (
                         self.model.generate_samples_from_batch(
@@ -933,7 +961,6 @@ class CosmosPolicy(Algo):
                         cosmos_batch, num_steps=self.val_num_inference_steps
                     )
 
-                # Extract action chunk from latent: (B, action_chunk, action_dim).
                 action_shape = (
                     cosmos_batch["actions"].shape[1],
                     cosmos_batch["actions"].shape[2],
@@ -942,9 +969,8 @@ class CosmosPolicy(Algo):
                     generated_latent,
                     action_shape=action_shape,
                     action_indices=cosmos_batch["action_latent_idx"],
-                ) # (B, action_chunk, action_dim)
-                
-                # Split concatenated actions back into per-ac_key tensors for unnormalization.
+                )
+
                 pred_dict = {}
                 offset = 0
                 for _ac_key in ac_keys:
@@ -959,34 +985,30 @@ class CosmosPolicy(Algo):
         if return_wm_data:
             return predictions, wm_data_dict
         return predictions
-            
+
     def forward_eval_logging(self, batch):
         """
-        Called by pl_model to generate a dictionary of metrics and an image visualization
+        Called by pl_model during validation to produce metrics and visualizations.
         Args:
-            batch (dict): dictionary with torch.Tensors sampled
-                from a data loader and filtered by @process_batch_for_training
+            batch (dict): processed batch from @process_batch_for_training
         Returns:
-            metrics (dict): metricname: value (float)
-            images_dict (dict): embodiment_id: images (np.ndarray)
+            metrics (dict): name -> float
+            images_dict (dict): embodiment_id -> np.ndarray (B, H, W, 3)
         """
         from torchmetrics import MeanSquaredError
-        
-        preds = self.forward_eval(batch)
+
+        preds, wm_data_dict = self.forward_eval(batch, return_wm_data=True)
         metrics = {}
         images_dict = {}
         mse = MeanSquaredError()
-        
+
         for embodiment_id, _batch in batch.items():
             _batch = self.data_schematic.unnormalize_data(_batch, embodiment_id)
             embodiment_name = get_embodiment(embodiment_id).lower()
             ac_key = self.ac_keys[embodiment_id][0]
             pred_key = f"{embodiment_name}_{ac_key}"
-            
+
             if pred_key in preds:
-                # Cosmos policy predicts action_chunk steps; GT may have longer horizon (e.g. 100). Slice to same length for MSE.
-                # .contiguous() required: sliced tensors from batch_size>1 may be non-contiguous,
-                # causing torchmetrics' internal .view(-1) to fail.
                 pred_action = preds[pred_key].cpu().contiguous()
                 gt_action_full = _batch[ac_key].cpu()
                 gt_action = gt_action_full[:, : pred_action.shape[1], :].contiguous()
@@ -994,119 +1016,372 @@ class CosmosPolicy(Algo):
                 metrics[f"Valid/{pred_key}_final_mse_avg"] = mse(
                     pred_action[:, -1].contiguous(), gt_action[:, -1].contiguous()
                 )
-            
-            ims = self.visualize_preds(preds, _batch)
+
+            # Build WM visualization panels (predicted future vs GT future images).
+            wm_preds = None
+            if embodiment_id in wm_data_dict:
+                try:
+                    wm_preds = self._decode_wm_future_images(
+                        wm_data_dict[embodiment_id], _batch,
+                        self.camera_keys[embodiment_id],
+                    )
+                except Exception as _wm_err:
+                    logger.warning("WM visualization failed: %s", _wm_err)
+
+            ims = self.visualize_preds(preds, _batch, wm_preds=wm_preds)
             images_dict[embodiment_id] = ims
-        
+
         return metrics, images_dict
-    
-    @override
-    def visualize_preds(self, predictions, batch):
+
+    def _decode_wm_future_images(self, wm_data, batch, cam_keys):
         """
-        Helper function to visualize predictions on top of images
+        Decode world-model predicted future images from the generated diffusion latent.
+
+        The cosmos model outputs a full latent sequence (B, C, T_lat, H_lat, W_lat)
+        where each temporal slot maps to one video segment (blank, proprio, wrist, front,
+        action, future proprio, future wrist, future front, value).  We undo latent
+        injection in non-image slots (proprio, action, value) to avoid VAE decode
+        artifacts, then call model.decode() and extract the future-image frames.
+
         Args:
-            predictions (dict): {ac_key: torch.Tensor (B, Seq, D)}
-            batch (dict): {ac_key: torch.Tensor (B, Seq, D), front_img_1: torch.Tensor (B, 3, H, W)}
+            wm_data (dict): {"cosmos_batch", "generated_latent", "orig_clean_latent_frames"}
+            batch (dict): unnormalized robomimic batch (GT future images from here)
+            cam_keys (list[str]): camera key names for this embodiment
+
         Returns:
-            ims (np.ndarray): (B, H, W, 3) - images with actions drawn on top
+            dict:
+              "future_image_pred"       (B, H, W, 3) uint8 -- WM predicted future primary
+              "future_image_gt"         (B, H, W, 3) uint8 -- GT future primary from batch
+              "future_wrist_image_pred" (B, H, W, 3) uint8 -- WM predicted wrist (optional)
+              "future_wrist_image_gt"   (B, H, W, 3) uint8 -- GT future wrist (optional)
+        """
+        generated_latent         = wm_data["generated_latent"]
+        orig_clean_latent_frames = wm_data["orig_clean_latent_frames"]
+        cosmos_batch             = wm_data["cosmos_batch"]
+
+        def _idx(key):
+            v = cosmos_batch.get(key, -1)
+            if isinstance(v, torch.Tensor):
+                return int(v.flatten()[0].item())
+            return int(v)
+
+        future_image_latent_idx       = _idx("future_image_latent_idx")
+        future_wrist_image_latent_idx = _idx("future_wrist_image_latent_idx")
+        if future_image_latent_idx == -1:
+            return None  # no future image slot configured
+
+        # Undo latent injection on non-image slots to avoid VAE decode artifacts
+        # from injected proprio / action / value data.
+        cleaned = generated_latent.clone()
+        for key in ("current_proprio_latent_idx", "action_latent_idx",
+                    "future_proprio_latent_idx", "value_latent_idx"):
+            idx = _idx(key)
+            if idx != -1:
+                cleaned[:, :, idx] = orig_clean_latent_frames[:, :, idx]
+
+        # Decode full latent sequence: (B, 3, T_raw, H, W) in [-1, 1]
+        with torch.no_grad():
+            decoded = self.model.decode(cleaned.float())
+        decoded_u8 = (
+            ((decoded + 1.0) * 127.5).clamp(0, 255)
+            .permute(0, 2, 3, 4, 1).contiguous().to(torch.uint8).cpu().numpy()
+        )  # (B, T_raw, H, W, 3) -- contiguous so PIL fromarray works
+
+        # raw frame index: raw_idx = (latent_idx - 1) * TCF + 1
+        # Cosmos temporal_compression_factor = 4.
+        TCF = 4
+        T_raw = decoded_u8.shape[1]
+        result = {}
+
+        pred_idx = (future_image_latent_idx - 1) * TCF + 1
+        pred_idx = max(0, min(pred_idx, T_raw - 1))
+        # decoded_u8[:, idx] is (B, H, W, 3) -- ensure C-contiguous for PIL
+        result["future_image_pred"] = np.ascontiguousarray(decoded_u8[:, pred_idx])
+
+        if future_wrist_image_latent_idx != -1:
+            wrist_idx = (future_wrist_image_latent_idx - 1) * TCF + 1
+            wrist_idx = max(0, min(wrist_idx, T_raw - 1))
+            result["future_wrist_image_pred"] = np.ascontiguousarray(decoded_u8[:, wrist_idx])
+
+        # GT future images from the unnormalized batch tensors.
+        # Tensors from the robomimic batch can be (B, C, H, W) or (B, H, W, C).
+        # We normalise to (B, H, W, 3) uint8 before storing.
+        def _to_hwc(t):
+            """Return (B, H, W, 3) uint8 numpy from a batch image tensor."""
+            arr = t.cpu().float().numpy()
+            if arr.ndim == 4:
+                if arr.shape[1] in (1, 3, 4):  # (B, C, H, W) channels-first
+                    arr = arr.transpose(0, 2, 3, 1)
+                # else assume already (B, H, W, C)
+            elif arr.ndim == 3:  # (B, H, W) grayscale
+                arr = arr[:, :, :, np.newaxis]
+            # Normalise to [0, 255] – already unnormalised but may be in [0,1] or [0,255]
+            if arr.max() <= 1.01:
+                arr = arr * 255.0
+            arr = np.ascontiguousarray(arr.clip(0, 255).astype(np.uint8))
+            if arr.shape[-1] == 1:
+                arr = np.repeat(arr, 3, axis=-1)
+            return arr
+
+        for cam_key in cam_keys:
+            if cam_key not in batch:
+                continue
+            gt_img = _to_hwc(batch[cam_key])
+            if "front" in cam_key.lower() and "future" in cam_key.lower():
+                result["future_image_gt"] = gt_img
+            elif "wrist" in cam_key.lower() and "future" in cam_key.lower():
+                if "future_wrist_image_gt" not in result:
+                    result["future_wrist_image_gt"] = gt_img
+
+        return result
+
+    @override
+    def visualize_preds(self, predictions, batch, wm_preds=None):
+        """
+        Visualize action predictions overlaid on the current observation.
+
+        When wm_preds is provided (from _decode_wm_future_images), each output frame
+        is a 3-panel horizontal strip:
+            [ current obs + action trajectory | GT future image | WM predicted future ]
+        If wrist images are available a second row is stacked beneath:
+            [ current wrist | GT future wrist | WM predicted future wrist ]
+
+        Args:
+            predictions (dict): {ac_key: Tensor (B, Seq, D)}
+            batch (dict): unnormalized batch with image and action tensors
+            wm_preds (dict | None): output from _decode_wm_future_images (optional)
+        Returns:
+            ims (np.ndarray): (B, H, W*3, 3) or (B, H*2, W*3, 3)
         """
         from egomimic.utils.egomimicUtils import draw_actions
-        
-        # Get embodiment from batch
+
         embodiment_id = batch.get("embodiment", [0])[0].item() if "embodiment" in batch else 0
         embodiment_name = get_embodiment(embodiment_id).lower()
         ac_key = self.ac_keys[embodiment_id][0]
-        
-        # Get visualization image key
+
         viz_img_key = self.data_schematic.viz_img_key()[embodiment_id]
         ims = (batch[viz_img_key].cpu().numpy().transpose((0, 2, 3, 1)) * 255).astype(np.uint8)
-        
-        # Draw predictions and ground truth
+
         pred_key = f"{embodiment_name}_{ac_key}"
         if pred_key in predictions:
             preds = predictions[pred_key]
             gt_full = batch[ac_key]
             gt = gt_full[:, : preds.shape[1], :]
-            
+
             gt, gt_rot = self._extract_xyz(gt)
             preds, preds_rot = self._extract_xyz(preds)
 
             for b in range(ims.shape[0]):
-                if preds.shape[-1] == 7 or preds.shape[-1] == 14:
+                if preds.shape[-1] in (7, 14):
                     ac_type = "joints"
-                elif preds.shape[-1] == 3 or preds.shape[-1] == 6:
+                elif preds.shape[-1] in (3, 6):
                     ac_type = "xyz"
                 else:
-                    ac_type = "joints"  # Default
-                
-                arm = "right" if preds.shape[-1] == 7 or preds.shape[-1] == 3 else "both"
+                    ac_type = "joints"
+
+                arm = "right" if preds.shape[-1] in (7, 3) else "both"
                 ims[b] = draw_actions(
                     ims[b], ac_type, "Purples", preds[b].cpu().numpy(),
-                    self.camera_transforms.extrinsics, self.camera_transforms.intrinsics, arm=arm
+                    self.camera_transforms.extrinsics, self.camera_transforms.intrinsics, arm=arm,
                 )
                 ims[b] = draw_actions(
-                    ims[b], ac_type, "Greens", gt[b].cpu().numpy(), 
-                    self.camera_transforms.extrinsics, self.camera_transforms.intrinsics, arm=arm
+                    ims[b], ac_type, "Greens", gt[b].cpu().numpy(),
+                    self.camera_transforms.extrinsics, self.camera_transforms.intrinsics, arm=arm,
                 )
-        
+
+        # ---- World-model comparison panel ------------------------------------
+        # Append GT-future and WM-predicted-future columns so each output frame
+        # shows [current+actions | GT future | WM pred] as a 3-panel strip.
+        if wm_preds is not None:
+            from PIL import Image as _PIL_Image, ImageDraw as _PIL_Draw
+
+            B_vis = ims.shape[0]
+            H_vis, W_vis = ims.shape[1], ims.shape[2]
+
+            def _labeled(img_np, text, color=(255, 255, 255)):
+                arr = np.ascontiguousarray(img_np).astype(np.uint8)
+                pil = _PIL_Image.fromarray(arr)
+                if pil.mode != "RGB":
+                    pil = pil.convert("RGB")
+                draw = _PIL_Draw.Draw(pil)
+                draw.rectangle([0, 0, pil.width, 18], fill=(0, 0, 0))
+                draw.text((3, 2), text, fill=color)
+                return np.array(pil)
+
+            def _resize_to(img_np, h, w):
+                from PIL import Image as _I
+                arr = np.ascontiguousarray(img_np).astype(np.uint8)
+                pil = _I.fromarray(arr)
+                if pil.mode != "RGB":
+                    pil = pil.convert("RGB")
+                return np.array(pil.resize((w, h)))
+
+            gt_imgs = wm_preds.get("future_image_gt",
+                                   np.zeros((B_vis, H_vis, W_vis, 3), dtype=np.uint8))
+            wm_imgs = wm_preds.get("future_image_pred",
+                                   np.zeros((B_vis, H_vis, W_vis, 3), dtype=np.uint8))
+
+            panels_gt   = np.stack([_resize_to(gt_imgs[b],  H_vis, W_vis) for b in range(B_vis)])
+            panels_wm   = np.stack([_resize_to(wm_imgs[b],  H_vis, W_vis) for b in range(B_vis)])
+            ims_labeled = np.stack([_labeled(ims[b], "Current + actions", (180, 180, 255))
+                                    for b in range(B_vis)])
+            panels_gt   = np.stack([_labeled(panels_gt[b],  "GT future",  (180, 255, 180))
+                                    for b in range(B_vis)])
+            panels_wm   = np.stack([_labeled(panels_wm[b],  "WM pred",    (255, 180, 180))
+                                    for b in range(B_vis)])
+
+            primary_row = np.concatenate([ims_labeled, panels_gt, panels_wm], axis=2)
+
+            if "future_wrist_image_gt" in wm_preds and "future_wrist_image_pred" in wm_preds:
+                wrist_cur = None
+                for _wk in self.camera_keys.get(embodiment_id, []):
+                    if "wrist" in _wk.lower() and "future" not in _wk.lower() and _wk in batch:
+                        wrist_cur = (
+                            batch[_wk].cpu().numpy().transpose(0, 2, 3, 1) * 255
+                        ).astype(np.uint8)
+                        break
+                if wrist_cur is None:
+                    wrist_cur = np.zeros((B_vis, H_vis, W_vis, 3), dtype=np.uint8)
+                gt_wrist = wm_preds["future_wrist_image_gt"]
+                wm_wrist = wm_preds["future_wrist_image_pred"]
+                wrist_cur = np.stack([_resize_to(wrist_cur[b], H_vis, W_vis) for b in range(B_vis)])
+                gt_wrist  = np.stack([_resize_to(gt_wrist[b],  H_vis, W_vis) for b in range(B_vis)])
+                wm_wrist  = np.stack([_resize_to(wm_wrist[b],  H_vis, W_vis) for b in range(B_vis)])
+                wrist_cur = np.stack([_labeled(wrist_cur[b], "Wrist current",   (180, 180, 255)) for b in range(B_vis)])
+                gt_wrist  = np.stack([_labeled(gt_wrist[b],  "Wrist GT future", (180, 255, 180)) for b in range(B_vis)])
+                wm_wrist  = np.stack([_labeled(wm_wrist[b],  "Wrist WM pred",   (255, 180, 180)) for b in range(B_vis)])
+                wrist_row = np.concatenate([wrist_cur, gt_wrist, wm_wrist], axis=2)
+                ims = np.concatenate([primary_row, wrist_row], axis=1)  # (B, 2H, 3W, 3)
+            else:
+                ims = primary_row  # (B, H, 3W, 3)
+
         return ims
-    
+
     @override
     def compute_losses(self, predictions, batch):
         """
-        Compute losses based on network outputs in @predictions dict.
+        Compute losses from predictions dict.
+
+        In addition to the main EDM action_loss, also extracts and logs the rich
+        per-category breakdown losses propagated by forward_training:
+          - demo_sample_*   (policy BC losses)
+          - world_model_sample_*  (WM future-state losses)
+          - value_function_sample_*  (VF value losses)
+        NaN values (e.g. when no WM/VF samples appeared in the batch) are silently
+        skipped to keep TensorBoard clean.
+
         Args:
-            predictions (dict): dictionary containing network outputs, from @forward_training
-            batch (dict): dictionary with torch.Tensors sampled
-                from a data loader and filtered by @process_batch_for_training
+            predictions (dict): output of forward_training
+            batch (dict): processed batch (used for embodiment iteration)
         Returns:
-            losses (dict): dictionary of losses computed over the batch
+            losses (dict): losses to log
         """
         loss_dict = OrderedDict()
         total_action_loss = None
-        
+
         for embodiment_id, _batch in batch.items():
             embodiment_name = get_embodiment(embodiment_id).lower()
             loss_key = f"{embodiment_name}_loss"
-            
+
             if loss_key in predictions:
                 bc_loss = predictions[loss_key]
                 if total_action_loss is None:
                     total_action_loss = torch.tensor(0.0, device=bc_loss.device)
                 total_action_loss += bc_loss
                 loss_dict[loss_key] = bc_loss
-        
+
+            # Forward cosmos sub-losses (NaN-filtered) so they appear in TensorBoard.
+            # Keys follow the pattern "{embodiment_name}_{cosmos_loss_key}".
+            _cosmos_prefix = f"{embodiment_name}_"
+            _sub_loss_keys = (
+                "edm_loss",
+                "mse_loss",
+                "demo_sample_action_mse_loss",
+                "demo_sample_action_l1_loss",
+                "demo_sample_future_image_mse_loss",
+                "demo_sample_future_image_l1_loss",
+                "demo_sample_future_wrist_image_mse_loss",
+                "demo_sample_future_wrist_image_l1_loss",
+                "demo_sample_future_proprio_mse_loss",
+                "demo_sample_future_proprio_l1_loss",
+                "demo_sample_value_mse_loss",
+                "demo_sample_value_l1_loss",
+                "world_model_sample_future_image_mse_loss",
+                "world_model_sample_future_image_l1_loss",
+                "world_model_sample_future_wrist_image_mse_loss",
+                "world_model_sample_future_wrist_image_l1_loss",
+                "world_model_sample_future_proprio_mse_loss",
+                "world_model_sample_future_proprio_l1_loss",
+                "world_model_sample_value_mse_loss",
+                "world_model_sample_value_l1_loss",
+                "value_function_sample_value_mse_loss",
+                "value_function_sample_value_l1_loss",
+            )
+            for sub_key in _sub_loss_keys:
+                pred_key = _cosmos_prefix + sub_key
+                if pred_key in predictions:
+                    v = predictions[pred_key]
+                    if torch.is_tensor(v) and not torch.isnan(v).any():
+                        loss_dict[pred_key] = v
+
         if total_action_loss is not None:
             loss_dict["action_loss"] = total_action_loss / len(self.domains)
         else:
             loss_dict["action_loss"] = torch.tensor(0.0)
-        
+
         return loss_dict
-    
+
     @override
     def log_info(self, info):
         """
-        Process info dictionary from @train_on_batch to summarize
-        information to pass to tensorboard for logging.
+        Process info dictionary from @train_on_batch to summarize for TensorBoard.
+        Organizes losses into three groups:
+          Train/Loss            -- main EDM action loss
+          Train/Policy/*        -- demo (policy BC) sub-losses
+          Train/WorldModel/*    -- world-model sub-losses
+          Train/ValueFunction/* -- value-function sub-losses
         Args:
-            info (dict): dictionary of losses returned by compute_losses
+            info (dict): dictionary containing "losses"
         Returns:
-            loss_log (dict): name -> summary statistic
+            loss_log (dict): name -> float
         """
         log = OrderedDict()
-        
-        if "losses" in info:
-            if "action_loss" in info["losses"]:
-                log["Loss"] = info["losses"]["action_loss"].item()
-            
-            for loss_key, loss in info["losses"].items():
-                log[loss_key] = loss.item()
-        
+
+        if "losses" not in info:
+            return log
+
+        losses = info["losses"]
+
+        if "action_loss" in losses:
+            log["Loss"] = losses["action_loss"].item()
+
+        for loss_key, loss_val in losses.items():
+            if not torch.is_tensor(loss_val):
+                continue
+            v = loss_val.item()
+            # Route to a TensorBoard sub-group for readability.
+            if "demo_sample_" in loss_key:
+                # strip embodiment prefix (everything before first "_demo_")
+                short = loss_key[loss_key.index("demo_sample_"):]
+                log[f"Policy/{short}"] = v
+            elif "world_model_sample_" in loss_key:
+                short = loss_key[loss_key.index("world_model_sample_"):]
+                log[f"WorldModel/{short}"] = v
+            elif "value_function_sample_" in loss_key:
+                short = loss_key[loss_key.index("value_function_sample_"):]
+                log[f"ValueFunction/{short}"] = v
+            elif loss_key.endswith("_edm_loss"):
+                log["edm_loss"] = v
+            elif loss_key.endswith("_mse_loss") and "_sample_" not in loss_key:
+                log["mse_loss"] = v
+            else:
+                log[loss_key] = v
+
         if "policy_grad_norms" in info:
             log["Policy_Grad_Norms"] = info["policy_grad_norms"]
-        
+
         return log
-    
+
     def _extract_xyz(self, x):
         """
         Extract xyz (3D position) and rotation from 6DoF or 6DoF+gripper actions.
