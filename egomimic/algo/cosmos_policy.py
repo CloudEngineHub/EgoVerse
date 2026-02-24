@@ -113,6 +113,7 @@ class CosmosPolicy(Algo):
         demonstration_sampling_prob: float = 0.5,
         p_world_model: float = 0.5,
         return_value_function_returns: bool = False,
+        val_num_inference_steps: int = 35,
         **kwargs
     ):
         super().__init__()
@@ -138,6 +139,7 @@ class CosmosPolicy(Algo):
         self.demonstration_sampling_prob = demonstration_sampling_prob
         self.p_world_model = p_world_model
         self.return_value_function_returns = return_value_function_returns
+        self.val_num_inference_steps = val_num_inference_steps
         
         # Initialize camera, proprio, and language keys per embodiment
         self.ac_keys = {}
@@ -368,43 +370,53 @@ class CosmosPolicy(Algo):
         B = batch[ac_keys[0]].shape[0]
         
         # ---------------------------------------
-        # Generate random demo/rollout masks
+        # Demo / rollout masks
         # ---------------------------------------
-        # Generate rollout_data_mask: 0 for demo, 1 for rollout
-        # Randomly assign each sample as demo or rollout based on demonstration_sampling_prob
-        demo_rollout_rand = torch.rand(B, device=device)
-        rollout_data_mask = (demo_rollout_rand >= self.demonstration_sampling_prob).to(torch.int64)
-        
-        # Generate rollout_data_success_mask: 1 for success rollout, 0 for failure or demo
-        # For rollout samples, randomly assign success (1) or failure (0)
-        # For demo samples, set to 0
-        success_rand = torch.rand(B, device=device)
-        rollout_data_success_mask = (
-            (rollout_data_mask == 1) & (success_rand >= 0.5)
-        ).to(torch.int64)  # 50% success rate for rollouts
-        
-        # Generate world_model_sample_mask and value_function_sample_mask
-        # For rollout samples: randomly assign world model or value function based on p_world_model
-        # For demo samples: both masks set to 0
-        world_model_sample_mask = torch.zeros(B, dtype=torch.int64, device=device)
-        value_function_sample_mask = torch.zeros(B, dtype=torch.int64, device=device)
-        
-        if self.return_value_function_returns:
-            # For rollout samples, randomly assign world model or value function
-            rollout_indices = (rollout_data_mask == 1)
-            if rollout_indices.any():
-                world_model_rand = torch.rand(B, device=device)
-                world_model_mask = (world_model_rand < self.p_world_model)
-                world_model_sample_mask[rollout_indices] = (
-                    world_model_mask[rollout_indices]
-                ).to(torch.int64)
-                value_function_sample_mask[rollout_indices] = (
-                    (~world_model_mask)[rollout_indices]
-                ).to(torch.int64)
+        # Priority 1 – explicit labels from S3RLDBDataset (separate demo/rollout datasets).
+        #   Each sample carries rollout_data_mask=0/1, rollout_data_success_mask, and
+        #   world_model_sample_mask / value_function_sample_mask set at __getitem__ time,
+        #   mirroring the ALOHADataset approach.
+        # Priority 2 – deterministic pattern across accumulated micro-batches (single mixed
+        #   dataset, but accumulate_grad_batches > 1).
+        # Priority 3 – fully random (legacy / single-sample fallback).
+        if "rollout_data_mask" in batch:
+            rollout_data_mask = batch["rollout_data_mask"].to(torch.int64).to(device)
         else:
-            # If not using value function returns, all rollout samples are world model samples
-            world_model_sample_mask = rollout_data_mask.clone()
+            micro_pos = getattr(self, '_micro_batch_position', None)
+            acc = getattr(self, '_accumulate_grad_batches', 1)
+            if micro_pos is not None and acc > 1:
+                # Guarantee both demo AND rollout appear within each optimizer step.
+                n_demo = max(1, min(round(acc * self.demonstration_sampling_prob), acc - 1))
+                is_rollout_val = int(micro_pos >= n_demo)
+                rollout_data_mask = torch.full((B,), is_rollout_val, dtype=torch.int64, device=device)
+            else:
+                demo_rollout_rand = torch.rand(B, device=device)
+                rollout_data_mask = (demo_rollout_rand >= self.demonstration_sampling_prob).to(torch.int64)
+
+        if "rollout_data_success_mask" in batch:
+            rollout_data_success_mask = batch["rollout_data_success_mask"].to(torch.int64).to(device)
+        else:
+            success_rand = torch.rand(B, device=device)
+            rollout_data_success_mask = (
+                (rollout_data_mask == 1) & (success_rand >= 0.5)
+            ).to(torch.int64)
+
+        if "world_model_sample_mask" in batch and "value_function_sample_mask" in batch:
+            world_model_sample_mask = batch["world_model_sample_mask"].to(torch.int64).to(device)
+            value_function_sample_mask = batch["value_function_sample_mask"].to(torch.int64).to(device)
+        else:
+            world_model_sample_mask = torch.zeros(B, dtype=torch.int64, device=device)
             value_function_sample_mask = torch.zeros(B, dtype=torch.int64, device=device)
+            if self.return_value_function_returns:
+                rollout_indices = (rollout_data_mask == 1)
+                if rollout_indices.any():
+                    world_model_rand = torch.rand(B, device=device)
+                    world_model_mask = (world_model_rand < self.p_world_model)
+                    world_model_sample_mask[rollout_indices] = world_model_mask[rollout_indices].to(torch.int64)
+                    value_function_sample_mask[rollout_indices] = (~world_model_mask)[rollout_indices].to(torch.int64)
+            else:
+                world_model_sample_mask = rollout_data_mask.clone()
+                value_function_sample_mask = torch.zeros(B, dtype=torch.int64, device=device)
         
         # Generate global_rollout_idx: -1 for demos, random indices for rollouts
         global_rollout_idx = torch.full((B,), -1, dtype=torch.int64, device=device)
@@ -821,8 +833,38 @@ class CosmosPolicy(Algo):
             
             # Call cosmos_policy model training_step
             iteration = getattr(self, "_current_iteration", 0)
+
+            # Pre-call input NaN diagnostics (for debug)
+            if isinstance(cosmos_batch, dict):
+                nan_input_keys = [
+                    k for k, v in cosmos_batch.items()
+                    if torch.is_tensor(v) and torch.isnan(v).any()
+                ]
+                if nan_input_keys:
+                    logger.warning(
+                        f"[iter {iteration}] NaN in cosmos_batch inputs for embodiment "
+                        f"'{embodiment_name}': {nan_input_keys}"
+                    )
+
             output_batch, loss = self.model.training_step(cosmos_batch, iteration)
-            
+
+            # Post-call NaN diagnostics: log (but do not raise) so training is not interrupted
+            if torch.is_tensor(loss) and torch.isnan(loss).any():
+                logger.warning(
+                    f"[iter {iteration}] NaN loss detected for embodiment '{embodiment_name}': "
+                    f"loss={loss.item() if loss.numel() == 1 else loss}"
+                )
+            if isinstance(output_batch, dict):
+                nan_keys = [
+                    k for k, v in output_batch.items()
+                    if torch.is_tensor(v) and torch.isnan(v).any()
+                ]
+                if nan_keys:
+                    logger.warning(
+                        f"[iter {iteration}] NaN in output_batch keys for embodiment "
+                        f"'{embodiment_name}': {nan_keys}"
+                    )
+
             for ac_key in ac_keys:
                 if ac_key in output_batch:
                     predictions[f"{embodiment_name}_{ac_key}"] = output_batch[ac_key]
@@ -832,14 +874,18 @@ class CosmosPolicy(Algo):
     
     
     @override
-    def forward_eval(self, batch):
+    def forward_eval(self, batch, return_wm_data=False):
         """
         Compute forward pass and return network outputs in @predictions dict.
         Args:
             batch (dict): dictionary with torch.Tensors sampled
                 from a data loader and filtered by @process_batch_for_training
+            return_wm_data (bool): when True also return a wm_data_dict keyed by
+                embodiment_id containing {"cosmos_batch", "generated_latent",
+                "orig_clean_latent_frames"} for downstream WM visualization.
         Returns:
             predictions (dict): {ac_key: torch.Tensor (B, Seq, D)}
+            wm_data_dict (dict): only returned when return_wm_data=True
         """
         if self.device is None:
             first_tensor = next(iter(batch.values())) if isinstance(batch, dict) else None
@@ -848,6 +894,7 @@ class CosmosPolicy(Algo):
                 self._initialize_model(self.device)
         
         predictions = OrderedDict()
+        wm_data_dict = {}
         
         with torch.no_grad():
             for embodiment_id, _batch in batch.items():
@@ -864,7 +911,28 @@ class CosmosPolicy(Algo):
                 )
                 
                 # Call cosmos_policy model inference. Returns latent (B, C, T, H, W).
-                generated_latent = self.model.generate_samples_from_batch(cosmos_batch)
+                # val_num_inference_steps lets us trade quality for speed: fewer steps
+                # (e.g., 5) are ~7× faster and allow full-episode validation videos.
+                # When return_wm_data=True we also retrieve the unmodified GT latent
+                # frames (pre-injection) needed to undo latent artifacts before decoding.
+                if return_wm_data:
+                    generated_latent, orig_clean_latent_frames = (
+                        self.model.generate_samples_from_batch(
+                            cosmos_batch,
+                            num_steps=self.val_num_inference_steps,
+                            return_orig_clean_latent_frames=True,
+                        )
+                    )
+                    wm_data_dict[embodiment_id] = {
+                        "cosmos_batch": cosmos_batch,
+                        "generated_latent": generated_latent,
+                        "orig_clean_latent_frames": orig_clean_latent_frames,
+                    }
+                else:
+                    generated_latent = self.model.generate_samples_from_batch(
+                        cosmos_batch, num_steps=self.val_num_inference_steps
+                    )
+
                 # Extract action chunk from latent: (B, action_chunk, action_dim).
                 action_shape = (
                     cosmos_batch["actions"].shape[1],
@@ -883,10 +951,14 @@ class CosmosPolicy(Algo):
                     if _ac_key in _batch and "future" not in _ac_key.lower():
                         d = _batch[_ac_key].shape[-1]
                         pred_dict[_ac_key] = extracted_actions[:, :, offset:offset + d]
-                
+                        offset += d
+
                 unnorm_preds = self.data_schematic.unnormalize_data(pred_dict, embodiment_id)
-                predictions[f"{embodiment_name}_{ac_key}"] = unnorm_preds[ac_key]        
-                return predictions
+                predictions[f"{embodiment_name}_{ac_key}"] = unnorm_preds[ac_key]
+
+        if return_wm_data:
+            return predictions, wm_data_dict
+        return predictions
             
     def forward_eval_logging(self, batch):
         """
@@ -913,12 +985,14 @@ class CosmosPolicy(Algo):
             
             if pred_key in preds:
                 # Cosmos policy predicts action_chunk steps; GT may have longer horizon (e.g. 100). Slice to same length for MSE.
-                pred_action = preds[pred_key].cpu()
+                # .contiguous() required: sliced tensors from batch_size>1 may be non-contiguous,
+                # causing torchmetrics' internal .view(-1) to fail.
+                pred_action = preds[pred_key].cpu().contiguous()
                 gt_action_full = _batch[ac_key].cpu()
-                gt_action = gt_action_full[:, : pred_action.shape[1], :]
+                gt_action = gt_action_full[:, : pred_action.shape[1], :].contiguous()
                 metrics[f"Valid/{pred_key}_paired_mse_avg"] = mse(pred_action, gt_action)
                 metrics[f"Valid/{pred_key}_final_mse_avg"] = mse(
-                    pred_action[:, -1], gt_action[:, -1]
+                    pred_action[:, -1].contiguous(), gt_action[:, -1].contiguous()
                 )
             
             ims = self.visualize_preds(preds, _batch)

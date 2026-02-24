@@ -156,3 +156,7 @@ scheduler:
   _partial_: true
   T_max: 1400
   eta_min: 1e-5
+
+lr_scheduler_config:
+  interval: epoch  # T_max=1400 refers to epochs; preserve original behavior
+  frequency: 1

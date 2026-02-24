@@ -67,3 +67,6 @@ scheduler:
   _partial_: true
   start_factor: 1
   end_factor: 1
+lr_scheduler_config:
+  interval: epoch  # start_factor=end_factor=1, flat LR; preserve original epoch-based behavior
+  frequency: 1

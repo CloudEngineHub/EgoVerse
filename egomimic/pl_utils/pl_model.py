@@ -27,10 +27,15 @@ class ModelWrapper(LightningModule):
     grad_norm_mad_min_count = 100
     grad_norm_mad_window = 200
 
-    def __init__(self, robomimic_model, optimizer, scheduler):
+    def __init__(self, robomimic_model, optimizer, scheduler, lr_scheduler_config=None, track_iteration=False):
         """
         Args:
             model (PolicyAlgo): robomimic model to wrap.
+            lr_scheduler_config: optional dict of Lightning lr_scheduler options
+                (e.g. interval, frequency, monitor). Defaults to step-wise scheduling.
+            track_iteration: if True, sets model._current_iteration = global_step before
+                each training step. Enable for models that use iteration-dependent logic
+                (e.g. CosmosPolicy's sampling frequency scheduling).
         """
         super().__init__()
         self.save_hyperparameters(ignore=["robomimic_model"])
@@ -58,6 +63,8 @@ class ModelWrapper(LightningModule):
     # batch is now a dict, handle on model side
     def training_step(self, batch, batch_idx):
         self.train()
+        if self.hparams.track_iteration:
+            self.model._current_iteration = self.global_step
         loss_dicts = []
         batch = self.model.process_batch_for_training(batch)
         predictions = self.model.forward_training(batch)
@@ -227,15 +234,15 @@ class ModelWrapper(LightningModule):
         optimizer = self.hparams.optimizer(params=self.trainer.model.parameters())
         if self.hparams.scheduler is not None:
             scheduler = self.hparams.scheduler(optimizer=optimizer)
+            default_lr_scheduler_config = {"interval": "step", "frequency": 1}
+            lr_scheduler_config = {
+                **default_lr_scheduler_config,
+                **(self.hparams.lr_scheduler_config or {}),
+                "scheduler": scheduler,
+            }
             return {
                 "optimizer": optimizer,
-                "lr_scheduler": scheduler,
-                # "lr_scheduler": {
-                #     "scheduler": scheduler,
-                #     "monitor": "val/loss",
-                #     "interval": "epoch",
-                #     "frequency": 1,
-                # },
+                "lr_scheduler": lr_scheduler_config,
             }
         return {"optimizer": optimizer}
 

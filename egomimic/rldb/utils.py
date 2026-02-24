@@ -936,6 +936,9 @@ class S3RLDBDataset(MultiRLDBDataset):
         use_future=False,
         action_chunk=25,
         wm_root="/coc/flash7/scratch/egowm/wmprocessedDataset",
+        is_rollout: bool = None,
+        success: bool = True,
+        p_world_model: float = 0.5,
         **kwargs,
     ):
         filters["robot_name"] = embodiment
@@ -1038,8 +1041,47 @@ class S3RLDBDataset(MultiRLDBDataset):
             wm_root=wm_root,
         )
 
+        # Demo / rollout labelling (mirrors ALOHADataset.__getitem__ logic)
+        self.is_rollout = is_rollout
+        self.success = success
+        self.p_world_model = p_world_model
+
         # if skipped:
         #     logger.warning(f"Skipped {len(skipped)} datasets: {skipped}")
+
+    def __getitem__(self, idx):
+        """Optionally inject CosmosPolicy demo/rollout masks into each sample.
+
+        Masks are only added when `is_rollout` was explicitly set (True or False)
+        in the dataset config.  Datasets for other models (pi0.5, HPT, ACT, …) leave
+        `is_rollout=None` (the default) and receive no extra keys, so their collation
+        and training pipelines are completely unaffected.
+
+        Keys added when is_rollout is not None (mirrors ALOHADataset.__getitem__):
+          rollout_data_mask          – 0 for demo, 1 for rollout
+          rollout_data_success_mask  – 1 for successful rollout, else 0
+          world_model_sample_mask    – 1 if this rollout sample trains the WM
+          value_function_sample_mask – 1 if this rollout sample trains the VF
+        """
+        item = super().__getitem__(idx)
+
+        if self.is_rollout is None:
+            # Non-CosmosPolicy dataset: leave batch untouched.
+            return item
+
+        item["rollout_data_mask"] = int(self.is_rollout)
+        item["rollout_data_success_mask"] = int(self.is_rollout and self.success)
+
+        if self.is_rollout:
+            # Split rollout samples between world-model and value-function training.
+            is_world_model = (np.random.rand() < self.p_world_model)
+            item["world_model_sample_mask"] = int(is_world_model)
+            item["value_function_sample_mask"] = int(not is_world_model)
+        else:
+            item["world_model_sample_mask"] = 0
+            item["value_function_sample_mask"] = 0
+
+        return item
 
     @classmethod
     def _load_rldb_dataset_one(

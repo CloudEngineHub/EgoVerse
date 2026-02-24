@@ -19,6 +19,9 @@ robomimic_model:
   normalize_images: false  # Whether to normalize images to [0, 1] range; Cosmos Policy expects uint8 images in [0, 255]
   use_image_aug: true  # Whether to apply image augmentations during preprocessing
   use_stronger_image_aug: false  # Whether to use stronger image augmentations during training
+  # Denoising steps during validation inference.
+  # Full quality = 35 (default). Reduce (e.g., 5) for ~7× faster validation
+  val_num_inference_steps: 5
 
   # Cosmos Policy model config
   # When checkpoint_path is set and net is omitted, the default net is cosmos_v1_2B (MinimalV1LVGDiT / MiniTrainDIT 2B), aligned with cosmos-policy libero training and the 480p base checkpoint.
@@ -32,7 +35,7 @@ robomimic_model:
     state_t: 11  # Latent temporal dim (blank, proprio, left_wrist_img, right_wrist_img, front_img_1, action, future proprio, future left_wrist_img, future right_wrist_img, future front_img_1, value)
     min_num_conditional_frames: 5  # 1 blank, 4 conditioning (proprio, left_wrist_img, right_wrist_img, front_img_1)
     max_num_conditional_frames: 5  # 1 blank, 4 conditioning (proprio, left_wrist_img, right_wrist_img, front_img_1)
-    sigma_conditional: 0.0  # No noise on conditional latents
+    sigma_conditional: 0.0001  # Tiny noise on conditional latents; 0.0 causes log(0)=-inf → NaN in c_noise timestep embedding
     conditioning_strategy: "frame_replace"
     denoise_replace_gt_frames: true
     tokenizer:
@@ -54,7 +57,7 @@ robomimic_model:
     high_sigma_strategy: "none"
     # DiT timestep embedder expects float32; use_wan_fp32_strategy casts timesteps to float32 and enables fp32 autocast in the net
     use_wan_fp32_strategy: true
-    use_mini_net: true # to use a small net (2 blocks, 1024 dim) and avoid OOM; checkpoint is not loaded.
+    use_mini_net: false # to use a small net (2 blocks, 1024 dim) and avoid OOM; checkpoint is not loaded.
 
   # Note: not used
   train_image_augs:
@@ -73,15 +76,26 @@ robomimic_model:
 optimizer:
   _target_: torch.optim.AdamW
   _partial_: true
-  lr: 5e-4
-  betas: [0.9, 0.999]
+  lr: 1e-4
+  betas: [0.9, 0.99]
   eps: 1e-8
-  weight_decay: 0.0
+  weight_decay: 0.1
+  fused: true  # fused CUDA kernel; avoids large fp32 optimizer-state allocation that caused OOM
 
 scheduler:
-  _target_: transformers.get_cosine_schedule_with_warmup
+  _target_: torch.optim.lr_scheduler.LambdaLR
   _partial_: true
-  num_warmup_steps: 1000
-  num_training_steps: 100000
-  num_cycles: 0.5
+  lr_lambda:
+    _target_: cosmos_policy._src.imaginaire.functional.lr_scheduler.LambdaLinearScheduler
+    warm_up_steps: [1000, 0]
+    cycle_lengths: [30000, 100000000000000]
+    f_start: [1.0e-6, 0.06]
+    f_max: [1.0, 0.06]
+    f_min: [0.3, 0.06]
+
+lr_scheduler_config:
+  interval: step   # call scheduler.step() every optimizer step, not every epoch
+  frequency: 1
+
+track_iteration: true  # propagate Lightning global_step to model._current_iteration each training step
 

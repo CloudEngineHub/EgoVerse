@@ -1,4 +1,4 @@
-from torch.utils.data import DataLoader, random_split, default_collate
+from torch.utils.data import DataLoader, ConcatDataset, random_split, default_collate
 from lightning.pytorch.utilities.combined_loader import CombinedLoader
 from lightning import LightningDataModule
 from transformers import AutoTokenizer
@@ -73,14 +73,47 @@ class MultiDataModuleWrapper(LightningDataModule):
             self.collate_fn = default_collate
         
     def train_dataloader(self):
-        iterables = dict()
+        # Datasets that have `is_rollout` explicitly set (True or False) are CosmosPolicy
+        # demo/rollout pairs sharing the same embodiment.  Merge them via ConcatDataset so
+        # both types appear in every shuffled batch.
+        #
+        # All other datasets (pi0.5, HPT, ACT, …) keep their own independent DataLoader
+        # keyed by embodiment — exactly the original behaviour.
+        cosmos_groups: dict = {}   # emb_id → list[dataset]  (is_rollout != None)
+        cosmos_params: dict = {}   # emb_id → dataloader params of first dataset in group
+        standard: dict = {}        # dataset_name → dataset  (is_rollout == None)
+
         for dataset_name, dataset in self.train_datasets.items():
+            emb = dataset.embodiment
             dataset_params = self.train_dataloader_params.get(dataset_name, {})
+            if getattr(dataset, "is_rollout", None) is not None:
+                # CosmosPolicy demo/rollout dataset — group by embodiment
+                if emb not in cosmos_groups:
+                    cosmos_groups[emb] = []
+                    cosmos_params[emb] = dataset_params
+                cosmos_groups[emb].append(dataset)
+            else:
+                standard[dataset_name] = (dataset, dataset_params)
+
+        iterables = dict()
+
+        # Standard (non-cosmos) datasets: one DataLoader per dataset, keyed by embodiment
+        for dataset_name, (dataset, dataset_params) in standard.items():
             iterables[dataset.embodiment] = DataLoader(
                 dataset,
                 shuffle=True,
                 collate_fn=self.collate_fn,
                 **dataset_params,
+            )
+
+        # CosmosPolicy datasets: merge same-embodiment demo+rollout into one DataLoader
+        for emb, datasets in cosmos_groups.items():
+            combined = datasets[0] if len(datasets) == 1 else ConcatDataset(datasets)
+            iterables[emb] = DataLoader(
+                combined,
+                shuffle=True,
+                collate_fn=self.collate_fn,
+                **cosmos_params[emb],
             )
 
         return CombinedLoader(iterables, "max_size_cycle")

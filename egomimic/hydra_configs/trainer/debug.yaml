@@ -2,8 +2,15 @@ defaults:
   - ddp
 
 strategy: ddp_find_unused_parameters_true
-limit_train_batches: 5
-limit_val_batches: 3
+# 4 micro-batches of size 1 = effective batch size 4, with no extra peak VRAM
+accumulate_grad_batches: 4
+# 20 micro-steps -> 5 optimizer steps (20 / accumulate_grad_batches)
+limit_train_batches: 20
+# Episode has 948 frames total → 237 batches at batch_size=4.
+# Full episode validation takes ~79 min (237 × ~20s with val_num_inference_steps=5).
+# 20 batches = 80 frames (~2.7s video at 30fps, 8% of episode) → ~7 min/validation.
+# Increase toward 237 (or set 1.0) when you want full-episode coverage.
+limit_val_batches: 20
 check_val_every_n_epoch: 2
 profiler: simple
 max_epochs: 4

@@ -1,7 +1,8 @@
 _target_: egomimic.pl_utils.pl_data_utils.MultiDataModuleWrapper
 
 train_datasets:
-  dataset1:
+  # Demonstration dataset – trains the policy (rollout_data_mask=0 for all samples)
+  demo:
     _target_: egomimic.rldb.utils.S3RLDBDataset
     bucket_name: "rldb"
     mode: total
@@ -11,6 +12,24 @@ train_datasets:
     local_files_only: True
     use_future: True
     action_chunk: 25
+    is_rollout: false   # → rollout_data_mask=0, policy BC loss only
+
+  # Rollout dataset – trains world model + value function (rollout_data_mask=1 for all samples).
+  # For debug we reuse the same demo episode as synthetic rollouts (success=true).
+  # In production, point this at actual robot-rollout data with success/failure labels.
+  rollout:
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "eva_bimanual"
+    filters: 
+      episode_hash: "2026-01-22-18-57-54-150000"
+    local_files_only: True
+    use_future: True
+    action_chunk: 25
+    is_rollout: true    # → rollout_data_mask=1, WM + VF losses
+    success: true       # all debug rollouts treated as successful
+    p_world_model: 0.5  # 50% WM samples, 50% VF samples among rollouts
 
 valid_datasets:
   dataset1:
@@ -25,12 +44,14 @@ valid_datasets:
     action_chunk: 25
 
 train_dataloader_params:
-  dataset1:
-    batch_size: 1
-    num_workers: 10
+  demo:
+    batch_size: 2   # kept at 1 to avoid OOM during backward; use accumulate_grad_batches in trainer for effective larger batch
+    num_workers: 4
+  rollout:
+    batch_size: 2
+    num_workers: 4
 
 valid_dataloader_params:
   dataset1:
-    batch_size: 1
-    num_workers: 10
-
+    batch_size: 4   # larger than train: no gradients during val so memory is much lower
+    num_workers: 4
