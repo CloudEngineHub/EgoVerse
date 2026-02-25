@@ -1,3 +1,6 @@
 [submodule "external/openpi"]
 	path = external/openpi
 	url = https://github.com/GaTech-RL2/openpi.git
+[submodule "external/cosmos-policy"]
+	path = external/cosmos-policy
+	url = https://github.com/Boey-li/cosmos-policy.git
