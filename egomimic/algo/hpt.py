@@ -915,19 +915,19 @@ class HPT(Algo):
             self.camera_keys[embodiment_id] = []
             self.proprio_keys[embodiment_id] = []
             self.lang_keys[embodiment_id] = []
-            for key in data_schematic.keys_of_type("action_keys"):
+            for key in data_schematic.keys_of_type("action_keys", embodiment_id):
                 if (
                     data_schematic.is_key_with_embodiment(key, embodiment_id)
                     and key == self.ac_keys[embodiment]
                 ):
                     self.ac_keys[embodiment_id] = key
-            for key in data_schematic.keys_of_type("camera_keys"):
+            for key in data_schematic.keys_of_type("camera_keys", embodiment_id):
                 if data_schematic.is_key_with_embodiment(key, embodiment_id):
                     self.camera_keys[embodiment_id].append(key)
-            for key in data_schematic.keys_of_type("proprio_keys"):
+            for key in data_schematic.keys_of_type("proprio_keys", embodiment_id):
                 if data_schematic.is_key_with_embodiment(key, embodiment_id):
                     self.proprio_keys[embodiment_id].append(key)
-            for key in data_schematic.keys_of_type("lang_keys"):
+            for key in data_schematic.keys_of_type("lang_keys", embodiment_id):
                 if data_schematic.is_key_with_embodiment(key, embodiment_id):
                     self.lang_keys[embodiment_id].append(key)
 
