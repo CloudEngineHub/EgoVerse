@@ -373,7 +373,7 @@ class HPTModel(nn.Module):
         feat_dict = {}
         for modality in self.modalities.get(domain, []) + self.shared_keys:
             if modality not in data:
-                continue
+                raise ValueError(f"Modality {modality} not in data for domain {domain}. Make sure the key and modality name match.")
             if modality in self.shared_keys:
                 domain = "shared"
 
@@ -792,12 +792,12 @@ class HPT(Algo):
     def __init__(
         self,
         data_schematic,
-        camera_transforms,
+        camera_transforms=None,
         # ---------------------------
         # Image augmentations
         # ---------------------------
-        train_image_augs,
-        eval_image_augs,
+        train_image_augs=None,
+        eval_image_augs=None,
         # ---------------------------
         # Trunk params
         # ---------------------------
@@ -1236,8 +1236,15 @@ class HPT(Algo):
                     rkl = reverse_kl_from_samples(samples, gt_tensor)
                     metrics[f"Valid/{pred_key_name}_reverse_kl_M{M}"] = rkl.item()
 
-            ims = self.visualize_preds(preds, _batch)
-            images_dict[embodiment_id] = ims
+            # Only generate visualizations if camera transforms are available for this embodiment.
+            if (
+                self.camera_transforms is not None
+                and isinstance(self.camera_transforms, dict)
+                and embodiment_name in self.camera_transforms
+                and self.camera_transforms[embodiment_name] is not None
+            ):
+                ims = self.visualize_preds(preds, _batch)
+                images_dict[embodiment_id] = ims
         return metrics, images_dict
 
     @override
