@@ -29,7 +29,7 @@ from egomimic.rldb.data_utils import (
     _slow_down_slerp_quat,
     _ypr_to_quat,
 )
-from egomimic.rldb.embodiment import (
+from egomimic.rldb.embodiment.embodiment import (
     EMBODIMENT_ID_TO_KEY,
     get_embodiment_id,
 )

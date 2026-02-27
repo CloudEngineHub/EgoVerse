@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 import torch
 
-from egomimic.rldb.embodiment import get_embodiment_id
+from egomimic.rldb.embodiment.embodiment import get_embodiment_id
 from egomimic.rldb.zarr.zarr_dataset_multi import MultiDataset, ZarrDataset
 
 logger = logging.getLogger(__name__)
