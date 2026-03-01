@@ -18,5 +18,14 @@ python egomimic/rldb/scripts/robomimic_hd5.py --name RBY1_test --dataset-repo-id
 3. Main changes: `test_RBY1.yaml` and `hpt_bc_flow_rby1.yaml`
 
 TODO:
-1. Wandb log picture vis? should viz original pic -> check original config
+1. Provide offline eval (camera transform and the IK setup)
 2. Config multi GPU training
+
+## Utils
+1. [don't use this] lerobot-dataset-visualizer (only for HTTP + video format. Not useful for us):
+    - Setup: https://github.com/huggingface/lerobot-dataset-visualizer
+    - On sky2: conda activate lerobot_viz && export BUN_INSTALL="$HOME/.bun" && export PATH="$BUN_INSTALL/bin:$PATH" && bun dev
+2. `uv run external/lerobot/lerobot/scripts/visualize_dataset.py     --repo-id RBY1_test_0227     --root /coc/flash7/zhenyang/EgoVerse/datasets/RBY1_test_0227/     --local-files-only 1   --ws-port 9087  --episode-index 0 --mode distant --save 1 --output-dir ./logs/dataset_vis/0228`
+3. Visualization with rerun:
+    - (optional) If streaming from remote and visualize on local: run `ssh -L 9087:localhost:9087 sky2` where 9087 is the ws_port, sky2 is the server streaming the data.
+    - Then launch rerun: `rerun ws://localhost:9087`
