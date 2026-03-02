@@ -1,5 +1,6 @@
 import os
 import random
+import time
 from collections import OrderedDict, deque
 
 import numpy as np
@@ -52,6 +53,10 @@ class ModelWrapper(LightningModule):
 
         self.val_image_buffer, self.val_counter = {}, {}
         self.epoch_memory_stats = []  # Store memory stats per epoch
+        
+        # Epoch timing tracking
+        self._epoch_start_time: float = 0.0
+        self._epoch_start_global_step: int = 0
         # TODO __init__ should take the config, and init the model here.  Then save_hyperparameters will just save the config rather than the model
 
     def root_dir(self):
@@ -250,11 +255,35 @@ class ModelWrapper(LightningModule):
         self.model.device = self.device
 
     def on_train_epoch_start(self):
+        self._epoch_start_time = time.perf_counter()
+        self._epoch_start_global_step = self.global_step
+        
         log_all = {}
         for i, param_group in enumerate(self.optimizers().param_groups):
             log_all[f"Optimizer/param_group_{i}_lr"] = param_group["lr"]
 
         return super().on_train_epoch_start()
+    
+    def on_train_epoch_end(self):
+        epoch_time = time.perf_counter() - self._epoch_start_time
+        optimizer_steps = self.global_step - self._epoch_start_global_step
+        num_batches = self.trainer.num_training_batches
+
+        # Log to wandb/tensorboard
+        self.log("Epoch/time_s", epoch_time, on_epoch=True, on_step=False, sync_dist=True)
+        self.log("Epoch/optimizer_steps", float(optimizer_steps), on_epoch=True, on_step=False, sync_dist=True)
+        self.log("Epoch/num_batches", float(num_batches), on_epoch=True, on_step=False, sync_dist=True)
+
+        if self.trainer.is_global_zero:
+            mins, secs = divmod(epoch_time, 60)
+            print(
+                f"\n[EPOCH] epoch={self.trainer.current_epoch} | "
+                f"time={int(mins)}m {secs:.1f}s | "
+                f"batches={num_batches} | "
+                f"optimizer_steps={optimizer_steps} | "
+                f"total_global_step={self.global_step}",
+                flush=True,
+            )
     
     def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         """Remove non-pickleable objects (e.g. torch.cuda.Stream) from checkpoint so torch.save succeeds."""

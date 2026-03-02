@@ -1,0 +1,21 @@
+defaults:
+  - default
+
+strategy: ddp_find_unused_parameters_true
+
+accelerator: gpu
+devices: ${eval:'${launch_params.gpus_per_node} * ${launch_params.nodes}'}
+num_nodes: ${launch_params.nodes}
+sync_batchnorm: True
+num_sanity_val_steps: 0
+
+# Gradient accumulation: accumulate N micro-batches before each optimizer step.
+# Effective batch size = batch_size (per GPU) × accumulate_grad_batches × num_GPUs.
+accumulate_grad_batches: 4
+
+limit_train_batches: 100 # 200
+limit_val_batches: 100 # 300
+
+max_epochs: 100
+min_epochs: 100
+check_val_every_n_epoch: 10

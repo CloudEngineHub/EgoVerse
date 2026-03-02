@@ -1,0 +1,36 @@
+#!/bin/bash
+#SBATCH --job-name=cosmos_policy_eva
+#SBATCH --output=sbatch_logs/cosmos_policy_eva.out
+#SBATCH --error=sbatch_logs/cosmos_policy_eva.err
+#SBATCH --partition="rl2-lab"
+#SBATCH --account="rl2-lab"
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=1
+#SBATCH --cpus-per-task=12
+#SBATCH --gpus-per-node="l40s:1"
+#SBATCH --qos="short"
+#SBATCH --exclude="bishop"
+
+source /coc/flash7/bli678/Projects/EgoVerse/emimic/bin/activate
+
+# Extract number of GPUs from SLURM_GPUS_PER_NODE (format: "l40s:4" -> 4)
+NUM_GPUS_PER_NODE=$(echo ${SLURM_GPUS_PER_NODE} | cut -d: -f2)
+export SLURM_GPUS=$((NUM_GPUS_PER_NODE * SLURM_NNODES))
+echo "Using node: $SLURM_NODELIST, GPUs per node: $NUM_GPUS_PER_NODE, total GPUs: $SLURM_GPUS"
+
+# Set PyTorch memory allocation to reduce fragmentation
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+echo "Training started at: $(date '+%Y-%m-%d %H:%M:%S %Z')"  
+
+python egomimic/trainHydra.py \
+    --config-name=train_wm.yaml \
+    data=debug \
+    model=cosmos_policy \
+    trainer=ddp_cosmos_policy \
+    logger.wandb.project=egowm_cup_saucer \
+    name=cup_saucer \
+    description=cosmos_policy_eva_debug_2
+
+echo "Training completed at: $(date '+%Y-%m-%d %H:%M:%S %Z')"   
+

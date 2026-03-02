@@ -942,7 +942,6 @@ class HPT(Algo):
             for key in data_schematic.keys_of_type("lang_keys"):
                 if data_schematic.is_key_with_embodiment(key, embodiment_id):
                     self.lang_keys[embodiment_id].append(key)
-        import pdb; pdb.set_trace()
 
         model.finalize_modules()
 
