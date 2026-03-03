@@ -477,12 +477,19 @@ def reset_data(demo_data: dict):
     demo_data["obs"] = []
 
 
-def save_demo(demo_data: dict, demo_dir, episode_id: int, cam_names):
+def save_demo(demo_data: dict, demo_dir, episode_id: int, camera_res: dict[str, tuple]):
+    """
+    Args:
+        demo_data: dict containing the demo data
+        demo_dir: directory to save the demo
+        episode_id: episode id
+        camera_res: dictionary containing the camera resolution (str, tuple) example {"front_img_1": (720, 960)}
+    """
     data_dict = dict()
     """Save demo to HDF5 file."""
     filename = demo_dir / f"demo_{episode_id}.hdf5"
 
-    for cam_name in cam_names:
+    for cam_name, (H, W) in camera_res.items():
         image_list = []
         for i in range(len(demo_data["obs"])):
             img = demo_data["obs"][i][cam_name]
@@ -539,12 +546,12 @@ def save_demo(demo_data: dict, demo_dir, episode_id: int, cam_names):
         root.attrs["sim"] = False
         obs = root.create_group("observations")
         image = obs.create_group("images")
-        for cam_name in cam_names:
+        for cam_name, (H, W) in camera_res.items():
             _ = image.create_dataset(
                 cam_name,
-                (max_timesteps, 480, 640, 3),
+                (max_timesteps, H, W, 3),
                 dtype="uint8",
-                chunks=(1, 480, 640, 3),
+                chunks=(1, H, W, 3),
             )
         _ = obs.create_dataset("joints", (max_timesteps, 14))
         # _ = obs.create_dataset("qjointvel", (max_timesteps, 16))
@@ -665,8 +672,8 @@ def collect_demo(
                                 pbar.close()
                                 pbar = None
                             collecting_data = False
-
-                            save_demo(demo_data, demo_dir, episode_id, camera_names)
+                            
+                            save_demo(demo_data, demo_dir, episode_id, robot_interface.camera_res)
                             print("\nSaving DEMO ------------------------------")
                             if auto_episode_id is not None:
                                 auto_episode_id += 1
