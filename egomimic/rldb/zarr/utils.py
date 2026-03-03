@@ -158,14 +158,24 @@ class DataSchematic(object):
         log_every: int = 200,
         include_all_key_map_keys: bool = False,
         extra_aux_keys=(),
+        benchmark_mark_file: str | None = None,
     ):
+        """
+        Args:
+            norm_dataset: the dataset to infer norm from (should not have image keys to increase performance)
+            dataset_name: the name of the dataset
+            sample_frac: the fraction of the dataset to sample
+            seed: the seed for the random number generator
+            max_samples: the maximum number of samples to use
+            log_every: the number of samples to log after
+        """
         embodiment = dataset_name
         if isinstance(embodiment, str):
             embodiment = get_embodiment_id(embodiment)
 
         norm_keys = []
-        norm_keys.extend(self.keys_of_type("proprio_keys"))
-        norm_keys.extend(self.keys_of_type("action_keys"))
+        norm_keys.extend(self.keys_of_type("proprio_keys", embodiment))
+        norm_keys.extend(self.keys_of_type("action_keys", embodiment))
         norm_keys = [k for k in norm_keys if self.is_key_with_embodiment(k, embodiment)]
 
         if not norm_keys:
@@ -184,6 +194,8 @@ class DataSchematic(object):
         if not aux_keys:
             logger.warning(f"[NormStats] No aux keys found for dataset={type(dataset)}")
             return
+        
+        
 
         def get_item_keys_from_any(ds, idx, keys):
             if hasattr(ds, "get_item_keys"):
@@ -312,7 +324,7 @@ class DataSchematic(object):
             (self.df["key_name"] == key_name) & (self.df["embodiment"] == embodiment)
         ).any()
 
-    def keys_of_type(self, key_type):
+    def keys_of_type(self, key_type, embodiment):
         """
         Get keys of a specific type.
 
@@ -324,10 +336,10 @@ class DataSchematic(object):
         Returns:
             list: Key names (str) of the given type.
         """
-        return self.df[self.df["key_type"] == key_type]["key_name"].tolist()
+        return self.df[(self.df["key_type"] == key_type) & (self.df["embodiment"] == embodiment)]["key_name"].tolist()
 
-    def action_keys(self):
-        return self.keys_of_type("action_keys")
+    def action_keys(self, embodiment):
+        return self.keys_of_type("action_keys", embodiment)
 
     def key_shape(self, key, embodiment):
         """
@@ -376,8 +388,8 @@ class DataSchematic(object):
 
         norm_data = {}
         for key, tensor in data.items():
-            if key in self.keys_of_type("proprio_keys") or key in self.keys_of_type(
-                "action_keys"
+            if key in self.keys_of_type("proprio_keys", embodiment) or key in self.keys_of_type(
+                "action_keys", embodiment
             ):
                 if (
                     embodiment not in self.norm_stats
@@ -430,8 +442,8 @@ class DataSchematic(object):
 
         denorm_data = {}
         for key, tensor in data.items():
-            if key in self.keys_of_type("proprio_keys") or key in self.keys_of_type(
-                "action_keys"
+            if key in self.keys_of_type("proprio_keys", embodiment) or key in self.keys_of_type(
+                "action_keys", embodiment
             ):
                 if (
                     embodiment not in self.norm_stats
