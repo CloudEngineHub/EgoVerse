@@ -1,5 +1,5 @@
 defaults:
-  - hpt_cotrain_keypoints_base
+  - hpt_cotrain_keypoints_wrist
 
 robomimic_model:
   ac_keys:
@@ -22,11 +22,11 @@ robomimic_model:
       time_dist: "beta"
       model:
         _target_: egomimic.models.denoising_nets.CrossTransformer
-        nblocks: 6
+        nblocks: 8
         cond_dim: 256
         hidden_dim: 256
-        act_dim: 128
-        act_seq: 12
+        act_dim: 256
+        act_seq: 32
         n_heads: 4
         dropout: 0.1
         mlp_layers: 4
@@ -35,36 +35,40 @@ robomimic_model:
         eva_bimanual:
           ac_dims: 14
           encoder:
-            _target_: egomimic.models.codec.temporal_enc_dec.SmallTemporalEncoder
+            _target_: egomimic.models.codec.temporal_enc_dec.SmallTemporalEncoder_32_256
             action_dim: 14
-            hidden_dim: 128
+            hidden_dim: 256
             activation: "gelu"
             use_layernorm: false
+            n_layers: 2
           decoder:
-            _target_: egomimic.models.codec.temporal_enc_dec.SmallTemporalDecoder
+            _target_: egomimic.models.codec.temporal_enc_dec.SmallTemporalDecoder_32_256
             action_dim: 14
-            hidden_dim: 128
+            hidden_dim: 256
             activation: "gelu"
             use_layernorm: true
+            n_layers: 2
         aria_bimanual:
-          ac_dims: 140
+          ac_dims: 138
           encoder:
-            _target_: egomimic.models.codec.temporal_enc_dec.LargeTemporalEncoder
-            action_dim: 140
-            hidden_dim: 128
+            _target_: egomimic.models.codec.temporal_enc_dec.LargeTemporalEncoder_32_256
+            action_dim: 138
+            hidden_dim: 256
             activation: "gelu"
             use_layernorm: false
+            n_layers: 7
           decoder:
-            _target_: egomimic.models.codec.temporal_enc_dec.LargeTemporalDecoder
-            action_dim: 140
-            hidden_dim: 128
+            _target_: egomimic.models.codec.temporal_enc_dec.LargeTemporalDecoder_32_256
+            action_dim: 138
+            hidden_dim: 256
             activation: "gelu"
             use_layernorm: true
+            n_layers: 7
 
 optimizer:
   _target_: torch.optim.AdamW
   _partial_: true
-  lr: 1e-4
+  lr: 3e-4
   weight_decay: 0.0001
 
 scheduler:

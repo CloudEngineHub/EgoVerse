@@ -22,49 +22,29 @@ robomimic_model:
       time_dist: "beta"
       model:
         _target_: egomimic.models.denoising_nets.CrossTransformer
-        nblocks: 6
+        nblocks: 8
         cond_dim: 256
         hidden_dim: 256
-        act_dim: 128
-        act_seq: 12
+        act_dim: 256
+        act_seq: 32
         n_heads: 4
         dropout: 0.1
         mlp_layers: 4
         mlp_ratio: 4
       embodiment_specs:
-        eva_bimanual:
-          ac_dims: 14
-          encoder:
-            _target_: egomimic.models.codec.temporal_enc_dec.SmallTemporalEncoder
-            action_dim: 14
-            hidden_dim: 128
-            activation: "gelu"
-            use_layernorm: false
-          decoder:
-            _target_: egomimic.models.codec.temporal_enc_dec.SmallTemporalDecoder
-            action_dim: 14
-            hidden_dim: 128
-            activation: "gelu"
-            use_layernorm: true
         aria_bimanual:
           ac_dims: 140
           encoder:
-            _target_: egomimic.models.codec.temporal_enc_dec.LargeTemporalEncoder
-            action_dim: 140
-            hidden_dim: 128
-            activation: "gelu"
-            use_layernorm: false
+            _target_: egomimic.models.codec.identity.Identity
           decoder:
-            _target_: egomimic.models.codec.temporal_enc_dec.LargeTemporalDecoder
-            action_dim: 140
-            hidden_dim: 128
-            activation: "gelu"
-            use_layernorm: true
+            _target_: egomimic.models.codec.identity.Identity
+  stem_specs:
+    eva_bimanual: null
 
 optimizer:
   _target_: torch.optim.AdamW
   _partial_: true
-  lr: 1e-4
+  lr: 3e-4
   weight_decay: 0.0001
 
 scheduler:
