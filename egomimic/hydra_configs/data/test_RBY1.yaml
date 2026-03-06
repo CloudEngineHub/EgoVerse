@@ -3,30 +3,36 @@
 _target_: egomimic.pl_utils.pl_data_utils.MultiDataModuleWrapper
 train_datasets:
   dataset1:
-    _target_: rldb.utils.MultiRLDBDataset
+    _target_: egomimic.rldb.utils.MultiRLDBDataset
     datasets:
       rl2_lab:
-        _target_: rldb.utils.FolderRLDBDataset
-        folder_path: /coc/flash7/zhenyang/EgoVerse/datasets
+        _target_: egomimic.rldb.utils.FolderRLDBDataset
+        folder_path: /coc/flash7/zhenyang/EgoVerse/datasets/test_2 # TODO: test
         embodiment: rby1
         mode: train
         local_files_only: true
         delta_timestamps:
           actions: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9] # NOTE: stacking action chunk
+          actions_biarm: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+          actions_biarm_hand: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+          actions_biarm_hand_torso: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
     embodiment: rby1
 
 valid_datasets:
   dataset1:
-    _target_: rldb.utils.MultiRLDBDataset
+    _target_: egomimic.rldb.utils.MultiRLDBDataset
     datasets:
       eth_lab:
-        _target_: rldb.utils.FolderRLDBDataset
-        folder_path: /coc/flash7/zhenyang/EgoVerse/datasets
+        _target_: egomimic.rldb.utils.FolderRLDBDataset
+        folder_path: /coc/flash7/zhenyang/EgoVerse/datasets/test_2 # TODO: test
         embodiment: rby1
         mode: valid
         local_files_only: true
         delta_timestamps:
           actions: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+          actions_biarm: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+          actions_biarm_hand: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
+          actions_biarm_hand_torso: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]
     embodiment: "rby1"
 
 train_dataloader_params:

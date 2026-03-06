@@ -4,7 +4,7 @@ defaults:
 _target_: hydra_plugins.hydra_submitit_launcher.submitit_launcher.SlurmLauncher
 
 name: ${hydra.job.name}
-partition: "rl2-lab"
+partition: "overcap"
 account: "rl2-lab"
 # Override nodes via: hydra.launcher.nodes=<num_nodes>
 nodes: 1

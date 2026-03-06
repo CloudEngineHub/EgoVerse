@@ -1,0 +1,31 @@
+_target_: egomimic.pl_utils.pl_data_utils.MultiDataModuleWrapper
+
+train_datasets:
+  demo:
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "eva_bimanual"
+    filters: 
+      episode_hash: "2026-01-22-18-57-54-150000"
+    local_files_only: True
+
+valid_datasets:
+  dataset1:
+    _target_: egomimic.rldb.utils.S3RLDBDataset
+    bucket_name: "rldb"
+    mode: total
+    embodiment: "eva_bimanual"
+    filters: 
+      episode_hash: "2026-01-22-18-57-54-150000"
+    local_files_only: True
+
+train_dataloader_params:
+  demo:
+    batch_size: 32 
+    num_workers: 10
+
+valid_dataloader_params:
+  dataset1:
+    batch_size: 32   
+    num_workers: 10
