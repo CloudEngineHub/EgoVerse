@@ -127,7 +127,7 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 
     if cfg.get("train"):
         log.info("Starting training!")
-        trainer.fit(model=model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"))
+        trainer.fit(model=model, datamodule=datamodule, ckpt_path=cfg.get("ckpt_path"), weights_only=False)
 
     if cfg.get("eval"):
         eval: Eval = hydra.utils.instantiate(

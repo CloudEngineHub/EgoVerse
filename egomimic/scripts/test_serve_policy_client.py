@@ -14,7 +14,24 @@ Usage:
     python egomimic/scripts/test_serve_policy_client.py --local --checkpoint logs/.../last.ckpt
 
 Example:
-    1. Local: test_serve_policy_client.py --local --checkpoint logs/RBY_test/test_2026-02-27_11-39-37/checkpoints/last.ckpt --episode-idx 1 --max-steps 20 --save-trajectory-imgs
+    1. Local: python egomimic/scripts/test_serve_policy_client.py --local --checkpoint /coc/flash7/zhenyang/EgoVerse/logs/RBY1_test_resume_0301_2/resume_last_ckpt_2026-03-02_09-57-51/checkpoints/last.ckpt --episode-idx 1 --max-steps 20 --save-trajectory-imgs
+
+    python egomimic/scripts/test_serve_policy_client.py --local \
+        --checkpoint  /coc/flash7/zhenyang/EgoVerse/logs/RBY1_test_biarm_action_lowdim_0305/RBY1_test_biarm_action_lowdim_0305_2026-03-06_00-00-05/checkpoints/epoch_epoch=1799.ckpt \
+         --episode-idx 0 --max-steps 20 \
+        --dataset-folder /coc/flash7/zhenyang/EgoVerse/datasets/test_2
+
+    python egomimic/scripts/test_serve_policy_client.py --local \
+        --checkpoint   /coc/flash7/zhenyang/EgoVerse/logs/RBY1_test_biarm_action_image_0305/RBY1_test_biarm_action_image_0305_2026-03-06_00-09-39/checkpoints/epoch_epoch=1199.ckpt \
+         --episode-idx 0 --max-steps 20 \
+        --dataset-folder /coc/flash7/zhenyang/EgoVerse/datasets/test_2 \
+        --rad-to-degree
+
+    python egomimic/scripts/test_serve_policy_client.py \
+         --episode-idx 0 --max-steps 20 \
+        --dataset-folder /coc/flash7/zhenyang/EgoVerse/datasets/test_2 \
+        --rad-to-degree
+       
 """
 
 import argparse
@@ -40,9 +57,14 @@ logger = logging.getLogger(__name__)
 # Dataset key mapping: lerobot_key -> server obs key (data_schematic batch key)
 # RBY1 from train.yaml schematic_dict. Robomimic conversion uses obs.*
 RBY1_LEROBOT_TO_OBS = {
-    "obs.aria_image": "front_img_1",
+    # "obs.aria_image": "front_img_1", # TODO: test for lowdim
     "obs.robot0_joint_pos": "robot0_joint_pos",
 }
+
+required = {"robot0_joint_pos"}
+
+RBY1_LEROBOT_ACTION_KEYS = "actions_biarm"
+# RBY1_LEROBOT_ACTION_KEYS = "actions"
 
 
 def _dataset_sample_to_obs(sample: dict) -> dict:
@@ -92,7 +114,7 @@ def _dataset_sample_to_obs(sample: dict) -> dict:
 
 def _get_gt_actions(sample: dict) -> np.ndarray:
     """Extract ground truth actions from sample. Shape (action_horizon, action_dim)."""
-    ac = sample.get("actions")
+    ac = sample.get(RBY1_LEROBOT_ACTION_KEYS)
     if ac is None:
         raise KeyError("Sample has no 'actions' key")
     if torch.is_tensor(ac):
@@ -158,6 +180,13 @@ def create_local_policy(checkpoint_path: str):
 # --- Metrics ---
 
 
+def _maybe_rad_to_deg(arr: np.ndarray, rad_to_degree: bool) -> np.ndarray:
+    """Convert radians to degrees if flag is set."""
+    if not rad_to_degree:
+        return arr
+    return np.degrees(arr)
+
+
 def compute_metrics(pred: np.ndarray, gt: np.ndarray) -> dict:
     """Compute MSE, MAE, and per-dimension stats."""
     pred = np.asarray(pred, dtype=np.float32)
@@ -196,6 +225,7 @@ def save_visualization(
     gt_actions: np.ndarray,
     pred_actions: np.ndarray,
     metrics: dict,
+    unit_label: str = "",
 ):
     """Save input image, GT vs pred action plots, and metrics."""
     import matplotlib
@@ -230,7 +260,7 @@ def save_visualization(
         ax.grid(True, alpha=0.3)
     for j in range(i + 1, len(axes)):
         axes[j].axis("off")
-    fig.suptitle(f"Sample {sample_idx}: GT vs Pred Actions (selected dims)")
+    fig.suptitle(f"Sample {sample_idx}: GT vs Pred Actions (selected dims){unit_label}")
     fig.tight_layout()
     fig.savefig(out_dir / f"sample_{sample_idx:04d}_actions.png", dpi=100, bbox_inches="tight")
     plt.close(fig)
@@ -254,16 +284,16 @@ def save_visualization(
     for dim in range(D, axes.size):
         row, col = dim // n_cols, dim % n_cols
         axes[row, col].axis("off")
-    fig.suptitle(f"Sample {sample_idx}: Trajectory vs Time (all {D} dims)")
+    fig.suptitle(f"Sample {sample_idx}: Trajectory vs Time (all {D} dims){unit_label}")
     fig.tight_layout()
     fig.savefig(out_dir / f"sample_{sample_idx:04d}_trajectory_all_dims.png", dpi=100, bbox_inches="tight")
     plt.close(fig)
 
     # 4. Metrics text
     with open(out_dir / f"sample_{sample_idx:04d}_metrics.txt", "w") as f:
-        f.write(f"MSE: {metrics['mse']:.6f}\n")
-        f.write(f"MAE: {metrics['mae']:.6f}\n")
-        f.write(f"RMSE: {metrics['rmse']:.6f}\n")
+        f.write(f"MSE{unit_label}: {metrics['mse']:.6f}\n")
+        f.write(f"MAE{unit_label}: {metrics['mae']:.6f}\n")
+        f.write(f"RMSE{unit_label}: {metrics['rmse']:.6f}\n")
 
 
 def _get_episode_ranges(dataset) -> list[tuple[int, int]]:
@@ -293,6 +323,7 @@ def test_trajectory(
     output_dir: Path,
     max_steps: int | None = None,
     save_imgs: bool = False,
+    rad_to_degree: bool = False,
 ) -> dict:
     """
     Test policy on a full episode trajectory.
@@ -319,7 +350,6 @@ def test_trajectory(
     if max_steps is not None:
         length = min(length, max_steps)
 
-    required = {"front_img_1", "robot0_joint_pos"}
     preds = []
     gts = []
     imgs_dir = None
@@ -352,8 +382,12 @@ def test_trajectory(
     pred_traj = np.stack(preds, axis=0).astype(np.float32)  # (T, D)
     gt_traj = np.stack(gts, axis=0).astype(np.float32)  # (T, D)
 
+    pred_traj = _maybe_rad_to_deg(pred_traj, rad_to_degree)
+    gt_traj = _maybe_rad_to_deg(gt_traj, rad_to_degree)
+
     T, D = pred_traj.shape
-    logger.info("Trajectory: episode %d, %d steps, %d action dims", episode_idx, T, D)
+    unit_label = " (deg)" if rad_to_degree else ""
+    logger.info("Trajectory: episode %d, %d steps, %d action dims%s", episode_idx, T, D, unit_label)
 
     metrics = compute_metrics(pred_traj, gt_traj)
 
@@ -388,7 +422,7 @@ def test_trajectory(
     for idx in range(D, axes.size):
         r, c = idx // n_cols, idx % n_cols
         axes[r, c].axis("off")
-    fig.suptitle(f"Episode {episode_idx}: Trajectory vs Timestep (all {D} dims, T={T})")
+    fig.suptitle(f"Episode {episode_idx}: Trajectory vs Timestep (all {D} dims, T={T}){unit_label}")
     fig.tight_layout()
     out_path = out_dir / f"trajectory_ep{episode_idx:04d}_all_dims.png"
     fig.savefig(out_path, dpi=100, bbox_inches="tight")
@@ -400,10 +434,10 @@ def test_trajectory(
     # Save trajectory metrics
     stats_path = Path(output_dir) / f"trajectory_ep{episode_idx:04d}_metrics.txt"
     with open(stats_path, "w") as f:
-        f.write(f"Episode {episode_idx}, T={T}, D={D}\n")
-        f.write(f"MSE: {metrics['mse']:.6f}\n")
-        f.write(f"MAE: {metrics['mae']:.6f}\n")
-        f.write(f"RMSE: {metrics['rmse']:.6f}\n")
+        f.write(f"Episode {episode_idx}, T={T}, D={D}{unit_label}\n")
+        f.write(f"MSE{unit_label}: {metrics['mse']:.6f}\n")
+        f.write(f"MAE{unit_label}: {metrics['mae']:.6f}\n")
+        f.write(f"RMSE{unit_label}: {metrics['rmse']:.6f}\n")
     logger.info("Trajectory metrics: MSE=%.6f MAE=%.6f", metrics["mse"], metrics["mae"])
 
     return metrics
@@ -415,6 +449,7 @@ def run_test(
     num_samples: int,
     output_dir: Path,
     save_viz: bool = True,
+    rad_to_degree: bool = False,
 ):
     """Run inference on dataset samples and compute statistics."""
     all_metrics = []
@@ -430,7 +465,6 @@ def run_test(
         gt = _get_gt_actions(sample)
 
         # API requires front_img_1 and robot0_joint_pos for RBY1
-        required = {"front_img_1", "robot0_joint_pos"}
         if not required.issubset(obs.keys()):
             logger.warning(
                 "Sample %d missing required keys (need %s, got %s), skipping",
@@ -455,9 +489,13 @@ def run_test(
             pred = pred[:min_h, :min_d]
             gt = gt[:min_h, :min_d]
 
+        pred = _maybe_rad_to_deg(pred, rad_to_degree)
+        gt = _maybe_rad_to_deg(gt, rad_to_degree)
+
         metrics = compute_metrics(pred, gt)
         all_metrics.append(metrics)
 
+        unit_label = " (deg)" if rad_to_degree else ""
         if save_viz and "front_img_1" in obs:
             save_visualization(
                 output_dir / "viz",
@@ -466,6 +504,7 @@ def run_test(
                 gt,
                 pred,
                 metrics,
+                unit_label=unit_label,
             )
 
         if (i + 1) % 10 == 0:
@@ -483,14 +522,19 @@ def run_test(
     }
 
     # Save aggregate stats
+    unit_label = " (deg)" if rad_to_degree else ""
+    unit_mse = " deg²" if rad_to_degree else ""
+    unit_mae = " deg" if rad_to_degree else ""
     stats_path = output_dir / "test_stats.txt"
     with open(stats_path, "w") as f:
         f.write("=== EgoVerse Policy Test Statistics ===\n\n")
-        f.write(f"N samples: {agg['n_samples']}\n\n")
-        f.write(f"MSE:  mean={agg['mse_mean']:.6f} std={agg['mse_std']:.6f}\n")
-        f.write(f"MAE:  mean={agg['mae_mean']:.6f} std={agg['mae_std']:.6f}\n")
-        f.write(f"RMSE: mean={agg['rmse_mean']:.6f}\n")
-        f.write(f"MAE per-dim (mean over samples): {agg['mae_per_dim_mean']:.6f}\n")
+        f.write(f"N samples: {agg['n_samples']}\n")
+        if rad_to_degree:
+            f.write("Units: degrees\n\n")
+        f.write(f"MSE{unit_label}:  mean={agg['mse_mean']:.6f} std={agg['mse_std']:.6f}\n")
+        f.write(f"MAE{unit_label}:  mean={agg['mae_mean']:.6f} std={agg['mae_std']:.6f}\n")
+        f.write(f"RMSE{unit_label}: mean={agg['rmse_mean']:.6f}\n")
+        f.write(f"MAE per-dim (mean over samples){unit_label}: {agg['mae_per_dim_mean']:.6f}\n")
 
     # Summary visualization (always when we have metrics)
     if all_metrics:
@@ -504,15 +548,15 @@ def run_test(
         maes = [m["mae"] for m in all_metrics]
         rmses = [m["rmse"] for m in all_metrics]
         axes[0].hist(mses, bins=min(30, len(mses)), edgecolor="black", alpha=0.7)
-        axes[0].set_title("MSE distribution")
-        axes[0].set_xlabel("MSE")
+        axes[0].set_title(f"MSE distribution{unit_label}")
+        axes[0].set_xlabel(f"MSE{unit_mse}")
         axes[1].hist(maes, bins=min(30, len(maes)), edgecolor="black", alpha=0.7)
-        axes[1].set_title("MAE distribution")
-        axes[1].set_xlabel("MAE")
+        axes[1].set_title(f"MAE distribution{unit_label}")
+        axes[1].set_xlabel(f"MAE{unit_mae}")
         axes[2].hist(rmses, bins=min(30, len(rmses)), edgecolor="black", alpha=0.7)
-        axes[2].set_title("RMSE distribution")
-        axes[2].set_xlabel("RMSE")
-        fig.suptitle(f"EgoVerse Policy Test (n={agg['n_samples']})")
+        axes[2].set_title(f"RMSE distribution{unit_label}")
+        axes[2].set_xlabel(f"RMSE{unit_mae}")
+        fig.suptitle(f"EgoVerse Policy Test (n={agg['n_samples']}){unit_label}")
         fig.tight_layout()
         fig.savefig(output_dir / "viz" / "summary_distributions.png", dpi=100, bbox_inches="tight")
         plt.close(fig)
@@ -613,6 +657,11 @@ def main():
         action="store_true",
         help="Save all input images from trajectory frames (only in --trajectory mode)",
     )
+    parser.add_argument(
+        "--rad-to-degree",
+        action="store_true",
+        help="Convert actions from radians to degrees for metrics and plots",
+    )
     args = parser.parse_args()
 
     if args.local and not args.checkpoint:
@@ -632,7 +681,7 @@ def main():
         mode=args.mode,
         local_files_only=True,
         delta_timestamps={
-            "actions": [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
+            RBY1_LEROBOT_ACTION_KEYS: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9],
         },
     )
     logger.info("Loaded dataset: %d samples", len(dataset))
@@ -655,6 +704,7 @@ def main():
                 output_dir=out_dir,
                 max_steps=args.max_steps,
                 save_imgs=args.save_trajectory_imgs,
+                rad_to_degree=args.rad_to_degree,
             )
         else:
             run_test(
@@ -663,6 +713,7 @@ def main():
                 num_samples=args.num_samples,
                 output_dir=out_dir,
                 save_viz=not args.no_viz,
+                rad_to_degree=args.rad_to_degree,
             )
     finally:
         close_fn()
