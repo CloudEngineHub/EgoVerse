@@ -105,29 +105,39 @@ class EpisodeResolver:
         Returns:
             dict[str, ZarrDataset]: a dictionary mapping string keys to constructed zarr datasets from valid filters.
         """
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
         all_paths = sorted(search_path.iterdir())
-        datasets: dict[str, ZarrDataset] = {}
-        skipped: list[str] = []
+
+        # Filter to valid candidate paths before spawning threads
+        candidates: list[tuple[str, Path]] = []
         for p in all_paths:
             if not p.is_dir():
-                logger.info(f"{p} is not a valid directory")
-                skipped.append(p.name)
                 continue
             name = p.name
             if name.endswith(".zarr"):
                 name = name[: -len(".zarr")]
-            if name not in valid_folder_names:
-                skipped.append(p.name)
-                continue
-            try:
-                ds_obj = ZarrDataset(
-                    p, key_map=self.key_map, transform_list=self.transform_list
-                )
-                datasets[name] = ds_obj
-            except Exception as e:
-                logger.error(f"Failed to load dataset at {p}: {e}")
-                skipped.append(p.name)
+            if name in valid_folder_names:
+                candidates.append((name, p))
 
+        def _open_one(name: str, p: Path):
+            return name, ZarrDataset(p, key_map=self.key_map, transform_list=self.transform_list)
+
+        datasets: dict[str, ZarrDataset] = {}
+        skipped: list[str] = []
+        num_workers = min(32, len(candidates))
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            futures = {executor.submit(_open_one, name, p): name for name, p in candidates}
+            for future in as_completed(futures):
+                name = futures[future]
+                try:
+                    name, ds_obj = future.result()
+                    datasets[name] = ds_obj
+                except Exception as e:
+                    logger.error(f"Failed to load dataset {name}: {e}")
+                    skipped.append(name)
+
+        logger.info(f"Loaded {len(datasets)} zarr datasets ({len(skipped)} skipped).")
         return datasets
 
     @classmethod
@@ -212,14 +222,23 @@ class S3EpisodeResolver(EpisodeResolver):
                                    for episodes passing the filter criteria.
         """
         filters = dict(filters) if filters is not None else {}
+        # Normalize OmegaConf ListConfig (and any other list-like) to plain Python lists
+        # so pandas isin() and == comparisons work correctly.
+        filters = {
+            k: list(v) if hasattr(v, "__iter__") and not isinstance(v, str) else v
+            for k, v in filters.items()
+        }
         engine = create_default_engine()
         df = episode_table_to_df(engine)
-        series = pd.Series(filters)
 
-        output = df.loc[
-            (df[list(filters)] == series).all(axis=1),
-            ["zarr_processed_path", "episode_hash"],
-        ]
+        mask = pd.Series([True] * len(df), index=df.index)
+        for key, value in filters.items():
+            if isinstance(value, (list, tuple, set)):
+                mask &= df[key].isin(value)
+            else:
+                mask &= df[key] == value
+
+        output = df.loc[mask, ["zarr_processed_path", "episode_hash"]]
         before_len = len(output)
 
         if debug:
@@ -340,10 +359,14 @@ class S3EpisodeResolver(EpisodeResolver):
             rl2_endpoint_url = os.environ.get("R2_ENDPOINT_URL")
             access_key_id = os.environ["R2_ACCESS_KEY_ID"]
             secret_access_key = os.environ["R2_SECRET_ACCESS_KEY"]
-            os.environ["AWS_ACCESS_KEY_ID"] = access_key_id
-            os.environ["AWS_SECRET_ACCESS_KEY"] = secret_access_key
-            os.environ["AWS_DEFAULT_REGION"] = "auto"
-            os.environ["AWS_REGION"] = "auto"
+            # Build a subprocess-only env so R2 credentials/region don't leak
+            # into the parent process and corrupt subsequent boto3 calls
+            # (e.g. secretsmanager would resolve to the wrong region endpoint).
+            s5cmd_env = os.environ.copy()
+            s5cmd_env["AWS_ACCESS_KEY_ID"] = access_key_id
+            s5cmd_env["AWS_SECRET_ACCESS_KEY"] = secret_access_key
+            s5cmd_env["AWS_DEFAULT_REGION"] = "auto"
+            s5cmd_env["AWS_REGION"] = "auto"
             cmd = [
                 "s5cmd",
                 "--endpoint-url",
@@ -366,6 +389,7 @@ class S3EpisodeResolver(EpisodeResolver):
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.PIPE,
                 text=True,
+                env=s5cmd_env,
             )
             if result.returncode != 0:
                 err = (result.stderr or "").strip()
