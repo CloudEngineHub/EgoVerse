@@ -27,9 +27,6 @@ from tqdm import tqdm
 from egomimic.rldb.zarr import LocalEpisodeResolver
 
 
-# ── per-episode worker ────────────────────────────────────────────────────────
-
-
 def _scan_episode(ep_path: Path, episode_hash: str) -> dict:
     """
     Open the zarr store, check every numeric (T, ...) array for all-zero rows.
@@ -61,8 +58,6 @@ def _scan_episode(ep_path: Path, episode_hash: str) -> dict:
         return {"episode_hash": eh, "total_frames": 0,
                 "zero_rows": {}, "error": str(e)}
 
-
-# ── main ──────────────────────────────────────────────────────────────────────
 
 
 def main() -> int:
@@ -117,7 +112,6 @@ def main() -> int:
     eps = [(Path(path_str), eh) for path_str, eh in raw]
     print(f"Scanning {len(eps)} episodes with {args.workers} threads...")
 
-    # ── parallel scan ─────────────────────────────────────────────────────────
     total_episodes_with_zeros = 0
     total_zero_frames = 0
     scan_errors: list[str] = []
@@ -162,7 +156,6 @@ def main() -> int:
                 )
     pbar.close()
 
-    # ── summary ───────────────────────────────────────────────────────────────
     print()
     print("=" * 60)
     print(f"Episodes scanned       : {len(eps)}")
