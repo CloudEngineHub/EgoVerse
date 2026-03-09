@@ -112,4 +112,6 @@ data_schematic: # Dynamically fill in these shapes from the dataset
       front_img_1
 
 seed: 42
-norm_stat_fraction: 1.0 # fraction of dataset to calculate norm stats over (out of 1.0)
+cache_stats: true # option to save norm stats for this run
+norm_stat_fraction: 1.0 
+norm_stats_path: null # load from precomputed stats
