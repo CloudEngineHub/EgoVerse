@@ -72,8 +72,10 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     """Trains the model. Can additionally evaluate on a testset, using best weights obtained during
     training.
 
+
     This method is wrapped in optional @task_wrapper decorator, that controls the behavior during
     failure. Useful for multiruns, saving info about the crash, etc.
+
 
     :param cfg: A DictConfig configuration composed by Hydra.
     :return: A tuple with metrics and dict with all instantiated objects.
@@ -90,7 +92,6 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
     # log.info(f"Instantiating data schematic <{cfg.data_schematic._target_}>")
 
     data_schematic: DataSchematic = hydra.utils.instantiate(cfg.data_schematic)
-
     # Modify dataset configs to include `data_schematic` dynamically at runtime
     train_datasets = {}
     for dataset_name in cfg.data.train_datasets:
@@ -105,9 +106,9 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
         )
 
     log.info(f"Instantiating datamodule <{cfg.data._target_}>")
-    assert (
-        "MultiDataModuleWrapper" in cfg.data._target_
-    ), "cfg.data._target_ must be 'MultiDataModuleWrapper'"
+    assert "MultiDataModuleWrapper" in cfg.data._target_, (
+        "cfg.data._target_ must be 'MultiDataModuleWrapper'"
+    )
     datamodule: LightningDataModule = hydra.utils.instantiate(
         cfg.data, train_datasets=train_datasets, valid_datasets=valid_datasets
     )
@@ -137,6 +138,12 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
             sample_frac=cfg.norm_stat_fraction,
             benchmark_dir=os.path.join(
                 cfg.trainer.default_root_dir, "benchmark_stats.json"
+            ),
+            save_cache_dir=cfg.trainer.default_root_dir
+            if cfg.get("cache_stats")
+            else None,
+            precomputed_norm_path=OmegaConf.select(
+                cfg, "norm_stats_path", default=None
             ),
         )
 
@@ -234,6 +241,7 @@ def train(cfg: DictConfig) -> Tuple[Dict[str, Any], Dict[str, Any]]:
 )
 def main(cfg: DictConfig) -> Optional[float]:
     """Main entry point for training.
+
 
     :param cfg: DictConfig configuration composed by Hydra.
     :return: Optional[float] with optimized metric value.
