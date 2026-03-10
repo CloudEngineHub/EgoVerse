@@ -51,7 +51,7 @@ robomimic_model:
 optimizer:
   _target_: torch.optim.AdamW
   _partial_: true
-  lr: 5e-4
+  lr: 2.5e-5
   betas: [0.9, 0.999]
   eps: 1e-8
   weight_decay: 0.0
@@ -60,7 +60,7 @@ scheduler:
   _target_: transformers.get_cosine_schedule_with_warmup
   _partial_: true
   num_warmup_steps: 1000
-  num_training_steps: 100000
+  num_training_steps: 31000
   num_cycles: 0.5
 
 scheduler_interval: step

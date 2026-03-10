@@ -4,10 +4,10 @@ defaults:
   - data: eva
   - callbacks: checkpoints
   - model: hpt_bc_flow_eva
-  - trainer: ddp
+  - trainer: ddp_pi
   - logger: wandb
-  - data_schematic: hpt
-  - override hydra/launcher: submitit
+  - data_schematic: pi
+  - override hydra/launcher: submitit_pace
   - _self_
 
 name: test
@@ -30,7 +30,7 @@ hydra:
     dir: ./logs/${name}/${description}_${now:%Y-%m-%d_%H-%M-%S}
 
 launch_params:
-  gpus_per_node: 1
+  gpus_per_node: 4
   nodes: 1
 
 seed: 42

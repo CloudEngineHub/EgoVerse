@@ -14,6 +14,19 @@ train_datasets:
       lab: "mecka"
       task: "fold_clothes"
     mode: train
+  mecka_bimanual_2:
+    _target_: egomimic.rldb.zarr.zarr_dataset_multi.MultiDataset._from_resolver
+    resolver:
+      _target_: egomimic.rldb.zarr.zarr_dataset_multi.S3EpisodeResolver
+      folder_path: /storage/project/r-dxu345-0/shared/egoverseS3PiHuman
+      key_map:
+        _target_: egomimic.rldb.embodiment.human.Mecka.get_keymap
+      transform_list:
+        _target_: egomimic.rldb.embodiment.human.Mecka.get_transform_list
+    filters:
+      lab: "mecka"
+      task: "folding_clothes"
+    mode: train
   scale_bimanual:
     _target_: egomimic.rldb.zarr.zarr_dataset_multi.MultiDataset._from_resolver
     resolver:
@@ -26,6 +39,19 @@ train_datasets:
     filters:
       lab: "scale"
       task: "flagship_fold_clothes"
+    mode: train
+  scale_bimanual_2:
+    _target_: egomimic.rldb.zarr.zarr_dataset_multi.MultiDataset._from_resolver
+    resolver:
+      _target_: egomimic.rldb.zarr.zarr_dataset_multi.S3EpisodeResolver
+      folder_path: /storage/project/r-dxu345-0/shared/egoverseS3PiHuman
+      key_map:
+        _target_: egomimic.rldb.embodiment.human.Scale.get_keymap
+      transform_list:
+        _target_: egomimic.rldb.embodiment.human.Scale.get_transform_list
+    filters:
+      lab: "scale"
+      task: "freeform_fold_clothes"
     mode: train
 valid_datasets:
   mecka_bimanual:

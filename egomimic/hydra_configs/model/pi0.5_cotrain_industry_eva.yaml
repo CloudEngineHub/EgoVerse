@@ -3,24 +3,39 @@ robomimic_model:
   _target_: egomimic.algo.pi.PI
   data_schematic: _${data.dataset.data_schematic}
   camera_transforms:
-    _target_: egomimic.utils.egomimicUtils.CameraTransforms
-    intrinsics_key: "base"
-    extrinsics_key: "x5Dec13_2"
-  pi_cam_keys: ["front_img_1", "left_wrist_img", "right_wrist_img"]
+    eva_bimanual:
+      _target_: egomimic.utils.egomimicUtils.CameraTransforms
+      intrinsics_key: "base" # change to base_half if using half res 
+      extrinsics_key: "x5Dec13_2"
+    mecka_bimanual:
+      _target_: egomimic.utils.egomimicUtils.CameraTransforms
+      intrinsics_key: "mecka" # change to base_half if using half res 
+      extrinsics_key: "mecka"
+    scale_bimanual:
+      _target_: egomimic.utils.egomimicUtils.CameraTransforms
+      intrinsics_key: "scale" # change to base_half if using half res 
+      extrinsics_key: "scale"
   ac_keys:
     eva_bimanual: "actions_cartesian"
-  domains: ["eva_bimanual"]
+    mecka_bimanual: "actions_cartesian"
+    scale_bimanual: "actions_cartesian"
+  domains: ["eva_bimanual", "mecka_bimanual", "scale_bimanual"]
 
   action_converters:
     rules:
       EVA_BIMANUAL:
         _target_: egomimic.utils.action_utils.RobotBimanualCartesianEuler
+      MECKA_BIMANUAL:
+        _target_: egomimic.utils.action_utils.HumanBimanualCartesianEuler
+      SCALE_BIMANUAL:
+        _target_: egomimic.utils.action_utils.HumanBimanualCartesianEuler
+    # optional fallback if no match is found
     fallback:
       _target_: egomimic.utils.action_utils.BaseActionConverter
-
-  config:
+      
+  config:      
     pytorch_training_precision: bfloat16
-    pytorch_weight_path: /storage/home/hcoda1/5/rpunamiya6/cedar-dx/rpunamiya6/Projects/EgoVerse/egomimic/algo/pi_checkpoints/pi05_base_pytorch
+    pytorch_weight_path: /storage/project/r-dxu345-0/rco3/EgoVerse/egomimic/algo/pi_checkpoints/pi05_base_pytorch
     model:
       pi05: true
       action_dim: 32
@@ -43,7 +58,7 @@ robomimic_model:
 optimizer:
   _target_: torch.optim.AdamW
   _partial_: true
-  lr: 5e-4
+  lr: 2.5e-5
   betas: [0.9, 0.999]
   eps: 1e-8
   weight_decay: 0.0
@@ -52,7 +67,7 @@ scheduler:
   _target_: transformers.get_cosine_schedule_with_warmup
   _partial_: true
   num_warmup_steps: 1000
-  num_training_steps: 100000
+  num_training_steps: 31000
   num_cycles: 0.5
 
 scheduler_interval: step
