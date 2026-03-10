@@ -214,12 +214,15 @@ class S3EpisodeResolver(EpisodeResolver):
         filters = dict(filters) if filters is not None else {}
         engine = create_default_engine()
         df = episode_table_to_df(engine)
-        series = pd.Series(filters)
 
-        output = df.loc[
-            (df[list(filters)] == series).all(axis=1),
-            ["zarr_processed_path", "episode_hash"],
-        ]
+        mask = pd.Series([True] * len(df), index=df.index)
+        for key, value in filters.items():
+            if isinstance(value, str) or not hasattr(value, "__iter__"):
+                mask &= df[key] == value
+            else:
+                mask &= df[key].isin(list(value))
+
+        output = df.loc[mask, ["zarr_processed_path", "episode_hash"]]
         before_len = len(output)
 
         if debug:
@@ -404,8 +407,12 @@ class LocalEpisodeResolver(EpisodeResolver):
 
             if meta_value is None:
                 return False
-            if meta_value != value:
-                return False
+            if isinstance(value, str) or not hasattr(value, "__iter__"):
+                if meta_value != value:
+                    return False
+            else:
+                if meta_value not in list(value):
+                    return False
 
         return True
 
