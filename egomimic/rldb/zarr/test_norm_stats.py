@@ -210,3 +210,53 @@ def test_infer_norm_from_dataset_legacy_matches_current_on_dummy_dataset() -> No
             torch.testing.assert_close(
                 legacy_stats[stat_name], current_stats[stat_name]
             )
+
+
+def test_dataschematic_state_roundtrip_preserves_shapes_and_norm_stats() -> None:
+    schematic = DataSchematic(
+        {
+            "eva_bimanual": {
+                "observations.state.ee_pose": {
+                    "key_type": "proprio_keys",
+                    "zarr_key": "observations.state.ee_pose",
+                },
+                "actions_cartesian": {
+                    "key_type": "action_keys",
+                    "zarr_key": "actions_cartesian",
+                },
+            }
+        },
+        {"eva_bimanual": "observations.images.front_img_1"},
+        norm_mode="quantile",
+    )
+    embodiment_id = get_embodiment_id("eva_bimanual")
+    schematic.infer_shapes_from_batch(
+        {
+            "observations.state.ee_pose": np.zeros((2, 14), dtype=np.float32),
+            "actions_cartesian": np.zeros((2, 100, 14), dtype=np.float32),
+        }
+    )
+    schematic.norm_stats[embodiment_id] = {
+        "observations.state.ee_pose": {
+            "mean": torch.arange(14, dtype=torch.float32),
+            "std": torch.ones(14, dtype=torch.float32),
+        },
+        "actions_cartesian": {
+            "mean": torch.arange(14, dtype=torch.float32),
+            "std": torch.ones(14, dtype=torch.float32),
+        },
+    }
+
+    restored = DataSchematic.from_state(schematic.to_state())
+
+    assert restored.norm_mode == "quantile"
+    assert restored.key_shape("observations.state.ee_pose", embodiment_id) == (2, 14)
+    assert restored.key_shape("actions_cartesian", embodiment_id) == (2, 100, 14)
+    torch.testing.assert_close(
+        restored.norm_stats[embodiment_id]["observations.state.ee_pose"]["mean"],
+        schematic.norm_stats[embodiment_id]["observations.state.ee_pose"]["mean"],
+    )
+    torch.testing.assert_close(
+        restored.norm_stats[embodiment_id]["actions_cartesian"]["std"],
+        schematic.norm_stats[embodiment_id]["actions_cartesian"]["std"],
+    )
