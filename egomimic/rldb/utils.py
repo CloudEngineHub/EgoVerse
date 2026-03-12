@@ -675,7 +675,7 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
             add_future_obs_batched, 
             with_indices=True, 
             batched=True,
-            batch_size=10000,
+            batch_size=100,
             desc="Adding future observations and actions"
         )
         dataset.hf_dataset = hf_dataset
@@ -742,19 +742,19 @@ class MultiRLDBDataset(torch.utils.data.Dataset):
             if hasattr(dataset.meta, 'root') and dataset.meta.root:
                 source_episodes = Path(dataset.meta.root) / "meta" / "episodes.jsonl"
                 if source_episodes.exists():
-                    shutil.copy2(source_episodes, meta_dir / "episodes.jsonl")
+                    shutil.copy(source_episodes, meta_dir / "episodes.jsonl")
             
             # Copy tasks.jsonl if it exists
             if hasattr(dataset.meta, 'root') and dataset.meta.root:
                 source_tasks = Path(dataset.meta.root) / "meta" / "tasks.jsonl"
                 if source_tasks.exists():
-                    shutil.copy2(source_tasks, meta_dir / "tasks.jsonl")
+                    shutil.copy(source_tasks, meta_dir / "tasks.jsonl")
             
             # Copy stats.json if it exists
             if hasattr(dataset.meta, 'root') and dataset.meta.root:
                 source_stats = Path(dataset.meta.root) / "meta" / "stats.json"
                 if source_stats.exists():
-                    shutil.copy2(source_stats, meta_dir / "stats.json")
+                    shutil.copy(source_stats, meta_dir / "stats.json")
             
             logger.info(f"Saved processed dataset with future observations to {dataset_save_dir}")
             
@@ -935,7 +935,7 @@ class S3RLDBDataset(MultiRLDBDataset):
         debug=False,
         use_future=False,
         action_chunk=25,
-        wm_root="/coc/flash7/scratch/egowm/wmprocessedDataset",
+        wm_root="/coc/flash7/scratch/egowm/wmprocessedDataset", # used to save the data with future obs and actions
         is_rollout: bool = None,
         success: bool = True,
         p_world_model: float = 0.5,
