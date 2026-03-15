@@ -65,8 +65,8 @@ EVA_XML_PATH = os.path.join(
 )
 
 HORIZON_BASE = 45   # horizon in real timesteps
-ACTION_HORIZON = 50  # horizon for future observations and actions
-CHUNK_LENGTH_BASE = 50  # number of interpolated points per chunk
+ACTION_HORIZON = HORIZON_BASE  # horizon for future observations and actions
+CHUNK_LENGTH_BASE = 100  # number of interpolated points per chunk
 
 Array2D = Union[np.ndarray, torch.Tensor]
 

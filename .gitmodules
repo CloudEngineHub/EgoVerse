@@ -4,3 +4,4 @@
 [submodule "external/cosmos-policy"]
 	path = external/cosmos-policy
 	url = https://github.com/Boey-li/cosmos-policy.git
+	branch = main
