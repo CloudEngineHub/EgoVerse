@@ -1,6 +1,7 @@
 import sys
 import atexit
 import signal
+import os
 from typing import Optional
 import threading
 import time
@@ -25,12 +26,13 @@ def list_connected_serials() -> list[str]:
 
 class RealSenseRecorder:
     """
-    Stream RGB frames (BGR8) at 640x480@30 from a specific RealSense device.
+    Stream RGB and depth frames from a specific RealSense device.
 
     Usage:
         serials = list_connected_serials()
         cam = RealSenseRecorder(serials[0])
         img = cam.get_image()               # np.ndarray (480, 640, 3), dtype=uint8 (BGR)
+        depth = cam.get_depth()             # np.ndarray (480, 640), dtype=uint16 (mm)
         cam.stop()
         
     Latency monitoring:
@@ -46,19 +48,26 @@ class RealSenseRecorder:
     def __init__(
         self,
         serial_number: str,
+        camera_name: Optional[str] = None,
         width: int = 640,
         height: int = 480,
         fps: int = 30,
+        realsense_json: Optional[str] = None,
+        enable_depth: bool = True,
         auto_exposure: bool = True,
         warmup_frames: int = 5,
     ) -> None:
         self._serial = serial_number
+        self._camera_name = camera_name
         self._width = width
         self._height = height
         self._fps = fps
+        self._realsense_json = realsense_json
+        self._enable_depth = enable_depth
         self._pipeline = rs.pipeline()
         self._config = rs.config()
         self._latest_image: Optional[np.ndarray] = None
+        self._latest_depth: Optional[np.ndarray] = None
         self._lock = threading.Lock()
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -73,10 +82,16 @@ class RealSenseRecorder:
         self._last_read_frame: int = -1  # Track which frame was last read
 
         self._config.enable_device(self._serial)
+        if self._realsense_json:
+            self._load_realsense_json(self._realsense_json)
 
         self._config.enable_stream(
             rs.stream.color, self._width, self._height, rs.format.bgr8, self._fps
         )
+        if self._enable_depth:
+            self._config.enable_stream(
+                rs.stream.depth, self._width, self._height, rs.format.z16, self._fps
+            )
 
         self._profile = self._pipeline.start(self._config)
 
@@ -94,6 +109,9 @@ class RealSenseRecorder:
                 except Exception:
                     pass
 
+        # Print post-start camera control status (especially useful after JSON load).
+        self._print_camera_control_status()
+
         for _ in range(max(0, warmup_frames)):
             self._wait_for_color_frame(timeout_ms=2000)
 
@@ -104,6 +122,41 @@ class RealSenseRecorder:
         atexit.register(self.stop)
 
         self._install_signal_handlers()
+
+    def _load_realsense_json(self, json_path: str) -> None:
+        """
+        Apply a RealSense advanced-mode JSON configuration to this device.
+        """
+        resolved_path = os.path.abspath(os.path.expanduser(json_path))
+        if not os.path.isfile(resolved_path):
+            raise FileNotFoundError(
+                f"RealSense JSON config not found: {resolved_path}"
+            )
+
+        ctx = rs.context()
+        target_device = None
+        for device in ctx.query_devices():
+            if device.get_info(rs.camera_info.serial_number) == self._serial:
+                target_device = device
+                break
+
+        if target_device is None:
+            raise RuntimeError(
+                f"RealSense device with serial {self._serial} not found "
+                f"while loading JSON config: {resolved_path}"
+            )
+
+        advanced_mode = rs.rs400_advanced_mode(target_device)
+        if not advanced_mode.is_enabled():
+            raise RuntimeError(
+                f"RealSense device {self._serial} is not in advanced mode, "
+                f"cannot load JSON config: {resolved_path}"
+            )
+
+        with open(resolved_path, "r", encoding="utf-8") as f:
+            json_content = f.read()
+
+        advanced_mode.load_json(json_content)
 
     def _install_signal_handlers(self) -> None:
         def handler(signum, frame):
@@ -131,9 +184,88 @@ class RealSenseRecorder:
         # Expect shape (480, 640, 3) with the defaults.
         return img
 
+    def _get_sensor_name(self, sensor) -> str:
+        try:
+            return sensor.get_info(rs.camera_info.name)
+        except Exception:
+            return "unknown"
+
+    def _supports_any_control_option(self, sensor) -> bool:
+        control_options = (
+            rs.option.enable_auto_exposure,
+            rs.option.exposure,
+            rs.option.enable_auto_white_balance,
+            rs.option.white_balance,
+        )
+        for opt in control_options:
+            try:
+                if sensor.supports(opt):
+                    return True
+            except Exception:
+                continue
+        return False
+
+    def _get_color_control_sensor(self):
+        sensors = list(self._profile.get_device().sensors)
+        if not sensors:
+            return None
+
+        # Prefer explicit RGB name when available.
+        for sensor in sensors:
+            if self._get_sensor_name(sensor).lower().startswith("rgb"):
+                return sensor
+
+        # Fallback: choose the sensor that exposes color control options.
+        for sensor in sensors:
+            if self._supports_any_control_option(sensor):
+                return sensor
+
+        return None
+
+    def _read_sensor_option(self, sensor, option):
+        try:
+            if not sensor.supports(option):
+                return None
+            return sensor.get_option(option)
+        except Exception:
+            return None
+
+    def _print_camera_control_status(self) -> None:
+        rgb_sensor = self._get_color_control_sensor()
+        cam_label = self._camera_name or "unknown_camera"
+
+        if rgb_sensor is None:
+            sensor_names = [
+                self._get_sensor_name(sensor)
+                for sensor in self._profile.get_device().sensors
+            ]
+            print(
+                f"[RealSenseRecorder] {cam_label} ({self._serial}) "
+                "No sensor with AE/AWB controls found; "
+                f"available sensors={sensor_names}"
+            )
+            return
+
+        ae_enabled = self._read_sensor_option(rgb_sensor, rs.option.enable_auto_exposure)
+        exposure_val = self._read_sensor_option(rgb_sensor, rs.option.exposure)
+        awb_enabled = self._read_sensor_option(rgb_sensor, rs.option.enable_auto_white_balance)
+        wb_val = self._read_sensor_option(rgb_sensor, rs.option.white_balance)
+
+        ae_str = "n/a" if ae_enabled is None else ("on" if ae_enabled >= 0.5 else "off")
+        awb_str = "n/a" if awb_enabled is None else ("on" if awb_enabled >= 0.5 else "off")
+        exposure_str = "n/a" if exposure_val is None else f"{exposure_val:.2f}"
+        wb_str = "n/a" if wb_val is None else f"{wb_val:.2f}"
+
+        print(
+            f"[RealSenseRecorder] {cam_label} ({self._serial}) controls: "
+            f"sensor='{self._get_sensor_name(rgb_sensor)}', "
+            f"auto_exposure={ae_str}, exposure={exposure_str}, "
+            f"auto_white_balance={awb_str}, white_balance={wb_str}"
+        )
+
     def _capture_loop(self) -> None:
         """
-        Background loop to poll frames and update the latest image buffer.
+        Background loop to poll frames and update latest image/depth buffers.
         """
         while self._running:
             try:
@@ -142,27 +274,31 @@ class RealSenseRecorder:
                     time.sleep(0.001)
                     continue
                 color_frame = frames.get_color_frame()
-                if not color_frame:
+                depth_frame = frames.get_depth_frame() if self._enable_depth else None
+                if not color_frame and not depth_frame:
                     continue
-                
-                # Capture timestamp immediately
+
                 capture_time = time.time()
-                img = np.asanyarray(color_frame.get_data())
-                
-                # Get RealSense frame metadata
-                frame_number = color_frame.get_frame_number()
-                rs_timestamp_ms = color_frame.get_timestamp()  # Hardware timestamp in ms
-                
-                # Compute offset between RS timestamp and wall clock (once)
-                if self._rs_timestamp_offset is None:
-                    self._rs_timestamp_offset = capture_time - (rs_timestamp_ms / 1000.0)
-                
+                img = np.asanyarray(color_frame.get_data()) if color_frame else None
+                depth = np.asanyarray(depth_frame.get_data()) if depth_frame else None
+
                 with self._lock:
-                    self._latest_image = img
-                    self._frame_number = frame_number
-                    self._capture_time = capture_time
-                    self._rs_timestamp_ms = rs_timestamp_ms
-                    self._frames_captured += 1
+                    if img is not None:
+                        # Keep latency metadata anchored to color stream (legacy behavior).
+                        frame_number = color_frame.get_frame_number()
+                        rs_timestamp_ms = color_frame.get_timestamp()
+                        if self._rs_timestamp_offset is None:
+                            self._rs_timestamp_offset = capture_time - (
+                                rs_timestamp_ms / 1000.0
+                            )
+
+                        self._latest_image = img
+                        self._frame_number = frame_number
+                        self._capture_time = capture_time
+                        self._rs_timestamp_ms = rs_timestamp_ms
+                        self._frames_captured += 1
+                    if depth is not None:
+                        self._latest_depth = depth
             except Exception:
                 time.sleep(0.01)
 
@@ -176,6 +312,28 @@ class RealSenseRecorder:
             if self._frame_number != self._last_read_frame:
                 self._last_read_frame = self._frame_number
             return self._latest_image
+
+    def get_depth(self, convert_to_meters: bool = False) -> Optional[np.ndarray]:
+        """
+        Return the most recent depth frame or None if unavailable.
+
+        By default returns raw depth as uint16 millimeters (Z16).
+        Set convert_to_meters=True to get float32 meters.
+        """
+        with self._lock:
+            depth = self._latest_depth
+
+        if depth is None:
+            return None
+
+        if not convert_to_meters:
+            return depth
+
+        if depth.dtype == np.uint16:
+            return depth.astype(np.float32) / 1000.0
+        if depth.dtype != np.float32:
+            return depth.astype(np.float32)
+        return depth
     
     def get_image_with_latency(self) -> tuple[Optional[np.ndarray], dict]:
         """

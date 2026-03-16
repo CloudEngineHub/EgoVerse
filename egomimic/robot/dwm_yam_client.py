@@ -22,7 +22,8 @@ import sys
 import time
 import argparse
 import numpy as np
-from scipy.spatial.transform import Rotation as R
+from scipy.interpolate import PchipInterpolator
+from scipy.spatial.transform import Rotation as R, Slerp
 
 # Add i2rt and robot interface paths
 sys.path.insert(0, os.path.expanduser("~/i2rt"))
@@ -155,6 +156,23 @@ class DWMYAMClient:
         ik_error_threshold: float = None,
         skip_small_delta: float = None,
         monitor_latency: bool = False,
+        read_all_arms: bool = False,
+        disable_gripper_calibration: bool = False,
+        camera_fps_15: bool = False,
+        action_lpf_alpha_xyz: float = None,
+        action_lpf_alpha_ypr: float = None,
+        action_lpf_alpha_grip: float = None,
+        action_slew_max_xyz_step: float = None,
+        action_slew_max_ypr_step: float = None,
+        action_slew_max_grip_step: float = None,
+        action_deadband_xyz: float = None,
+        action_deadband_ypr: float = None,
+        action_deadband_grip: float = None,
+        capture_pause_delay: float = 0.0,
+        motion_smooth_mode: str = "lpf",
+        interp_xyz_keyframe_step: int = 1,
+        interp_orientation_keyframe_step: int = 1,
+        interp_gripper_keyframe_step: int = 1,
     ):
         """Initialize YAM client.
         
@@ -171,14 +189,38 @@ class DWMYAMClient:
                      Robot will be homed and observations will be real, but set_pose() is skipped.
             velocity_limit: Maximum joint velocity in rad/s. If None, no velocity limit is applied.
             wait_for_server: If True, wait indefinitely for the server to become available.
-            zero_action_threshold: If set, replace near-zero actions (xyz norm < threshold) with
-                                   current pose. Workaround for models trained with zeros for 
-                                   non-engaged arms.
+            zero_action_threshold: If set, replace zero-action arms whose action sequence
+                                   first-to-last distance is below this threshold with the current pose.
+                                   Workaround for models trained with zeros for non-engaged arms.
             max_ik_iters: Maximum IK solver iterations (lower = faster failure, default 500).
             ik_error_threshold: If set, skip arm commands when IK error exceeds this value (meters).
             skip_small_delta: If set, skip arm execution when target xyz is within this distance
                              of current pose (meters). Avoids wasting IK on "hold position" actions.
             monitor_latency: If True, track and report camera latency statistics.
+            read_all_arms: If True, initialize both arms for proprioception even when controlling one.
+            disable_gripper_calibration: If True, disable linear gripper auto-calibration at startup.
+            camera_fps_15: If True, force all cameras to 15 FPS regardless of config.
+            action_lpf_alpha_xyz: Optional EMA alpha for xyz smoothing (0, 1].
+            action_lpf_alpha_ypr: Optional EMA alpha for yaw/pitch/roll smoothing (0, 1].
+            action_lpf_alpha_grip: Optional EMA alpha for gripper smoothing (0, 1].
+            action_slew_max_xyz_step: Optional max xyz change per control step (meters).
+            action_slew_max_ypr_step: Optional max ypr change per control step (radians).
+            action_slew_max_grip_step: Optional max gripper change per control step.
+            action_deadband_xyz: Optional xyz deadband relative to previous command (meters).
+            action_deadband_ypr: Optional ypr deadband relative to previous command (radians).
+            action_deadband_grip: Optional gripper deadband relative to previous command.
+            capture_pause_delay: Seconds to pause before capturing images when requesting new
+                                actions. Reduces motion blur by allowing the robot to settle.
+                                Default 0 (no pause).
+            motion_smooth_mode: Action smoothing mode. "lpf" keeps current per-step filtering
+                               behavior. "interp" smooths each received horizon with endpoint-
+                               preserving interpolation before execution.
+            interp_xyz_keyframe_step: Interpolation keyframe step for xyz. Integer >= 1.
+                                      Use 1 for no interpolation smoothing (keeps every point).
+            interp_orientation_keyframe_step: Interpolation keyframe step for orientation.
+                                              Integer >= 1. Use 1 for no interpolation smoothing.
+            interp_gripper_keyframe_step: Interpolation keyframe step for gripper.
+                                          Integer >= 1. Use 1 for no interpolation smoothing.
         """
         self.server_addr = server_addr
         self.arms = arms
@@ -190,10 +232,57 @@ class DWMYAMClient:
         self.zero_action_threshold = zero_action_threshold
         self.skip_small_delta = skip_small_delta
         self.monitor_latency = monitor_latency
+        self.read_all_arms = read_all_arms
+        self.disable_gripper_calibration = disable_gripper_calibration
+        self.camera_fps_15 = camera_fps_15
+        self.action_lpf_alpha_xyz = action_lpf_alpha_xyz
+        self.action_lpf_alpha_ypr = action_lpf_alpha_ypr
+        self.action_lpf_alpha_grip = action_lpf_alpha_grip
+        self.action_slew_max_xyz_step = action_slew_max_xyz_step
+        self.action_slew_max_ypr_step = action_slew_max_ypr_step
+        self.action_slew_max_grip_step = action_slew_max_grip_step
+        self.action_deadband_xyz = action_deadband_xyz
+        self.action_deadband_ypr = action_deadband_ypr
+        self.action_deadband_grip = action_deadband_grip
+        self.motion_smooth_mode = motion_smooth_mode
+        self.interp_xyz_keyframe_step = interp_xyz_keyframe_step
+        self.interp_orientation_keyframe_step = interp_orientation_keyframe_step
+        self.interp_gripper_keyframe_step = interp_gripper_keyframe_step
+        if capture_pause_delay < 0:
+            raise ValueError(f"capture_pause_delay must be >= 0, got {capture_pause_delay}")
+        self.capture_pause_delay = capture_pause_delay
         self._zero_arms = {}
         self._skipped_arms = {}  # Track which arms are being skipped due to small delta
         self._ik_fail_count = {"left": 0, "right": 0}  # Consecutive IK failures per arm
         self._ik_fail_skip_threshold = 3  # Skip arm after N consecutive IK failures
+        self._inactive_arm_home_logged = False
+        self._validate_motion_smoothing_args()
+        self._validate_action_filter_args()
+        self._use_action_filtering = any(
+            v is not None for v in (
+                self.action_lpf_alpha_xyz,
+                self.action_lpf_alpha_ypr,
+                self.action_lpf_alpha_grip,
+                self.action_slew_max_xyz_step,
+                self.action_slew_max_ypr_step,
+                self.action_slew_max_grip_step,
+                self.action_deadband_xyz,
+                self.action_deadband_ypr,
+                self.action_deadband_grip,
+            )
+        )
+        self._last_filtered_arm_action = {}  # arm -> most recently filtered 7D command
+        if self.motion_smooth_mode == "interp":
+            print(
+                f"[DWMClient] Motion smoothing mode: interp "
+                f"(stride xyz/ypr/grip="
+                f"{self.interp_xyz_keyframe_step}/"
+                f"{self.interp_orientation_keyframe_step}/"
+                f"{self.interp_gripper_keyframe_step}); "
+                "per-step LPF disabled, slew/deadband remain active."
+            )
+        else:
+            print("[DWMClient] Motion smoothing mode: lpf (per-step LPF + slew + deadband path).")
         
         # Latency tracking
         self._latency_history = {}  # camera_name -> list of frame_age_ms
@@ -230,8 +319,12 @@ class DWMYAMClient:
             dry_run=False,  # Always use real robot for proprioception
             max_ik_iters=max_ik_iters,
             ik_error_threshold=ik_error_threshold,
-            read_all_arms=True,  # Always read proprioception from both arms
+            read_all_arms=read_all_arms,
+            disable_gripper_calibration=disable_gripper_calibration,
+            camera_fps_override=15 if camera_fps_15 else None,
         )
+        self._home_joint_proprio = np.asarray(self.robot.HOME_POSITION, dtype=np.float64).copy()
+        self._home_ee_proprio = self._compute_home_ee_proprio()
         
         if dry_run:
             print("[DWMYAMClient] DRY RUN MODE: Real robot connected for proprioception, but actions will NOT be executed")
@@ -241,6 +334,58 @@ class DWMYAMClient:
         # Action buffer and index tracking
         self.actions = None
         self.action_index = 0  # Index of next action to execute in current chunk
+
+    def _compute_home_ee_proprio(self) -> np.ndarray:
+        """Compute [xyz, ypr, gripper] for the robot home joint pose."""
+        fallback = np.concatenate([
+            np.zeros(6, dtype=np.float64),
+            [self._home_joint_proprio[6]],
+        ])
+
+        try:
+            # All YAM arms share the same kinematic model, so any initialized arm works.
+            ref_arm = self.arms_list[0]
+            home_T = self.robot.kinematics[ref_arm].fk(self._home_joint_proprio[:6])
+            home_xyz = home_T[:3, 3]
+            home_ypr = R.from_matrix(home_T[:3, :3]).as_euler("ZYX", degrees=False)
+            return np.concatenate([home_xyz, home_ypr, [self._home_joint_proprio[6]]])
+        except Exception as e:
+            print(f"[DWMClient] Warning: failed to compute home ee pose ({e}); using zero xyz/ypr fallback.")
+            return fallback
+
+    def _set_inactive_arm_proprio_to_home(self, obs: dict) -> dict:
+        """In single-arm mode, set the inactive arm proprioception to home pose."""
+        if self.arms == "both":
+            return obs
+
+        inactive_arm = "right" if self.arms == "left" else "left"
+        arm_offset = 0 if inactive_arm == "left" else 7
+
+        updated_obs = obs.copy()
+        changed = False
+
+        joint_positions = updated_obs.get("joint_positions")
+        if isinstance(joint_positions, np.ndarray) and joint_positions.shape[0] >= arm_offset + 7:
+            joint_positions = joint_positions.copy()
+            joint_positions[arm_offset:arm_offset + 7] = self._home_joint_proprio
+            updated_obs["joint_positions"] = joint_positions
+            changed = True
+
+        ee_poses = updated_obs.get("ee_poses")
+        if isinstance(ee_poses, np.ndarray) and ee_poses.shape[0] >= arm_offset + 7:
+            ee_poses = ee_poses.copy()
+            ee_poses[arm_offset:arm_offset + 7] = self._home_ee_proprio
+            updated_obs["ee_poses"] = ee_poses
+            changed = True
+
+        if changed and not self._inactive_arm_home_logged:
+            print(
+                f"[DWMClient] Single-arm mode: setting inactive {inactive_arm} arm proprioception "
+                f"to home pose in observations."
+            )
+            self._inactive_arm_home_logged = True
+
+        return updated_obs if changed else obs
         
     def _connect_with_retry(self):
         """Connect to server, optionally waiting indefinitely if wait_for_server is enabled."""
@@ -350,21 +495,264 @@ class DWMYAMClient:
             actions_ypr = convert_6drot_to_ypr(raw_actions)
         elif action_dim == 14:
             actions_ypr = raw_actions
+        else:
+            raise ValueError(f"Unsupported action dimension {action_dim}; expected 14 (YPR) or 20 (6D rot)")
 
         # Slice to execution_horizon
         original_len = actions_ypr.shape[0]
         actions_ypr = actions_ypr[:self.execution_horizon]
         if original_len != actions_ypr.shape[0]:
             print(f"[DWMClient] Sliced actions from {original_len} to {actions_ypr.shape[0]} (execution_horizon={self.execution_horizon})")
+
+        if self.motion_smooth_mode == "interp" and actions_ypr.shape[0] > 1:
+            actions_ypr = self._interpolate_action_horizon(actions_ypr)
         
         return actions_ypr
+
+    def _validate_motion_smoothing_args(self):
+        """Validate motion smoothing mode configuration."""
+        def _validate_step(name: str, val: int) -> int:
+            if not isinstance(val, (int, np.integer)):
+                raise ValueError(f"{name} must be an integer in [1, +inf), got {val}")
+            if val < 1:
+                raise ValueError(f"{name} must be in [1, +inf), got {val}")
+            return int(val)
+
+        valid_modes = {"lpf", "interp"}
+        if self.motion_smooth_mode not in valid_modes:
+            raise ValueError(
+                f"motion_smooth_mode must be one of {sorted(valid_modes)}, got {self.motion_smooth_mode}"
+            )
+        self.interp_xyz_keyframe_step = _validate_step(
+            "interp_xyz_keyframe_step", self.interp_xyz_keyframe_step
+        )
+        self.interp_orientation_keyframe_step = _validate_step(
+            "interp_orientation_keyframe_step", self.interp_orientation_keyframe_step
+        )
+        self.interp_gripper_keyframe_step = _validate_step(
+            "interp_gripper_keyframe_step", self.interp_gripper_keyframe_step
+        )
+
+    def _build_interp_keyframe_indices(self, horizon_len: int, stride: int) -> np.ndarray:
+        """Build reduced keyframe indices, always preserving first and last."""
+        if horizon_len <= 2:
+            return np.arange(horizon_len, dtype=np.int64)
+        idx = np.arange(0, horizon_len, stride, dtype=np.int64)
+        if idx[-1] != horizon_len - 1:
+            idx = np.append(idx, horizon_len - 1)
+        return np.unique(idx)
+
+    def _interpolate_arm_horizon(
+        self,
+        arm_actions: np.ndarray,
+        keyframe_idx_xyz: np.ndarray,
+        keyframe_idx_ypr: np.ndarray,
+        keyframe_idx_grip: np.ndarray,
+    ) -> np.ndarray:
+        """Interpolate one arm's [xyz, ypr, grip] horizon with endpoint preservation."""
+        horizon_len = arm_actions.shape[0]
+        if horizon_len <= 1:
+            return arm_actions.copy()
+
+        t = np.arange(horizon_len, dtype=np.float64)
+        out = np.empty_like(arm_actions, dtype=np.float64)
+
+        # XYZ: shape-preserving PCHIP through reduced keyframes.
+        tk_xyz = t[keyframe_idx_xyz]
+        for dim in range(3):
+            pchip_xyz = PchipInterpolator(tk_xyz, arm_actions[keyframe_idx_xyz, dim], extrapolate=False)
+            out[:, dim] = pchip_xyz(t)
+
+        # Gripper: shape-preserving PCHIP through reduced keyframes.
+        tk_grip = t[keyframe_idx_grip]
+        pchip_grip = PchipInterpolator(tk_grip, arm_actions[keyframe_idx_grip, 6], extrapolate=False)
+        out[:, 6] = pchip_grip(t)
+
+        # Orientation: quaternion SLERP with hemisphere alignment.
+        tk_ypr = t[keyframe_idx_ypr]
+        key_rot = R.from_euler("ZYX", arm_actions[keyframe_idx_ypr, 3:6], degrees=False)
+        key_quat = key_rot.as_quat().copy()
+        for i in range(1, key_quat.shape[0]):
+            if np.dot(key_quat[i - 1], key_quat[i]) < 0.0:
+                key_quat[i] *= -1.0
+        slerp = Slerp(tk_ypr, R.from_quat(key_quat))
+        out[:, 3:6] = slerp(t).as_euler("ZYX", degrees=False)
+        out[:, 3:6] = self._wrap_angles(out[:, 3:6])
+
+        # Ensure exact endpoint preservation.
+        out[0, :] = arm_actions[0, :]
+        out[-1, :] = arm_actions[-1, :]
+        return out.astype(arm_actions.dtype, copy=False)
+
+    def _log_interp_endpoint_check(
+        self,
+        original: np.ndarray,
+        interpolated: np.ndarray,
+        keyframe_idx_xyz: np.ndarray,
+        keyframe_idx_ypr: np.ndarray,
+        keyframe_idx_grip: np.ndarray,
+    ):
+        """Log endpoint differences to verify endpoint-preserving interpolation."""
+        if original.shape[0] == 0:
+            return
+        for arm, arm_offset in (("left", 0), ("right", 7)):
+            start_xyz_err = np.linalg.norm(interpolated[0, arm_offset:arm_offset + 3] - original[0, arm_offset:arm_offset + 3])
+            end_xyz_err = np.linalg.norm(interpolated[-1, arm_offset:arm_offset + 3] - original[-1, arm_offset:arm_offset + 3])
+            start_ypr_err = np.linalg.norm(
+                self._wrapped_angle_delta(
+                    interpolated[0, arm_offset + 3:arm_offset + 6],
+                    original[0, arm_offset + 3:arm_offset + 6],
+                )
+            )
+            end_ypr_err = np.linalg.norm(
+                self._wrapped_angle_delta(
+                    interpolated[-1, arm_offset + 3:arm_offset + 6],
+                    original[-1, arm_offset + 3:arm_offset + 6],
+                )
+            )
+            start_grip_err = abs(float(interpolated[0, arm_offset + 6] - original[0, arm_offset + 6]))
+            end_grip_err = abs(float(interpolated[-1, arm_offset + 6] - original[-1, arm_offset + 6]))
+            print(
+                f"[DWMClient] interp endpoint check ({arm}): "
+                f"start xyz/ypr/grip={start_xyz_err:.2e}/{start_ypr_err:.2e}/{start_grip_err:.2e}, "
+                f"end xyz/ypr/grip={end_xyz_err:.2e}/{end_ypr_err:.2e}/{end_grip_err:.2e}"
+            )
+        print(
+            f"[DWMClient] Interpolated horizon: T={original.shape[0]}, "
+            f"keyframes xyz/ypr/grip={len(keyframe_idx_xyz)}/{len(keyframe_idx_ypr)}/{len(keyframe_idx_grip)}, "
+            f"steps xyz/ypr/grip={self.interp_xyz_keyframe_step}/{self.interp_orientation_keyframe_step}/{self.interp_gripper_keyframe_step}"
+        )
+
+    def _interpolate_action_horizon(self, actions_ypr: np.ndarray) -> np.ndarray:
+        """Smooth full action horizon while preserving start/end per arm."""
+        if actions_ypr.shape[0] <= 1:
+            return actions_ypr
+        keyframe_idx_xyz = self._build_interp_keyframe_indices(
+            actions_ypr.shape[0], self.interp_xyz_keyframe_step
+        )
+        keyframe_idx_ypr = self._build_interp_keyframe_indices(
+            actions_ypr.shape[0], self.interp_orientation_keyframe_step
+        )
+        keyframe_idx_grip = self._build_interp_keyframe_indices(
+            actions_ypr.shape[0], self.interp_gripper_keyframe_step
+        )
+        interpolated = actions_ypr.copy()
+        interpolated[:, 0:7] = self._interpolate_arm_horizon(
+            actions_ypr[:, 0:7], keyframe_idx_xyz, keyframe_idx_ypr, keyframe_idx_grip
+        )
+        interpolated[:, 7:14] = self._interpolate_arm_horizon(
+            actions_ypr[:, 7:14], keyframe_idx_xyz, keyframe_idx_ypr, keyframe_idx_grip
+        )
+        self._log_interp_endpoint_check(
+            actions_ypr, interpolated, keyframe_idx_xyz, keyframe_idx_ypr, keyframe_idx_grip
+        )
+        return interpolated
+
+    def _validate_action_filter_args(self):
+        """Validate optional action filtering parameters."""
+        alpha_args = {
+            "action_lpf_alpha_xyz": self.action_lpf_alpha_xyz,
+            "action_lpf_alpha_ypr": self.action_lpf_alpha_ypr,
+            "action_lpf_alpha_grip": self.action_lpf_alpha_grip,
+        }
+        nonnegative_args = {
+            "action_slew_max_xyz_step": self.action_slew_max_xyz_step,
+            "action_slew_max_ypr_step": self.action_slew_max_ypr_step,
+            "action_slew_max_grip_step": self.action_slew_max_grip_step,
+            "action_deadband_xyz": self.action_deadband_xyz,
+            "action_deadband_ypr": self.action_deadband_ypr,
+            "action_deadband_grip": self.action_deadband_grip,
+        }
+
+        for name, val in alpha_args.items():
+            if val is None:
+                continue
+            if not (0.0 < val <= 1.0):
+                raise ValueError(f"{name} must be in (0, 1], got {val}")
+
+        for name, val in nonnegative_args.items():
+            if val is None:
+                continue
+            if val < 0.0:
+                raise ValueError(f"{name} must be >= 0, got {val}")
+
+    @staticmethod
+    def _wrapped_angle_delta(target: np.ndarray, current: np.ndarray) -> np.ndarray:
+        """Compute shortest signed angular delta."""
+        return np.arctan2(np.sin(target - current), np.cos(target - current))
+
+    @staticmethod
+    def _wrap_angles(angles: np.ndarray) -> np.ndarray:
+        """Wrap angles to [-pi, pi]."""
+        return np.arctan2(np.sin(angles), np.cos(angles))
+
+    def _apply_action_filters(self, arm_action: np.ndarray, arm: str, apply_lpf: bool = True) -> np.ndarray:
+        """Apply optional low-pass, slew-rate, and deadband filtering."""
+        filtered = arm_action.copy()
+        if not self._use_action_filtering:
+            return filtered
+
+        prev = self._last_filtered_arm_action.get(arm)
+        if prev is None:
+            self._last_filtered_arm_action[arm] = filtered.copy()
+            return filtered
+
+        # 1) Low-pass filter (EMA)
+        if apply_lpf:
+            if self.action_lpf_alpha_xyz is not None:
+                filtered[0:3] = prev[0:3] + self.action_lpf_alpha_xyz * (filtered[0:3] - prev[0:3])
+
+            if self.action_lpf_alpha_ypr is not None:
+                ypr_delta = self._wrapped_angle_delta(filtered[3:6], prev[3:6])
+                filtered[3:6] = prev[3:6] + self.action_lpf_alpha_ypr * ypr_delta
+
+            if self.action_lpf_alpha_grip is not None:
+                filtered[6] = prev[6] + self.action_lpf_alpha_grip * (filtered[6] - prev[6])
+
+        # 2) Slew-rate limit
+        if self.action_slew_max_xyz_step is not None:
+            xyz_delta = filtered[0:3] - prev[0:3]
+            xyz_delta_norm = np.linalg.norm(xyz_delta)
+            if xyz_delta_norm > self.action_slew_max_xyz_step and xyz_delta_norm > 1e-12:
+                filtered[0:3] = prev[0:3] + xyz_delta * (self.action_slew_max_xyz_step / xyz_delta_norm)
+
+        if self.action_slew_max_ypr_step is not None:
+            ypr_delta = self._wrapped_angle_delta(filtered[3:6], prev[3:6])
+            ypr_delta_norm = np.linalg.norm(ypr_delta)
+            if ypr_delta_norm > self.action_slew_max_ypr_step and ypr_delta_norm > 1e-12:
+                ypr_delta = ypr_delta * (self.action_slew_max_ypr_step / ypr_delta_norm)
+            filtered[3:6] = prev[3:6] + ypr_delta
+
+        if self.action_slew_max_grip_step is not None:
+            grip_delta = filtered[6] - prev[6]
+            grip_delta = np.clip(grip_delta, -self.action_slew_max_grip_step, self.action_slew_max_grip_step)
+            filtered[6] = prev[6] + grip_delta
+
+        # 3) Deadband
+        if self.action_deadband_xyz is not None:
+            if np.linalg.norm(filtered[0:3] - prev[0:3]) < self.action_deadband_xyz:
+                filtered[0:3] = prev[0:3]
+
+        if self.action_deadband_ypr is not None:
+            ypr_delta = self._wrapped_angle_delta(filtered[3:6], prev[3:6])
+            if np.linalg.norm(ypr_delta) < self.action_deadband_ypr:
+                filtered[3:6] = prev[3:6]
+
+        if self.action_deadband_grip is not None:
+            if abs(filtered[6] - prev[6]) < self.action_deadband_grip:
+                filtered[6] = prev[6]
+
+        filtered[3:6] = self._wrap_angles(filtered[3:6])
+        self._last_filtered_arm_action[arm] = filtered.copy()
+        return filtered
     
     def _fix_zero_actions(self, actions: np.ndarray, ee_poses: np.ndarray) -> np.ndarray:
         """Replace near-zero actions with current pose.
         
         Workaround for models trained with zeros for non-engaged arms.
-        If an arm's xyz position norm is below the threshold, replace that
-        arm's action with the current ee pose.
+        Computes the path length (sum of consecutive xyz distances) of each
+        arm's trajectory. If below the threshold, replaces all of that arm's
+        actions with the current ee pose.
         
         Also updates self._zero_arms to track which arms are outputting zeros,
         so we can zero out their observations to match training distribution.
@@ -381,31 +769,37 @@ class DWMYAMClient:
         
         actions = actions.copy()
         threshold = self.zero_action_threshold
-        
-        # Check first action to detect zero-action arms
-        left_xyz_norm = np.linalg.norm(actions[0, 0:3])
-        right_xyz_norm = np.linalg.norm(actions[0, 7:10])
+        alpha = self.action_lpf_alpha_xyz
+
+        def _first_last_distance(xyz_seq: np.ndarray, arm: str) -> float:
+            """Distance between first and last point of xyz trajectory (optionally EMA-smoothed)."""
+            if xyz_seq.shape[0] <= 1:
+                return 0.0
+            if alpha is not None:
+                prev_filtered = self._last_filtered_arm_action.get(arm)
+                prev_xyz = prev_filtered[0:3].copy() if prev_filtered is not None else xyz_seq[0].copy()
+                smoothed = np.empty_like(xyz_seq)
+                for t in range(xyz_seq.shape[0]):
+                    smoothed[t] = prev_xyz + alpha * (xyz_seq[t] - prev_xyz)
+                    prev_xyz = smoothed[t]
+                return float(np.linalg.norm(smoothed[-1] - smoothed[0]))
+            return float(np.linalg.norm(xyz_seq[-1] - xyz_seq[0]))
+
+        left_distance = _first_last_distance(actions[:, 0:3], "left")
+        right_distance = _first_last_distance(actions[:, 7:10], "right")
         
         # Track which arms are outputting zeros (for observation zeroing)
-        if left_xyz_norm < threshold:
+        if left_distance < threshold:
             if not self._zero_arms.get("left", False):
-                print(f"[DWMClient] Detected zero-action left arm (xyz_norm={left_xyz_norm:.4f}) - will zero observations")
+                print(f"[DWMClient] Detected zero-action left arm (first_last_dist={left_distance:.4f}) - will zero observations")
             self._zero_arms["left"] = True
+            actions[:, 0:7] = ee_poses[0:7]
         
-        if right_xyz_norm < threshold:
+        if right_distance < threshold:
             if not self._zero_arms.get("right", False):
-                print(f"[DWMClient] Detected zero-action right arm (xyz_norm={right_xyz_norm:.4f}) - will zero observations")
+                print(f"[DWMClient] Detected zero-action right arm (first_last_dist={right_distance:.4f}) - will zero observations")
             self._zero_arms["right"] = True
-        
-        # Fix all timesteps
-        for t in range(actions.shape[0]):
-            # Check left arm (indices 0-6)
-            if np.linalg.norm(actions[t, 0:3]) < threshold:
-                actions[t, 0:7] = ee_poses[0:7]  # Replace with current left pose
-            
-            # Check right arm (indices 7-13)
-            if np.linalg.norm(actions[t, 7:10]) < threshold:
-                actions[t, 7:14] = ee_poses[7:14]  # Replace with current right pose
+            actions[:, 7:14] = ee_poses[7:14]
         
         return actions
     
@@ -450,20 +844,25 @@ class DWMYAMClient:
         Returns:
             True if step succeeded, False to terminate
         """
+        # Pause before capture when requesting new actions (reduces motion blur)
+        need_new_actions = (self.actions is None or self.action_index >= self.execution_horizon)
+        if need_new_actions and self.capture_pause_delay > 0:
+            time.sleep(self.capture_pause_delay)
+
         # Get observations (with optional latency monitoring)
         if self.monitor_latency:
             obs, latency_info = self.robot.get_obs_with_latency()
             self._track_latency(latency_info, i)
         else:
             obs = self.robot.get_obs()
+
+        # In single-arm mode, provide home proprio for the non-controlled arm.
+        obs = self._set_inactive_arm_proprio_to_home(obs)
         
         # Store actual ee_poses before any modifications (for action fixing)
         actual_ee_poses = obs.get('ee_poses')
         if actual_ee_poses is not None:
             actual_ee_poses = actual_ee_poses.copy()
-        
-        # Request new actions when we've exhausted the current batch
-        need_new_actions = (self.actions is None or self.action_index >= self.execution_horizon)
         
         if need_new_actions:
             # Print current robot state
@@ -504,6 +903,9 @@ class DWMYAMClient:
         
         # Get action at current index
         act_idx = self.action_index
+        if act_idx >= self.actions.shape[0]:
+            return False
+        print(f"[DWMClient] Executing action {act_idx} of {self.actions.shape[0]}")
         action = self.actions[act_idx]
         
         # Execute on robot (skip if dry_run - only read proprioception)
@@ -515,7 +917,12 @@ class DWMYAMClient:
                 arm_offset = 7 if arm == "right" and self.arms == "both" else 0
                 if self.arms != "both" and arm == "right":
                     arm_offset = 0
-                arm_action = action[arm_offset:arm_offset + 7]
+                arm_action = action[arm_offset:arm_offset + 7].copy()
+                arm_action = self._apply_action_filters(
+                    arm_action,
+                    arm,
+                    apply_lpf=(self.motion_smooth_mode == "lpf"),
+                )
                 
                 # Check if we should skip this arm due to small delta
                 if self.skip_small_delta is not None and actual_ee_poses is not None:
@@ -608,6 +1015,7 @@ class DWMYAMClient:
         self.robot.set_home()
         self.actions = None
         self.action_index = 0
+        self._last_filtered_arm_action = {}
     
     def close(self):
         """Clean up resources."""
@@ -683,9 +1091,9 @@ def main():
     
     # Workarounds
     parser.add_argument("--zero-action-threshold", type=float, default=None,
-                        help="Replace near-zero actions (xyz norm < threshold) with current pose. "
-                             "Workaround for models trained with zeros for non-engaged arms. "
-                             "Suggested value: 0.05 (5cm)")
+                        help="Replace zero-action arms whose action sequence first-to-last "
+                             "distance is below this threshold with current pose. "
+                             "Workaround for models trained with zeros for non-engaged arms.")
     
     # IK parameters
     parser.add_argument("--max-ik-iters", type=int, default=500,
@@ -700,11 +1108,58 @@ def main():
                         help="Skip arm execution when target position is within this distance (meters) "
                              "of current position. Avoids wasting IK on 'hold position' actions. "
                              "Suggested: 0.005-0.01 (5-10mm).")
+
+    # Action smoothing (all disabled by default)
+    parser.add_argument("--action-lpf-alpha-xyz", type=float, default=None,
+                        help="Optional EMA alpha for xyz smoothing in (0, 1]. "
+                             "Disabled if unset.")
+    parser.add_argument("--action-lpf-alpha-ypr", type=float, default=None,
+                        help="Optional EMA alpha for yaw/pitch/roll smoothing in (0, 1]. "
+                             "Disabled if unset.")
+    parser.add_argument("--action-lpf-alpha-grip", type=float, default=None,
+                        help="Optional EMA alpha for gripper smoothing in (0, 1]. "
+                             "Disabled if unset.")
+    parser.add_argument("--action-slew-max-xyz-step", type=float, default=None,
+                        help="Optional max xyz delta per control step (meters). Disabled if unset.")
+    parser.add_argument("--action-slew-max-ypr-step", type=float, default=None,
+                        help="Optional max ypr delta per control step (radians). Disabled if unset.")
+    parser.add_argument("--action-slew-max-grip-step", type=float, default=None,
+                        help="Optional max gripper delta per control step. Disabled if unset.")
+    parser.add_argument("--action-deadband-xyz", type=float, default=None,
+                        help="Optional xyz deadband relative to previous command (meters). Disabled if unset.")
+    parser.add_argument("--action-deadband-ypr", type=float, default=None,
+                        help="Optional ypr deadband relative to previous command (radians). Disabled if unset.")
+    parser.add_argument("--action-deadband-grip", type=float, default=None,
+                        help="Optional gripper deadband relative to previous command. Disabled if unset.")
+    parser.add_argument("--motion-smooth-mode", type=str, default="lpf",
+                        choices=["lpf", "interp"],
+                        help="Motion smoothing mode: 'lpf' keeps per-step LPF/slew/deadband path, "
+                             "'interp' smooths each action horizon via endpoint-preserving interpolation "
+                             "then applies per-step slew/deadband.")
+    parser.add_argument("--interp-xyz-keyframe-step", type=int, default=1,
+                        help="Interpolation keyframe step for xyz, integer in [1, +inf). "
+                             "Use 1 to keep default behavior (no interpolation smoothing).")
+    parser.add_argument("--interp-orientation-keyframe-step", type=int, default=1,
+                        help="Interpolation keyframe step for orientation (ypr), integer in [1, +inf). "
+                             "Use 1 to keep default behavior (no interpolation smoothing).")
+    parser.add_argument("--interp-gripper-keyframe-step", type=int, default=1,
+                        help="Interpolation keyframe step for gripper, integer in [1, +inf). "
+                             "Use 1 to keep default behavior (no interpolation smoothing).")
     
     # Latency monitoring
     parser.add_argument("--monitor-latency", action="store_true",
                         help="Enable camera latency monitoring. Reports frame age and capture "
                              "latency for each RealSense camera at every inference step.")
+    parser.add_argument("--read-all-arms", action="store_true",
+                        help="Read proprioception from both arms even when controlling one arm.")
+    parser.add_argument("--disable-gripper-calibration", action="store_true",
+                        help="Disable linear gripper auto-calibration at startup and use fixed limits.")
+    parser.add_argument("--camera-fps-15", action="store_true",
+                        help="Force all cameras to 15 FPS, overriding config values.")
+    parser.add_argument("--capture-pause-delay", type=float, default=0.0,
+                        help="Seconds to pause before capturing images when requesting new "
+                             "actions. Reduces motion blur by allowing the robot to settle. "
+                             "Suggested: 0.1-0.2. Default: 0 (no pause).")
     
     args = parser.parse_args()
     
@@ -720,11 +1175,31 @@ def main():
     print(f"Dry run:           {args.dry_run}")
     print(f"Velocity limit:    {args.velocity_limit} rad/s" if args.velocity_limit else "Velocity limit:    None (unlimited)")
     print(f"Wait for server:   {args.wait_for_server}")
-    print(f"Zero action fix:   {args.zero_action_threshold}m threshold" if args.zero_action_threshold else "Zero action fix:   disabled")
+    print(f"Zero action fix:   {args.zero_action_threshold}m first-to-last distance threshold" if args.zero_action_threshold else "Zero action fix:   disabled")
     print(f"Max IK iters:      {args.max_ik_iters}")
     print(f"IK error thresh:   {args.ik_error_threshold}m" if args.ik_error_threshold else "IK error thresh:   None (no rejection)")
     print(f"Skip small delta:  {args.skip_small_delta}m" if args.skip_small_delta else "Skip small delta:  None (always execute)")
+    print(f"LPF xyz alpha:     {args.action_lpf_alpha_xyz}" if args.action_lpf_alpha_xyz is not None else "LPF xyz alpha:     disabled")
+    print(f"LPF ypr alpha:     {args.action_lpf_alpha_ypr}" if args.action_lpf_alpha_ypr is not None else "LPF ypr alpha:     disabled")
+    print(f"LPF grip alpha:    {args.action_lpf_alpha_grip}" if args.action_lpf_alpha_grip is not None else "LPF grip alpha:    disabled")
+    print(f"Slew xyz step:     {args.action_slew_max_xyz_step}m" if args.action_slew_max_xyz_step is not None else "Slew xyz step:     disabled")
+    print(f"Slew ypr step:     {args.action_slew_max_ypr_step}rad" if args.action_slew_max_ypr_step is not None else "Slew ypr step:     disabled")
+    print(f"Slew grip step:    {args.action_slew_max_grip_step}" if args.action_slew_max_grip_step is not None else "Slew grip step:    disabled")
+    print(f"Deadband xyz:      {args.action_deadband_xyz}m" if args.action_deadband_xyz is not None else "Deadband xyz:      disabled")
+    print(f"Deadband ypr:      {args.action_deadband_ypr}rad" if args.action_deadband_ypr is not None else "Deadband ypr:      disabled")
+    print(f"Deadband grip:     {args.action_deadband_grip}" if args.action_deadband_grip is not None else "Deadband grip:     disabled")
+    print(f"Motion smooth:     {args.motion_smooth_mode}")
+    if args.motion_smooth_mode == "interp":
+        print(f"Interp xyz step:   {args.interp_xyz_keyframe_step} (1 = no smoothing)")
+        print(f"Interp orient step:{args.interp_orientation_keyframe_step} (1 = no smoothing)")
+        print(f"Interp grip step:  {args.interp_gripper_keyframe_step} (1 = no smoothing)")
+    else:
+        print("Interp settings:   n/a (LPF mode)")
     print(f"Monitor latency:   {args.monitor_latency}")
+    print(f"Read all arms:     {args.read_all_arms}")
+    print(f"Disable grip calib:{args.disable_gripper_calibration}")
+    print(f"Force cam fps 15:  {args.camera_fps_15}")
+    print(f"Capture pause:     {args.capture_pause_delay}s" if args.capture_pause_delay > 0 else "Capture pause:     disabled")
     print("=" * 60)
     
     # Initialize client
@@ -745,6 +1220,23 @@ def main():
         ik_error_threshold=args.ik_error_threshold,
         skip_small_delta=args.skip_small_delta,
         monitor_latency=args.monitor_latency,
+        read_all_arms=args.read_all_arms,
+        disable_gripper_calibration=args.disable_gripper_calibration,
+        camera_fps_15=args.camera_fps_15,
+        action_lpf_alpha_xyz=args.action_lpf_alpha_xyz,
+        action_lpf_alpha_ypr=args.action_lpf_alpha_ypr,
+        action_lpf_alpha_grip=args.action_lpf_alpha_grip,
+        action_slew_max_xyz_step=args.action_slew_max_xyz_step,
+        action_slew_max_ypr_step=args.action_slew_max_ypr_step,
+        action_slew_max_grip_step=args.action_slew_max_grip_step,
+        action_deadband_xyz=args.action_deadband_xyz,
+        action_deadband_ypr=args.action_deadband_ypr,
+        action_deadband_grip=args.action_deadband_grip,
+        capture_pause_delay=args.capture_pause_delay,
+        motion_smooth_mode=args.motion_smooth_mode,
+        interp_xyz_keyframe_step=args.interp_xyz_keyframe_step,
+        interp_orientation_keyframe_step=args.interp_orientation_keyframe_step,
+        interp_gripper_keyframe_step=args.interp_gripper_keyframe_step,
     )
     
     # Initialize rate controller

@@ -3,7 +3,7 @@ Robot interfaces for teleoperation.
 
 Imports are deferred to class instantiation based on robot_type and camera config.
 - ARXInterface: imports arx5 SDK when instantiated
-- YAMInterface: imports i2rt library when instantiated  
+- YAMInterface: imports i2rt robot driver + PyRoKi kinematics when instantiated
 - Camera recorders: import aria/realsense based on camera type in config
 """
 
@@ -161,13 +161,16 @@ class ARXInterface(Robot_Interface):
                     profile_name="profile15", use_security=True
                 )
                 self.recorders[name].start()
-            elif cam_type == "d405":
-                # Import RealSense only when d405 camera is configured
+            elif cam_type in ("d405", "d435"):
+                # Import RealSense only when a D400-series camera is configured
                 from stream_d405 import RealSenseRecorder
+                realsense_json = cam_cfg.get("realsense_json")
                 self.recorders[name] = RealSenseRecorder(
                     str(cam_cfg["serial_number"]),
+                    camera_name=name,
                     width=cam_cfg["width"],
                     height=cam_cfg["height"],
+                    realsense_json=realsense_json,
                 )
             else:
                 raise ValueError(f"Unknown camera type '{cam_type}' in config")
@@ -350,7 +353,8 @@ class YAMInterface:
     ])
     
     # Home position for YAM robot (in radians)
-    HOME_POSITION = np.array([0.0, 0.05, 0.05, 0.0, 0.0, 0.0, 1.0])
+    # HOME_POSITION = np.array([0.0, 0.05, 0.05, 0.0, 0.0, 0.0, 1.0])
+    HOME_POSITION = np.array([0.0, 0.1, 0.1, 0.0, 0.0, 0.0, 1.0])
     # HOME_POSITION = np.array([4.864e-2, 1.467, 5.205e-1, 1.25e-1, -2.88e-2, -6.847e-2, 1.0])
     HOME_POSITION_ABOVE = np.array([
         1.051e-1,
@@ -373,6 +377,8 @@ class YAMInterface:
         max_ik_iters: int = 500,
         ik_error_threshold: float = None,
         read_all_arms: bool = False,
+        disable_gripper_calibration: bool = False,
+        camera_fps_override: int = None,
     ):
         """
         Initialize YAM robot interface.
@@ -390,15 +396,19 @@ class YAMInterface:
                                When rejected, the arm command is skipped entirely.
             read_all_arms: If True, initialize both arms for reading proprioception even if only
                           controlling one arm. The non-controlled arm will be in zero-gravity mode.
+            disable_gripper_calibration: If True for linear grippers, skip auto-calibration
+                                        and use fixed startup limits.
+            camera_fps_override: If set, override FPS for all cameras (e.g., 15).
         """
-        # Import i2rt dependencies when this class is used
+        # Import i2rt robot driver (still needed for motor control)
         sys.path.insert(0, os.path.expanduser("~/i2rt"))
         from i2rt.robots.get_robot import get_yam_robot
-        from i2rt.robots.kinematics import Kinematics as I2RTKinematics
         from i2rt.robots.utils import GripperType
+        # PyRoKi-based kinematics (replaces i2rt Kinematics)
+        from pyroki_kinematics import PyRoKiKinematics
         
         self._get_yam_robot = get_yam_robot
-        self._I2RTKinematics = I2RTKinematics
+        self._PyRoKiKinematics = PyRoKiKinematics
         self._GripperType = GripperType
 
         self.arms = arms  # Arms to control
@@ -409,6 +419,7 @@ class YAMInterface:
         self.max_ik_iters = max_ik_iters
         self.ik_error_threshold = ik_error_threshold
         self.read_all_arms = read_all_arms
+        self.camera_fps_override = camera_fps_override
         
         # Determine which arms to read from (for proprioception)
         if read_all_arms:
@@ -423,6 +434,36 @@ class YAMInterface:
             self.gripper_type = GripperType.from_string_name(gripper_type)
         else:
             self.gripper_type = gripper_type
+
+        self.disable_gripper_calibration = disable_gripper_calibration
+        if (
+            self.disable_gripper_calibration
+            and self.gripper_type in [GripperType.LINEAR_3507, GripperType.LINEAR_4310]
+        ):
+            class _NoCalibLinearGripperType:
+                def __init__(self, base_gripper_type, fallback_limits):
+                    self._base = base_gripper_type
+                    self._fallback_limits = fallback_limits
+
+                def get_gripper_limits(self):
+                    return self._fallback_limits
+
+                def get_gripper_needs_calibration(self):
+                    return False
+
+                def __getattr__(self, name):
+                    return getattr(self._base, name)
+
+                def __repr__(self):
+                    return f"{self._base}(no-calib)"
+
+            # Fixed startup window around typical linear gripper rest position.
+            fallback_limits = (1.30, 1.00)
+            print(
+                f"[YAMInterface] Disabling linear gripper auto-calibration. "
+                f"Using fixed startup limits {fallback_limits}."
+            )
+            self.gripper_type = _NoCalibLinearGripperType(self.gripper_type, fallback_limits)
         
         # Track simulated joint positions for dry run mode
         self._simulated_joints = {}
@@ -447,41 +488,56 @@ class YAMInterface:
         self.robot = {}
         self.kinematics = {}
         
-        # Get the XML path for kinematics (same for all arms)
-        model_path = self.gripper_type.get_xml_path()
+        # Get the URDF path for PyRoKi kinematics (same for all arms)
+        import i2rt
+        urdf_path = os.path.join(
+            os.path.dirname(i2rt.__file__), "robot_models", "yam", "yam.urdf"
+        )
+        
+        # Initialize PyRoKi kinematics once (shared across arms - same model)
+        print(f"[YAMInterface] Initializing PyRoKi kinematics from {urdf_path} ...")
+        _shared_kin = PyRoKiKinematics(urdf_path=urdf_path, site_name="grasp_site")
+        print("[YAMInterface] PyRoKi kinematics ready (JAX warmup complete)")
         
         for arm in self.read_arms:
             channel = self.interfaces.get(arm, self.DEFAULT_INTERFACES.get(arm, "can0"))
             is_control_arm = arm in self.control_arms
-            # Read-only arms always use zero-gravity mode so they don't fight movement
             arm_zero_gravity = zero_gravity_mode if is_control_arm else True
             
             if self.dry_run:
                 print(f"[YAMInterface] DRY RUN: Would initialize {arm} arm on {channel}")
                 print(f"[YAMInterface] DRY RUN: Gripper type: {self.gripper_type}")
-                print(f"[YAMInterface] DRY RUN: Model path: {model_path}")
+                print(f"[YAMInterface] DRY RUN: URDF path: {urdf_path}")
                 print(f"[YAMInterface] DRY RUN: Control arm: {is_control_arm}, zero_gravity: {arm_zero_gravity}")
                 self.robot[arm] = None
             else:
                 mode_str = "CONTROL" if is_control_arm else "READ-ONLY (zero-gravity)"
                 print(f"[YAMInterface] Initializing {arm} arm on {channel} [{mode_str}]")
-                self.robot[arm] = get_yam_robot(
-                    channel=channel,
-                    gripper_type=self.gripper_type,
-                    zero_gravity_mode=arm_zero_gravity,
-                )
+                max_init_attempts = 20
+                init_retry_delay_s = 1.0
+                for attempt in range(1, max_init_attempts + 1):
+                    try:
+                        self.robot[arm] = get_yam_robot(
+                            channel=channel,
+                            gripper_type=self.gripper_type,
+                            zero_gravity_mode=arm_zero_gravity,
+                        )
+                        break
+                    except AssertionError as e:
+                        if "fail to communicate with the motor" not in str(e) or attempt >= max_init_attempts:
+                            raise
+                        print(
+                            f"[YAMInterface] {arm} arm initialization attempt {attempt}/{max_init_attempts} failed: {e}"
+                        )
+                        print(f"[YAMInterface] Retrying in {init_retry_delay_s:.1f}s...")
+                        time.sleep(init_retry_delay_s)
             
-            print(f"[YAMInterface] Using model: {model_path}")
-            
-            self.kinematics[arm] = I2RTKinematics(
-                xml_path=model_path,
-                site_name="grasp_site",
-            )
+            self.kinematics[arm] = _shared_kin
         
         print(f"[YAMInterface] Control arms: {self.control_arms}, Read arms: {self.read_arms}")
         if self.dry_run:
             print("[YAMInterface] *** DRY RUN MODE ENABLED - NO ROBOT ACTUATION ***")
-    
+
     def print_config(self):
         """Print current configuration summary."""
         print("\n" + "="*60)
@@ -556,14 +612,27 @@ class YAMInterface:
                 self.recorders[name].start()
                 print(f"[YAMInterface] Started Aria camera: {name}")
                     
-            elif cam_type == "d405":
-                # Import RealSense only when d405 camera is configured
+            elif cam_type in ("d405", "d435"):
+                # Import RealSense only when a D400-series camera is configured
                 from stream_d405 import RealSenseRecorder
                 serial = str(cam_cfg["serial_number"])
                 width = cam_cfg["width"]
                 height = cam_cfg["height"]
-                self.recorders[name] = RealSenseRecorder(serial, width=width, height=height)
-                print(f"[YAMInterface] Started RealSense D405 camera: {name} (serial: {serial}, {width}x{height})")
+                fps = self.camera_fps_override if self.camera_fps_override is not None else cam_cfg.get("fps", 30)
+                realsense_json = cam_cfg.get("realsense_json")
+                self.recorders[name] = RealSenseRecorder(
+                    serial,
+                    camera_name=name,
+                    width=width,
+                    height=height,
+                    fps=fps,
+                    realsense_json=realsense_json,
+                )
+                print(
+                    f"[YAMInterface] Started RealSense {cam_type.upper()} camera: "
+                    f"{name} (serial: {serial}, {width}x{height}@{fps}, "
+                    f"json: {realsense_json or 'default'})"
+                )
             else:
                 raise ValueError(f"Unknown camera type '{cam_type}' for {name}")
     
@@ -713,6 +782,8 @@ class YAMInterface:
             raise ValueError(
                 f"For YAM, target pose must be of shape (6,), got {ee_pose.shape}"
             )
+        # DEBUG: uncomment to verify IK is being called
+        # print(f"[DEBUG solve_ik] arm={arm} ee_pose={ee_pose[:3]}")
         
         pos_xyz = ee_pose[:3]
         ypr = ee_pose[3:6]

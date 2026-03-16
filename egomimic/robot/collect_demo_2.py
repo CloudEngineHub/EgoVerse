@@ -21,6 +21,7 @@ import numpy as np
 import copy
 import cv2
 import h5py
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from datetime import datetime
 from scipy.spatial.transform import Rotation as R
@@ -37,10 +38,11 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "eva/eva_ws/src/eva"))
 from robot_interface import ARXInterface, YAMInterface
 from egomimic.robot.eva.eva_kinematics import EvaMinkKinematicsSolver
 
-# Add i2rt to path for YAM kinematics in save_demo
+# Add i2rt to path for YAM robot utilities
 sys.path.insert(0, os.path.expanduser("~/i2rt"))
-from i2rt.robots.kinematics import Kinematics as I2RTKinematics
 from i2rt.robots.utils import GripperType
+# PyRoKi-based kinematics (replaces i2rt Kinematics)
+from pyroki_kinematics import PyRoKiKinematics
 
 
 # ------------------------- Configuration -------------------------
@@ -519,11 +521,13 @@ def take_robot_snapshot(robot_interface, arms_list):
             - "joints": {arm: 7-element ndarray} for each arm
             - "pose_se3": {arm: 4x4 ndarray} for each arm
             - "images": {cam_name: image_array or None} for each camera
+            - "depth": {cam_name: depth_array or None} for each camera
     """
     snapshot = {
         "joints": {},
         "pose_se3": {},
         "images": {},
+        "depth": {},
     }
     
     # Capture joint positions and poses for all arms
@@ -540,10 +544,12 @@ def take_robot_snapshot(robot_interface, arms_list):
         else:
             snapshot["pose_se3"][arm] = np.eye(4, dtype=np.float64)
     
-    # Capture images from all cameras
+    # Capture images/depth from all cameras
     for cam_name, recorder in robot_interface.recorders.items():
         img = recorder.get_image()
         snapshot["images"][cam_name] = img
+        depth = recorder.get_depth() if hasattr(recorder, "get_depth") else None
+        snapshot["depth"][cam_name] = depth
     
     return snapshot
 
@@ -559,11 +565,73 @@ def se3_to_xyz_ypr(se3: np.ndarray):
 # ------------------------- Demo Recording Helpers -------------------------
 
 
+def depth_dataset_name_from_camera(cam_name: str) -> str:
+    """Map RGB camera key to depth dataset key, matching pair_teleop naming."""
+    if cam_name.endswith("_img_1"):
+        return cam_name.replace("_img_", "_depth_", 1)
+    if cam_name.endswith("_img"):
+        return cam_name[:-4] + "_depth"
+    return f"{cam_name}_depth"
+
+
 def reset_data(demo_data: dict):
     demo_data["cmd_joint_actions"] = []
     demo_data["robot_joint_actions"] = []
     demo_data["cmd_eepose_actions"] = []
+    demo_data["robot_eepose_obs"] = []
     demo_data["obs"] = []
+    demo_data["depth_obs"] = []
+
+
+def _process_camera_stream(
+    cam_name: str,
+    demo_data: dict,
+    num_obs_steps: int,
+    depth_obs_steps,
+    save_resolution: dict = None,
+):
+    """Convert one camera stream (RGB + depth) into contiguous arrays."""
+    target_w = save_resolution["width"] if save_resolution is not None else None
+    target_h = save_resolution["height"] if save_resolution is not None else None
+    default_w = target_w if target_w is not None else 640
+    default_h = target_h if target_h is not None else 480
+
+    images = np.zeros((num_obs_steps, default_h, default_w, 3), dtype=np.uint8)
+    depth = np.zeros((num_obs_steps, default_h, default_w, 1), dtype=np.float32)
+    saw_depth_frame = False
+
+    for i in range(num_obs_steps):
+        img = demo_data["obs"][i].get(cam_name, None)
+        if img is not None:
+            img_rgb = img[..., ::-1]  # BGR -> RGB
+            if save_resolution is not None:
+                img_rgb = cv2.resize(
+                    img_rgb, (target_w, target_h), interpolation=cv2.INTER_CUBIC
+                )
+            images[i] = img_rgb.astype(np.uint8, copy=False)
+
+        depth_dict = depth_obs_steps[i] if i < len(depth_obs_steps) else {}
+        depth_frame = depth_dict.get(cam_name, None) if isinstance(depth_dict, dict) else None
+        if depth_frame is not None:
+            saw_depth_frame = True
+            depth_frame = np.asarray(depth_frame)
+            if depth_frame.ndim == 3 and depth_frame.shape[-1] == 1:
+                depth_frame = depth_frame[..., 0]
+            if depth_frame.ndim != 2:
+                raise ValueError(
+                    f"Depth for camera {cam_name} has invalid shape {depth_frame.shape}"
+                )
+            if depth_frame.dtype == np.uint16:
+                depth_frame = depth_frame.astype(np.float32) / 1000.0  # mm -> m
+            elif depth_frame.dtype != np.float32:
+                depth_frame = depth_frame.astype(np.float32)
+            if save_resolution is not None:
+                depth_frame = cv2.resize(
+                    depth_frame, (target_w, target_h), interpolation=cv2.INTER_NEAREST
+                )
+            depth[i, ..., 0] = depth_frame.astype(np.float32, copy=False)
+
+    return cam_name, images, saw_depth_frame, depth
 
 
 def save_demo(demo_data: dict, demo_dir, episode_id: int, cam_names, robot_type: str = "arx", yam_gripper_type: str = "linear_4310", save_resolution: dict = None):
@@ -576,31 +644,42 @@ def save_demo(demo_data: dict, demo_dir, episode_id: int, cam_names, robot_type:
     data_dict = dict()
     filename = demo_dir / f"demo_{episode_id}.hdf5"
 
-    for cam_name in cam_names:
-        image_list = []
-        for i in range(len(demo_data["obs"])):
-            img = demo_data["obs"][i][cam_name]
-            if img is None:
-                continue
-            img_rgb = img[..., ::-1]
-            # Resize if save_resolution is specified
-            if save_resolution is not None:
-                target_w = save_resolution["width"]
-                target_h = save_resolution["height"]
-                img_rgb = cv2.resize(img_rgb, (target_w, target_h), interpolation=cv2.INTER_CUBIC)
-            image_list.append(img_rgb)
-        data_dict[f"/observations/images/{cam_name}"] = np.array(image_list)
+    num_obs_steps = len(demo_data["obs"])
+    depth_obs_steps = demo_data.get("depth_obs", [])
+    # Parallelize expensive image/depth preprocessing across cameras.
+    max_workers = max(1, min(len(cam_names), (os.cpu_count() or 1)))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = [
+            pool.submit(
+                _process_camera_stream,
+                cam_name,
+                demo_data,
+                num_obs_steps,
+                depth_obs_steps,
+                save_resolution,
+            )
+            for cam_name in cam_names
+        ]
+        for fut in as_completed(futures):
+            cam_name, images, saw_depth_frame, depth = fut.result()
+            data_dict[f"/observations/images/{cam_name}"] = images
+            if saw_depth_frame:
+                depth_name = depth_dataset_name_from_camera(cam_name)
+                data_dict[f"/observations/depth/{depth_name}"] = depth
     print(
         f"Saving demo with {len(demo_data['cmd_eepose_actions'])} steps to {filename}"
     )
-    data_dict["/observations/joints"] = np.array(demo_data["robot_joint_actions"])
-    data_dict["/observations/joint_positions"] = np.array(
-        demo_data["robot_joint_actions"]
+    data_dict["/text"] = str(demo_data.get("text", ""))
+    data_dict["/observations/joints"] = np.asarray(
+        demo_data["robot_joint_actions"], dtype=np.float32
+    )
+    data_dict["/observations/joint_positions"] = np.asarray(
+        demo_data["robot_joint_actions"], dtype=np.float32
     )
     
     # Process cmd_eepose_actions to create different rotation representations
     # Original format: xyz(3) + ypr(3) + gripper(1) per arm = 14 total
-    cmd_eepose_ypr = np.array(demo_data["cmd_eepose_actions"])
+    cmd_eepose_ypr = np.asarray(demo_data["cmd_eepose_actions"], dtype=np.float32)
     
     # Batch convert YPR to rotation matrices for both arms
     left_rot_mats = R.from_euler("ZYX", cmd_eepose_ypr[:, 3:6]).as_matrix()
@@ -614,72 +693,94 @@ def save_demo(demo_data: dict, demo_dir, episode_id: int, cam_names, robot_type:
     cmd_eepose_6drot = np.column_stack([
         cmd_eepose_ypr[:, 0:3], left_rot_6d, cmd_eepose_ypr[:, 6:7],
         cmd_eepose_ypr[:, 7:10], right_rot_6d, cmd_eepose_ypr[:, 13:14],
-    ])
+    ]).astype(np.float32, copy=False)
     
     # Full rotation matrices: (N, 2, 3, 3)
-    cmd_rot_3x3 = np.stack([left_rot_mats, right_rot_mats], axis=1)
+    cmd_rot_3x3 = np.stack([left_rot_mats, right_rot_mats], axis=1).astype(
+        np.float32, copy=False
+    )
     
-    data_dict["/actions/eepose_ypr"] = cmd_eepose_ypr
+    data_dict["/actions/eepose_ypr"] = cmd_eepose_ypr.astype(np.float32, copy=False)
     data_dict["/actions/eepose_6drot"] = cmd_eepose_6drot
     data_dict["/actions/rot_3x3"] = cmd_rot_3x3
-    data_dict["/actions/joints"] = np.array(demo_data["cmd_joint_actions"])
-    data_dict["/action"] = np.array(demo_data["cmd_joint_actions"])
+    data_dict["/actions/joints"] = np.asarray(demo_data["cmd_joint_actions"], dtype=np.float32)
+    data_dict["/action"] = np.asarray(demo_data["cmd_joint_actions"], dtype=np.float32)
 
-    # Create kinematics solver based on robot type
-    if robot_type == "arx":
-        kinematics_solver = EvaMinkKinematicsSolver(
-            model_path="/home/robot/robot_ws/egomimic/resources/model_x5.xml"
+    # Prefer online-captured robot EE pose to avoid expensive save-time FK.
+    precomputed_robot_eepose = demo_data.get("robot_eepose_obs")
+    if (
+        isinstance(precomputed_robot_eepose, list)
+        and len(precomputed_robot_eepose) == len(demo_data["robot_joint_actions"])
+    ):
+        data_dict["/observations/eepose"] = np.asarray(
+            precomputed_robot_eepose, dtype=np.float32
         )
-    elif robot_type == "yam":
-        gripper_type_enum = GripperType.from_string_name(yam_gripper_type)
-        model_path = gripper_type_enum.get_xml_path()
-        kinematics_solver = I2RTKinematics(xml_path=model_path, site_name="grasp_site")
     else:
-        raise ValueError(f"Unknown robot type: {robot_type}")
-    
-    robot_ee_pose = []
-    for i in range(len(demo_data["robot_joint_actions"])):
-        robot_joint_action = demo_data["robot_joint_actions"][i]
-        left_joints = robot_joint_action[:7]
-        right_joints = robot_joint_action[7:]
-        # check if left is not 0 array
-        if not np.allclose(left_joints, 0):
-            if robot_type == "arx":
-                left_ee_xyz, left_ee_rot = kinematics_solver.fk(left_joints)
-                left_ee_ypr = left_ee_rot.as_euler("ZYX", degrees=False)
-            else:  # yam
-                T = kinematics_solver.fk(left_joints[:6])
-                left_ee_xyz = T[:3, 3]
-                left_ee_ypr = R.from_matrix(T[:3, :3]).as_euler("ZYX", degrees=False)
+        # Backward-compatible fallback for old recordings that lack robot_eepose_obs.
+        if robot_type == "arx":
+            kinematics_solver = EvaMinkKinematicsSolver(
+                model_path="/home/robot/robot_ws/egomimic/resources/model_x5.xml"
+            )
+        elif robot_type == "yam":
+            import i2rt
+            urdf_path = os.path.join(
+                os.path.dirname(i2rt.__file__), "robot_models", "yam", "yam.urdf"
+            )
+            kinematics_solver = PyRoKiKinematics(urdf_path=urdf_path, site_name="grasp_site")
         else:
-            left_ee_xyz = np.zeros(3)
-            left_ee_ypr = np.zeros(3)
-        if not np.allclose(right_joints, 0):
-            if robot_type == "arx":
-                right_ee_xyz, right_ee_rot = kinematics_solver.fk(right_joints)
-                right_ee_ypr = right_ee_rot.as_euler("ZYX", degrees=False)
-            else:  # yam
-                T = kinematics_solver.fk(right_joints[:6])
-                right_ee_xyz = T[:3, 3]
-                right_ee_ypr = R.from_matrix(T[:3, :3]).as_euler("ZYX", degrees=False)
-        else:
-            right_ee_xyz = np.zeros(3)
-            right_ee_ypr = np.zeros(3)
-        left_ee_pose = np.concatenate(
-            [left_ee_xyz, left_ee_ypr, [robot_joint_action[6]]]
-        )
-        right_ee_pose = np.concatenate(
-            [right_ee_xyz, right_ee_ypr, [robot_joint_action[13]]]
-        )
-        robot_ee_pose.append(np.concatenate([left_ee_pose, right_ee_pose]))
-
-    data_dict["/observations/eepose"] = np.array(robot_ee_pose)
+            raise ValueError(f"Unknown robot type: {robot_type}")
+        
+        robot_ee_pose = []
+        for i in range(len(demo_data["robot_joint_actions"])):
+            robot_joint_action = demo_data["robot_joint_actions"][i]
+            left_joints = robot_joint_action[:7]
+            right_joints = robot_joint_action[7:]
+            # check if left is not 0 array
+            if not np.allclose(left_joints, 0):
+                if robot_type == "arx":
+                    left_ee_xyz, left_ee_rot = kinematics_solver.fk(left_joints)
+                    left_ee_ypr = left_ee_rot.as_euler("ZYX", degrees=False)
+                else:  # yam
+                    T = kinematics_solver.fk(left_joints[:6])
+                    left_ee_xyz = T[:3, 3]
+                    left_ee_ypr = R.from_matrix(T[:3, :3]).as_euler("ZYX", degrees=False)
+            else:
+                left_ee_xyz = np.zeros(3)
+                left_ee_ypr = np.zeros(3)
+            if not np.allclose(right_joints, 0):
+                if robot_type == "arx":
+                    right_ee_xyz, right_ee_rot = kinematics_solver.fk(right_joints)
+                    right_ee_ypr = right_ee_rot.as_euler("ZYX", degrees=False)
+                else:  # yam
+                    T = kinematics_solver.fk(right_joints[:6])
+                    right_ee_xyz = T[:3, 3]
+                    right_ee_ypr = R.from_matrix(T[:3, :3]).as_euler("ZYX", degrees=False)
+            else:
+                right_ee_xyz = np.zeros(3)
+                right_ee_ypr = np.zeros(3)
+            left_ee_pose = np.concatenate(
+                [left_ee_xyz, left_ee_ypr, [robot_joint_action[6]]]
+            )
+            right_ee_pose = np.concatenate(
+                [right_ee_xyz, right_ee_ypr, [robot_joint_action[13]]]
+            )
+            robot_ee_pose.append(np.concatenate([left_ee_pose, right_ee_pose]))
+        data_dict["/observations/eepose"] = np.asarray(robot_ee_pose, dtype=np.float32)
     t0 = time.time()
     max_timesteps = len(demo_data["cmd_eepose_actions"])
     with h5py.File(str(filename), "w", rdcc_nbytes=1024**2 * 2) as root:
         root.attrs["sim"] = False
         obs = root.create_group("observations")
         image = obs.create_group("images")
+
+        for name, array in data_dict.items():
+            if isinstance(array, np.ndarray) and array.ndim >= 1 and array.shape[0] != max_timesteps:
+                raise ValueError(
+                    f"Dataset length mismatch for {name}: "
+                    f"expected {max_timesteps}, got {array.shape[0]}"
+                )
+
+        t_chunk = max(1, min(max_timesteps, 32))
         for cam_name in cam_names:
             # Get image dimensions from actual data
             img_data = data_dict[f"/observations/images/{cam_name}"]
@@ -692,22 +793,41 @@ def save_demo(demo_data: dict, demo_dir, episode_id: int, cam_names, robot_type:
                 cam_name,
                 (max_timesteps, img_height, img_width, 3),
                 dtype="uint8",
-                chunks=(1, img_height, img_width, 3),
+                chunks=(t_chunk, img_height, img_width, 3),
             )
-        _ = obs.create_dataset("joints", (max_timesteps, 14))
-        _ = obs.create_dataset("eepose", (max_timesteps, 14))
-        _ = obs.create_dataset("joint_positions", (max_timesteps, 14))
+        depth_dataset_names = sorted(
+            key.split("/")[-1]
+            for key in data_dict
+            if key.startswith("/observations/depth/")
+        )
+        if depth_dataset_names:
+            depth_group = obs.create_group("depth")
+            for depth_name in depth_dataset_names:
+                depth_data = data_dict[f"/observations/depth/{depth_name}"]
+                depth_height, depth_width = depth_data.shape[1], depth_data.shape[2]
+                _ = depth_group.create_dataset(
+                    depth_name,
+                    (max_timesteps, depth_height, depth_width, 1),
+                    dtype="float32",
+                    chunks=(t_chunk, depth_height, depth_width, 1),
+                )
+
+        _ = obs.create_dataset("joints", (max_timesteps, 14), dtype="float32")
+        _ = obs.create_dataset("eepose", (max_timesteps, 14), dtype="float32")
+        _ = obs.create_dataset("joint_positions", (max_timesteps, 14), dtype="float32")
         _ = root.create_group("actions")
-        _ = root["actions"].create_dataset("eepose_ypr", (max_timesteps, 14))
-        _ = root["actions"].create_dataset("eepose_6drot", (max_timesteps, 20))
-        _ = root["actions"].create_dataset("rot_3x3", (max_timesteps, 2, 3, 3))
-        _ = root["actions"].create_dataset("joints", (max_timesteps, 14))
-        _ = root.create_dataset("action", (max_timesteps, 14))
+        _ = root["actions"].create_dataset("eepose_ypr", (max_timesteps, 14), dtype="float32")
+        _ = root["actions"].create_dataset("eepose_6drot", (max_timesteps, 20), dtype="float32")
+        _ = root["actions"].create_dataset("rot_3x3", (max_timesteps, 2, 3, 3), dtype="float32")
+        _ = root["actions"].create_dataset("joints", (max_timesteps, 14), dtype="float32")
+        _ = root.create_dataset("action", (max_timesteps, 14), dtype="float32")
+        _ = root.create_dataset("text", shape=(), dtype=h5py.string_dtype(encoding="utf-8"))
 
         for name, array in data_dict.items():
             root[name][...] = array
 
-    print(f"Saving: {(time.time() - t0):.1f} secs")
+    print(f"Saving: {(time.time() - t0):.1f} secs → {filename}")
+    print(f"Demo length: {max_timesteps} steps")
     return True
 
 
@@ -778,6 +898,7 @@ def collect_demo(
         raise ValueError("Invalid arm values inputted.")
     
     # Select robot interface based on type
+    gripper_type_enum = None
     if robot_type == "arx":
         if dry_run:
             print("ARX robot does not support dry run mode - use YAM robot for dry run testing")
@@ -826,6 +947,23 @@ def collect_demo(
     last_cmd_joint_action = None
     last_robot_joint_action = None
     last_cmd_eepose_action = None
+    # Safety gating around homing/start transitions to avoid CAN instability.
+    teleop_pause_until = 0.0
+    require_trigger_release = False
+    last_home_time = 0.0
+    min_home_reissue_sec = 4.0 if robot_type == "yam" else 1.0
+    post_home_pause_sec = 1.0 if robot_type == "yam" else 0.2
+    # YAM can drop CAN links on repeated home commands; keep home explicit on Y only.
+    home_on_b_start = robot_type != "yam"
+    max_recovery_attempts = 3 if robot_type == "yam" else 0
+    loop_lag_recover_strikes = 3 if robot_type == "yam" else 0
+    loop_lag_threshold_s = max(0.25, 4.0 / frequency)
+    loop_lag_strikes = 0
+    last_tick_time = None
+    runtime_state = "INIT"
+    recovery_count = 0
+    fault_count = 0
+    last_status_ts = 0.0
 
     def seed_action_buffers_from_snapshot(snapshot):
         """Seed action/proprio buffers from snapshot."""
@@ -852,17 +990,137 @@ def collect_demo(
             
         return cmd_joint_action, robot_joint_action, cmd_eepose_action
 
-    print("Waiting for incoming images ----------------")
-    with RateLoop(frequency=frequency, verbose=False) as loop:
-        for i in loop:
-            snapshot = take_robot_snapshot(robot_interface, arms_list)
-            all_cam_images_in = all(
-                snapshot["images"][cam_name] is not None 
-                for cam_name in camera_names
+    def triggers_fully_released(vr_sample: dict) -> bool:
+        """True when both controller grips/triggers are released."""
+        return (
+            vr_sample["left"]["index"] <= TRIGGER_OFF_THRESHOLD
+            and vr_sample["right"]["index"] <= TRIGGER_OFF_THRESHOLD
+            and vr_sample["left"]["trigger"] <= TRIGGER_OFF_THRESHOLD
+            and vr_sample["right"]["trigger"] <= TRIGGER_OFF_THRESHOLD
+        )
+
+    def safe_home(reason: str):
+        """Home robot and arm teleop pause/release gates."""
+        nonlocal teleop_pause_until, require_trigger_release, last_home_time, runtime_state
+        runtime_state = "HOMING"
+        print(f"[STATE] HOMING ({reason})")
+        now = time.time()
+        if (now - last_home_time) < min_home_reissue_sec:
+            print(
+                f"[{reason}] Skipping duplicate set_home "
+                f"({now - last_home_time:.2f}s since last home)"
             )
-            if all_cam_images_in:
-                break
-    print("All cameras are ready --------------")
+        else:
+            print(f"[{reason}] Moving robot to home...")
+            try:
+                robot_interface.set_home()
+                last_home_time = time.time()
+            except Exception as e:
+                print(f"[{reason}] [WARN] set_home failed: {e}")
+        teleop_pause_until = max(teleop_pause_until, time.time() + post_home_pause_sec)
+        require_trigger_release = True
+        prev_cmd_T.clear()
+        vr_frame_zero_se3.clear()
+        robot_frame_zero_se3.clear()
+        runtime_state = "PAUSED"
+
+    def is_motor_comm_error(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        signatures = (
+            "loss communication",
+            "motor chain is not running",
+            "motor error detected",
+            "fail to communicate with the motor",
+            "socketcan",
+            "dmchaincaninterface",
+            "yam_real",
+        )
+        return any(sig in msg for sig in signatures)
+
+    def wait_for_cameras_ready():
+        print("Waiting for incoming images ----------------")
+        with RateLoop(frequency=frequency, verbose=False) as loop:
+            for _ in loop:
+                snapshot = take_robot_snapshot(robot_interface, arms_list)
+                all_cam_images_in = all(
+                    snapshot["images"][cam_name] is not None for cam_name in camera_names
+                )
+                all_cam_depth_in = all(
+                    (not hasattr(robot_interface.recorders[cam_name], "get_depth"))
+                    or (snapshot["depth"][cam_name] is not None)
+                    for cam_name in camera_names
+                )
+                if all_cam_images_in and all_cam_depth_in:
+                    break
+        print("All cameras are ready (rgb + depth) --------------")
+
+    def recover_yam_interface(reason: str, err: Exception) -> bool:
+        nonlocal robot_interface, camera_names
+        nonlocal collecting_data, last_cmd_joint_action, last_robot_joint_action, last_cmd_eepose_action
+        nonlocal teleop_pause_until, require_trigger_release, last_home_time
+        nonlocal runtime_state, recovery_count, fault_count
+
+        if robot_type != "yam":
+            return False
+
+        fault_count += 1
+        runtime_state = "RECOVERING"
+        print(f"[STATE] RECOVERING (trigger={reason})")
+        print(f"[RECOVERY] Triggered by {reason}: {err}")
+
+        if collecting_data:
+            num_steps = len(demo_data.get("obs", []))
+            print(f"[RECOVERY] Aborting current recording with {num_steps} steps")
+        collecting_data = False
+        reset_data(demo_data)
+        last_cmd_joint_action = None
+        last_robot_joint_action = None
+        last_cmd_eepose_action = None
+        prev_cmd_T.clear()
+        vr_frame_zero_se3.clear()
+        robot_frame_zero_se3.clear()
+
+        # Ensure we do not send teleop commands immediately after reconnect.
+        require_trigger_release = True
+        teleop_pause_until = max(teleop_pause_until, time.time() + 2.0)
+
+        for attempt in range(1, max_recovery_attempts + 1):
+            print(f"[RECOVERY] Reinitializing YAM interface ({attempt}/{max_recovery_attempts})...")
+            try:
+                try:
+                    robot_interface.close()
+                except Exception as close_err:
+                    print(f"[RECOVERY] Warning during close: {close_err}")
+                time.sleep(1.0)
+
+                robot_interface = YAMInterface(
+                    arms=arms_list,
+                    gripper_type=gripper_type_enum,
+                    interfaces=yam_interfaces,
+                    zero_gravity_mode=False,
+                    dry_run=dry_run,
+                )
+                robot_interface.print_config()
+                camera_names = list(robot_interface.recorders.keys())
+                wait_for_cameras_ready()
+                last_home_time = 0.0
+                recovery_count += 1
+                runtime_state = "IDLE"
+                print(f"[STATE] IDLE (recoveries={recovery_count})")
+                print("[RECOVERY] YAM interface recovered. Ready for next demo.")
+                return True
+            except Exception as reinit_err:
+                print(f"[RECOVERY] Attempt {attempt} failed: {reinit_err}")
+                time.sleep(2.0)
+
+        print("[RECOVERY] Failed to recover YAM interface automatically.")
+        runtime_state = "FAULT"
+        print("[STATE] FAULT")
+        return False
+
+    wait_for_cameras_ready()
+    runtime_state = "IDLE"
+    print("[STATE] IDLE")
     
     auto_episode_id = auto_episode_start
     
@@ -875,10 +1133,30 @@ def collect_demo(
         
         with RateLoop(frequency=frequency, verbose=False) as loop:
             for i in loop:
+                tick_now = time.time()
+                if last_tick_time is not None:
+                    dt_tick = tick_now - last_tick_time
+                    if loop_lag_recover_strikes > 0:
+                        if dt_tick > loop_lag_threshold_s:
+                            loop_lag_strikes += 1
+                        else:
+                            loop_lag_strikes = max(0, loop_lag_strikes - 1)
+                else:
+                    dt_tick = 0.0
+                last_tick_time = tick_now
+
                 # ============================================================
                 # STEP 1: Take atomic snapshot of robot state
                 # ============================================================
-                snapshot = take_robot_snapshot(robot_interface, arms_list)
+                try:
+                    snapshot = take_robot_snapshot(robot_interface, arms_list)
+                except Exception as e:
+                    if is_motor_comm_error(e):
+                        if recover_yam_interface("snapshot read", e):
+                            prev_vr_data = None
+                            loop_lag_strikes = 0
+                            continue
+                    raise
                 
                 # ============================================================
                 # STEP 2: Read VR controller
@@ -904,17 +1182,38 @@ def collect_demo(
                             last_robot_joint_action = None
                             last_cmd_eepose_action = None
                             save_resolution = getattr(robot_interface, 'save_resolution', None)
-                            save_demo(demo_data, demo_dir, episode_id, camera_names, 
-                                     robot_type=robot_type, yam_gripper_type=yam_gripper_type, 
-                                     save_resolution=save_resolution)
+                            try:
+                                runtime_state = "SAVING"
+                                print("[STATE] SAVING")
+                                save_demo(demo_data, demo_dir, episode_id, camera_names, 
+                                         robot_type=robot_type, yam_gripper_type=yam_gripper_type, 
+                                         save_resolution=save_resolution)
+                            except Exception as e:
+                                import traceback
+                                print(f"[ERROR] save_demo failed: {e}")
+                                traceback.print_exc()
+                            runtime_state = "IDLE"
+                            print("[STATE] IDLE")
                             if auto_episode_id is not None:
                                 auto_episode_id += 1
                             break
                         else:
                             # Start recording
-                            robot_interface.set_home()
+                            if home_on_b_start:
+                                safe_home("B")
+                            else:
+                                print("[B] Start recording without homing (Y to home explicitly)")
+                                teleop_pause_until = max(
+                                    teleop_pause_until, time.time() + post_home_pause_sec
+                                )
+                                require_trigger_release = True
+                                prev_cmd_T.clear()
+                                vr_frame_zero_se3.clear()
+                                robot_frame_zero_se3.clear()
                             print("Start Collecting Data ------------------------------")
                             collecting_data = True
+                            runtime_state = "RECORDING"
+                            print("[STATE] RECORDING")
                             reset_data(demo_data)
                             last_cmd_joint_action, last_robot_joint_action, last_cmd_eepose_action = \
                                 seed_action_buffers_from_snapshot(snapshot)
@@ -931,12 +1230,18 @@ def collect_demo(
                 if buttons["A"]:
                     break
 
-                # Y button: Reset to home
-                if buttons["Y"]:
+                # Y button: Reset to home (rising-edge only)
+                if buttons["Y"] and prev_vr_data is not None and prev_vr_data["buttons"]["Y"] == False:
+                    if collecting_data:
+                        num_steps = len(demo_data.get("obs", []))
+                        print(f"[Y] DISCARDING {num_steps} recorded steps and resetting to home")
+                    else:
+                        print("[Y] Resetting to home")
                     collecting_data = False
+                    runtime_state = "PAUSED"
+                    print("[STATE] PAUSED")
                     reset_data(demo_data)
-                    robot_interface.set_home()
-                    prev_vr_data = None
+                    safe_home("Y")
                     last_cmd_joint_action = None
                     last_robot_joint_action = None
                     last_cmd_eepose_action = None
@@ -946,6 +1251,40 @@ def collect_demo(
                 # ============================================================
                 vr.update_engagement(vr_data["right"]["index"], "right")
                 vr.update_engagement(vr_data["left"]["index"], "left")
+
+                if require_trigger_release and triggers_fully_released(vr_data):
+                    require_trigger_release = False
+                    print("[SAFETY] Triggers released; teleop re-armed.")
+                teleop_paused = (time.time() < teleop_pause_until) or require_trigger_release
+
+                if (
+                    not collecting_data
+                    and runtime_state not in ("RECOVERING", "SAVING", "FAULT")
+                ):
+                    runtime_state = "PAUSED" if teleop_paused else "IDLE"
+
+                if (
+                    loop_lag_recover_strikes > 0
+                    and loop_lag_strikes >= loop_lag_recover_strikes
+                    and runtime_state not in ("RECOVERING", "SAVING")
+                ):
+                    lag_err = RuntimeError(
+                        f"loop stall watchdog dt={dt_tick:.3f}s strikes={loop_lag_strikes}"
+                    )
+                    if recover_yam_interface("loop stall watchdog", lag_err):
+                        prev_vr_data = None
+                        loop_lag_strikes = 0
+                        continue
+
+                if (tick_now - last_status_ts) >= 1.0:
+                    steps = len(demo_data.get("obs", []))
+                    print(
+                        f"[STATUS] state={runtime_state} episode={episode_id} "
+                        f"collecting={collecting_data} paused={teleop_paused} "
+                        f"steps={steps} lag_strikes={loop_lag_strikes} "
+                        f"recoveries={recovery_count} faults={fault_count}"
+                    )
+                    last_status_ts = tick_now
                 
                 # Clear velocity limit tracking when grip released
                 if vr.r_down_edge and "right" in prev_cmd_T:
@@ -969,13 +1308,18 @@ def collect_demo(
                     cmd_joint_action = last_cmd_joint_action.copy()
                     robot_joint_action = last_robot_joint_action.copy()
                     cmd_eepose_action = last_cmd_eepose_action.copy()
+                robot_eepose_action = np.zeros(14, dtype=np.float64)
 
                 # ============================================================
                 # STEP 6: Process each arm - compute commands and control
                 # ============================================================
+                recovery_triggered = False
                 for arm in arms_list:
                     arm_offset = 7 if arm == "right" else 0
-                    is_engaged = (arm == "left" and vr.l_engaged) or (arm == "right" and vr.r_engaged)
+                    is_engaged = (
+                        ((arm == "left" and vr.l_engaged) or (arm == "right" and vr.r_engaged))
+                        and (not teleop_paused)
+                    )
                     is_up_edge = (arm == "right" and vr.r_up_edge) or (arm == "left" and vr.l_up_edge)
                     
                     # Get robot state from snapshot (consistent values)
@@ -984,6 +1328,15 @@ def collect_demo(
                     
                     # ALWAYS populate robot_joint_action from snapshot
                     robot_joint_action[arm_offset:arm_offset + 7] = arm_joints
+                    # ALWAYS populate actual robot ee pose observation from snapshot
+                    rb_xyz, rb_ypr = se3_to_xyz_ypr(rb_se3)
+                    robot_eepose_action[arm_offset:arm_offset + 3] = rb_xyz
+                    robot_eepose_action[arm_offset + 3:arm_offset + 6] = rb_ypr
+                    robot_eepose_action[arm_offset + 6] = arm_joints[6]
+                    
+                    # DEBUG: print engagement state once per second
+                    if i % frequency == 0 and arm == arms_list[0]:
+                        print(f"[DBG] tick={i} engaged={is_engaged} arm={arm} joints={arm_joints[:3]}")
                     
                     if is_engaged:
                         # On engagement rising edge, store reference frames
@@ -1047,12 +1400,34 @@ def collect_demo(
                         try:
                             solved_joints = robot_interface.solve_ik(eepose_cmd[:6], arm)
                         except Exception as e:
+                            if is_motor_comm_error(e):
+                                if recover_yam_interface(f"IK ({arm})", e):
+                                    prev_vr_data = None
+                                    loop_lag_strikes = 0
+                                    recovery_triggered = True
+                                    break
                             print(f"[WARN] IK failed for arm {arm}: {e}")
+                            import traceback; traceback.print_exc()
                             continue
                             
                         if solved_joints is not None:
                             cmd_joints[arm] = np.concatenate([solved_joints, [gripper_pos[arm]]])
-                            robot_interface.set_joints(cmd_joints[arm], arm)
+                            try:
+                                robot_interface.set_joints(cmd_joints[arm], arm)
+                            except Exception as e:
+                                if is_motor_comm_error(e):
+                                    if recover_yam_interface(f"set_joints ({arm})", e):
+                                        prev_vr_data = None
+                                        loop_lag_strikes = 0
+                                        recovery_triggered = True
+                                        break
+                                print(f"[WARN] set_joints failed for arm {arm}: {e}")
+                                continue
+                            # DEBUG: print first few IK successes
+                            if i < 5 * frequency:
+                                print(f"[DBG IK] arm={arm} solved={solved_joints[:3]} cmd_pos={cmd_pos[arm]}")
+                        else:
+                            print(f"[DBG IK] arm={arm} solve_ik returned None")
 
                         # Populate commanded action arrays
                         cmd_eepose_action[arm_offset:arm_offset + 3] = cmd_pos[arm]
@@ -1073,6 +1448,9 @@ def collect_demo(
                         cmd_eepose_action[arm_offset + 6] = (gripper_val - gripper_close) / gripper_width
                         cmd_joint_action[arm_offset:arm_offset + 7] = arm_joints
 
+                if recovery_triggered:
+                    continue
+
                 # ============================================================
                 # STEP 7: Append data ONCE per tick (after processing all arms)
                 # ============================================================
@@ -1081,11 +1459,16 @@ def collect_demo(
                     obs_copy = {}
                     for cam_name, img in snapshot["images"].items():
                         obs_copy[cam_name] = img.copy() if img is not None else None
+                    depth_obs_copy = {}
+                    for cam_name, depth in snapshot["depth"].items():
+                        depth_obs_copy[cam_name] = depth.copy() if depth is not None else None
                     
                     demo_data["obs"].append(obs_copy)
+                    demo_data["depth_obs"].append(depth_obs_copy)
                     demo_data["cmd_joint_actions"].append(cmd_joint_action.copy())
                     demo_data["robot_joint_actions"].append(robot_joint_action.copy())
                     demo_data["cmd_eepose_actions"].append(cmd_eepose_action.copy())
+                    demo_data["robot_eepose_obs"].append(robot_eepose_action.copy())
                     
                     # Update last values for next iteration
                     last_cmd_joint_action = cmd_joint_action.copy()

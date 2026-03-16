@@ -33,6 +33,8 @@ save_resolution:
 
 # Camera configuration
 # Only D405 cameras - no Aria glasses
+# Keep capture resolution at 640x480 to match existing demos.
+# Optional: set camera `fps` to 15 (from 30) to reduce USB bandwidth.
 # cameras:
 #   # Front camera (external view) - optional
 #   # Uncomment and add serial number if you have a front-facing camera
@@ -80,19 +82,35 @@ cameras:
     encoding: "rgb8"
     # serial_number: 335122272652
     serial_number: 820512070183
+    realsense_json: "~/robot_ws/calib_new/scene_camera_config.json"
     width: 640
     height: 480
+    fps: 30
   left_wrist_img:
     type: "d405"
     enabled: true
     encoding: "rgb8"
     serial_number: 335122271707
+    realsense_json: "~/robot_ws/calib_new/left_camera_config.json"
     width: 640
     height: 480
+    fps: 30
   right_wrist_img:
     type: "d405"
     enabled: true
     encoding: "rgb8"
     serial_number: 335122270835
+    realsense_json: "~/robot_ws/calib_new/right_camera_config.json"
     width: 640
     height: 480
+    fps: 30
+
+  side_img_1:
+    type: "d435"
+    enabled: false
+    encoding: "rgb8"
+    serial_number: 102422075719
+    realsense_json: "~/robot_ws/calib/_newside_camera_config.json"
+    width: 640
+    height: 480
+    fps: 30
