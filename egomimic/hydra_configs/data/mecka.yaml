@@ -8,8 +8,10 @@ train_datasets:
       folder_path: /coc/flash7/scratch/egoverseDebugDatasets/mecka
       key_map:
         _target_: egomimic.rldb.embodiment.human.Mecka.get_keymap
+        mode: cartesian
       transform_list:
         _target_: egomimic.rldb.embodiment.human.Mecka.get_transform_list
+        mode: cartesian
     filters:
       episode_hash: "69199812208123403bbdb24f"
     mode: total
@@ -21,8 +23,10 @@ valid_datasets:
       folder_path: /coc/flash7/scratch/egoverseDebugDatasets/mecka
       key_map:
         _target_: egomimic.rldb.embodiment.human.Mecka.get_keymap
+        mode: cartesian
       transform_list:
         _target_: egomimic.rldb.embodiment.human.Mecka.get_transform_list
+        mode: cartesian
     filters:
       episode_hash: "69199812208123403bbdb24f"
     mode: total
