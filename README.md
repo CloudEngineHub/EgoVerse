@@ -36,16 +36,24 @@ git clone --recursive git@github.com:GaTech-RL2/EgoVerse.git
 cd EgoVerse
 conda env create -f environment.yaml
 conda activate emimic
-pip install projectaria-tools'[all]'
-pip install -e external/lerobot
 pip install -e .
 pre-commit install
 ```
 
 ### AWS Configure
+Download the AWS cli
+```
+ curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+ unzip awscliv2.zip
+ ./aws/install -i ~/aws-cli -b ~/bin
+```
+
+Set up your AWS keys to access our cloud storage
 ```
 aws configure
-<fill in credentials simar sent>
+<enter your keys here>
+Default region name: us-east-2
+Default output format:
 ./egomimic/utils/aws/setup_secret.sh
 ```
 `setup_secret.sh` will allow your current env to download data from cloudflare.
