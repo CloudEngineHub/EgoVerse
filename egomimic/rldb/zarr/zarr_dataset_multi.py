@@ -24,8 +24,10 @@ import json
 import logging
 import os
 import random
+import shutil
 import subprocess
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -46,6 +48,17 @@ from egomimic.utils.aws.aws_sql import (
 logger = logging.getLogger(__name__)
 
 SEED = 42
+PARTIAL_SUFFIX = ".partial"
+VALIDATION_BATCH_SIZE = 256
+
+
+@dataclass(frozen=True)
+class _SyncJob:
+    processed_path: str
+    episode_hash: str
+    src_prefix: str
+    final_path: Path
+    partial_path: Path
 
 
 def split_dataset_names(dataset_names, valid_ratio=0.2, seed=SEED):
@@ -153,10 +166,193 @@ class EpisodeResolver:
         return datasets
 
     @classmethod
+    def _final_episode_path(cls, local_dir: Path, episode_hash: str) -> Path:
+        return local_dir / episode_hash
+
+    @classmethod
+    def _partial_episode_path(cls, local_dir: Path, episode_hash: str) -> Path:
+        return local_dir / f"{episode_hash}{PARTIAL_SUFFIX}"
+
+    @staticmethod
+    def _remove_path(path: Path) -> None:
+        if not path.exists():
+            return
+        if path.is_dir():
+            shutil.rmtree(path)
+            return
+        path.unlink(missing_ok=True)
+
+    @staticmethod
+    def _coerce_bytes_payload(value):
+        if isinstance(value, np.void):
+            value = value.item()
+        if isinstance(value, memoryview):
+            value = value.tobytes()
+        if isinstance(value, bytearray):
+            value = bytes(value)
+        if isinstance(value, np.bytes_):
+            value = value.tobytes()
+        if isinstance(value, bytes):
+            return value
+        return None
+
+    @staticmethod
+    def _validation_ranges(total_frames: int) -> list[tuple[int, int]]:
+        if total_frames <= 0:
+            return []
+        return [
+            (start, min(start + VALIDATION_BATCH_SIZE, total_frames))
+            for start in range(0, total_frames, VALIDATION_BATCH_SIZE)
+        ]
+
+    @classmethod
+    def _validate_episode_store(cls, episode_path: Path) -> tuple[bool, str]:
+        if not episode_path.is_dir():
+            return False, f"path={episode_path} missing_episode_dir"
+
+        try:
+            store = zarr.open_group(str(episode_path), mode="r")
+        except Exception as e:
+            return (
+                False,
+                f"path={episode_path} open_error={type(e).__name__}: {e}",
+            )
+
+        try:
+            metadata = dict(store.attrs)
+        except Exception as e:
+            return (
+                False,
+                f"path={episode_path} attrs_error={type(e).__name__}: {e}",
+            )
+
+        missing_meta = [
+            key for key in ("total_frames", "features", "embodiment") if key not in metadata
+        ]
+        if missing_meta:
+            return False, f"path={episode_path} missing_metadata={missing_meta}"
+
+        try:
+            total_frames = int(metadata["total_frames"])
+        except Exception as e:
+            return (
+                False,
+                f"path={episode_path} invalid_total_frames={metadata.get('total_frames')!r} "
+                f"error={type(e).__name__}: {e}",
+            )
+        if total_frames <= 0:
+            return False, f"path={episode_path} invalid_total_frames={total_frames}"
+
+        features = metadata.get("features")
+        if not isinstance(features, dict) or not features:
+            return False, f"path={episode_path} invalid_features_metadata={features!r}"
+
+        for key, info in features.items():
+            if not isinstance(info, dict):
+                return False, f"path={episode_path} key={key} invalid_feature_info={info!r}"
+
+            try:
+                arr = store[key]
+            except Exception as e:
+                return (
+                    False,
+                    f"path={episode_path} key={key} missing_array={type(e).__name__}: {e}",
+                )
+
+            if not hasattr(arr, "shape") or len(arr.shape) == 0:
+                return False, f"path={episode_path} key={key} invalid_array_shape"
+
+            if key != "annotations" and arr.shape[0] < total_frames:
+                return (
+                    False,
+                    f"path={episode_path} key={key} array_too_short="
+                    f"{arr.shape[0]}<{total_frames}",
+                )
+
+            chunk_dir = episode_path / key / "c"
+            if chunk_dir.is_dir():
+                try:
+                    zero_size_chunks = [
+                        p.relative_to(episode_path)
+                        for p in chunk_dir.rglob("*")
+                        if p.is_file() and p.stat().st_size == 0
+                    ]
+                except Exception as e:
+                    return (
+                        False,
+                        f"path={episode_path} key={key} chunk_scan_error="
+                        f"{type(e).__name__}: {e}",
+                    )
+                if zero_size_chunks:
+                    return (
+                        False,
+                        f"path={episode_path} key={key} zero_size_chunks="
+                        f"{[str(p) for p in zero_size_chunks[:3]]}",
+                    )
+
+            if key == "annotations":
+                continue
+
+            for start, end in cls._validation_ranges(total_frames):
+                try:
+                    frame_values = arr[start:end]
+                except Exception as e:
+                    return (
+                        False,
+                        f"path={episode_path} key={key} frames={start}:{end} "
+                        f"read_error={type(e).__name__}: {e}",
+                    )
+
+                if len(frame_values) != end - start:
+                    return (
+                        False,
+                        f"path={episode_path} key={key} frames={start}:{end} "
+                        f"read_length_mismatch={len(frame_values)}",
+                    )
+
+                if info.get("dtype") == "jpeg":
+                    for offset, frame_value in enumerate(frame_values):
+                        frame_idx = start + offset
+                        payload = cls._coerce_bytes_payload(frame_value)
+                        if payload is None:
+                            return (
+                                False,
+                                f"path={episode_path} key={key} frame={frame_idx} "
+                                f"invalid_jpeg_type={type(frame_value).__name__}",
+                            )
+                        if len(payload) == 0:
+                            return (
+                                False,
+                                f"path={episode_path} key={key} frame={frame_idx} "
+                                f"empty_jpeg_bytes",
+                            )
+
+        return True, f"path={episode_path} valid"
+
+    @classmethod
     def _episode_already_present(cls, local_dir: Path, episode_hash: str) -> bool:
-        direct = local_dir / episode_hash
-        if direct.is_dir():
-            return True
+        final_path = cls._final_episode_path(local_dir, episode_hash)
+        partial_path = cls._partial_episode_path(local_dir, episode_hash)
+
+        if not final_path.is_dir():
+            return False
+
+        is_valid, reason = cls._validate_episode_store(final_path)
+        if not is_valid:
+            logger.warning(
+                "Local episode failed integrity validation and will be re-synced: %s",
+                reason,
+            )
+            return False
+
+        if partial_path.exists():
+            logger.warning(
+                "Removing stale partial episode after validating final store: %s",
+                partial_path,
+            )
+            cls._remove_path(partial_path)
+
+        return True
 
 
 class S3EpisodeResolver(EpisodeResolver):
@@ -292,8 +488,90 @@ class S3EpisodeResolver(EpisodeResolver):
             logger.info("Nothing to sync from S3 (all episodes already present).")
             return
 
-        # 1) Build s5cmd batch script (one line per episode)
         local_dir.mkdir(parents=True, exist_ok=True)
+        sync_jobs = cls._build_sync_jobs(bucket_name, to_sync, local_dir)
+        cls._sync_jobs_once(sync_jobs, numworkers=numworkers)
+        retry_failures = cls._validate_and_promote_jobs(sync_jobs)
+        retry_jobs = [job for job, _reason in retry_failures]
+
+        if retry_jobs:
+            logger.warning(
+                "Retrying %d incomplete episode sync(s) once.", len(retry_jobs)
+            )
+            cls._sync_jobs_once(retry_jobs, numworkers=numworkers)
+            final_failures = cls._validate_and_promote_jobs(retry_jobs)
+            if final_failures:
+                failures = "\n".join(
+                    f"- episode_hash={job.episode_hash} reason={reason}"
+                    for job, reason in final_failures
+                )
+                raise RuntimeError(
+                    "Episode sync integrity check failed after retry:\n" + failures
+                )
+
+    @staticmethod
+    def _build_src_prefix(bucket_name: str, processed_path: str) -> str:
+        if processed_path.startswith("s3://"):
+            return processed_path.rstrip("/") + "/*"
+        return f"s3://{bucket_name}/{processed_path.lstrip('/').rstrip('/')}/*"
+
+    @classmethod
+    def _build_sync_jobs(
+        cls,
+        bucket_name: str,
+        s3_paths: list[tuple[str, str]],
+        local_dir: Path,
+    ) -> list[_SyncJob]:
+        jobs = []
+        for processed_path, episode_hash in s3_paths:
+            jobs.append(
+                _SyncJob(
+                    processed_path=processed_path,
+                    episode_hash=episode_hash,
+                    src_prefix=cls._build_src_prefix(bucket_name, processed_path),
+                    final_path=cls._final_episode_path(local_dir, episode_hash),
+                    partial_path=cls._partial_episode_path(local_dir, episode_hash),
+                )
+            )
+        return jobs
+
+    @staticmethod
+    def _s5cmd_env_and_endpoint() -> tuple[dict[str, str], str]:
+        load_env()
+        rl2_endpoint_url = os.environ.get("R2_ENDPOINT_URL")
+        access_key_id = os.environ.get("R2_ACCESS_KEY_ID")
+        secret_access_key = os.environ.get("R2_SECRET_ACCESS_KEY")
+        if not all([rl2_endpoint_url, access_key_id, secret_access_key]):
+            raise ValueError(
+                "R2 credentials missing. Ensure ~/.egoverse_env has "
+                "R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY."
+            )
+        s5cmd_env = os.environ.copy()
+        s5cmd_env["AWS_ACCESS_KEY_ID"] = access_key_id
+        s5cmd_env["AWS_SECRET_ACCESS_KEY"] = secret_access_key
+        s5cmd_env["AWS_DEFAULT_REGION"] = "auto"
+        s5cmd_env["AWS_REGION"] = "auto"
+        return s5cmd_env, rl2_endpoint_url
+
+    @classmethod
+    def _prepare_sync_job(cls, job: _SyncJob) -> None:
+        if job.partial_path.exists():
+            logger.warning(
+                "Removing stale partial episode before re-sync: %s", job.partial_path
+            )
+            cls._remove_path(job.partial_path)
+
+        if job.final_path.exists():
+            logger.warning(
+                "Removing invalid local episode before re-sync: %s", job.final_path
+            )
+            cls._remove_path(job.final_path)
+
+    @classmethod
+    def _run_s5cmd_batch(cls, jobs: list[_SyncJob], numworkers: int = 10) -> int:
+        if not jobs:
+            return 0
+
         with tempfile.NamedTemporaryFile(
             prefix="_s5cmd_sync_",
             suffix=".txt",
@@ -301,38 +579,11 @@ class S3EpisodeResolver(EpisodeResolver):
         ) as tmp_file:
             batch_path = Path(tmp_file.name)
 
-        lines = []
-        for processed_path, episode_hash in to_sync:
-            # processed_path like: s3://rldb/processed_v2/eva/<hash>/
-            if processed_path.startswith("s3://"):
-                src_prefix = processed_path.rstrip("/") + "/*"
-            else:
-                src_prefix = (
-                    f"s3://{bucket_name}/{processed_path.lstrip('/').rstrip('/')}"
-                    + "/*"
-                )
-
-            # Destination is the root local_dir; s5cmd will preserve <hash>/... under it
-            dst = local_dir / episode_hash
-            lines.append(f'sync "{src_prefix}" "{str(dst)}/"')
+        lines = [f'sync "{job.src_prefix}" "{str(job.partial_path)}/"' for job in jobs]
 
         try:
             batch_path.write_text("\n".join(lines) + "\n")
-
-            load_env()
-            rl2_endpoint_url = os.environ.get("R2_ENDPOINT_URL")
-            access_key_id = os.environ.get("R2_ACCESS_KEY_ID")
-            secret_access_key = os.environ.get("R2_SECRET_ACCESS_KEY")
-            if not all([rl2_endpoint_url, access_key_id, secret_access_key]):
-                raise ValueError(
-                    "R2 credentials missing. Ensure ~/.egoverse_env has "
-                    "R2_ENDPOINT_URL, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY."
-                )
-            s5cmd_env = os.environ.copy()
-            s5cmd_env["AWS_ACCESS_KEY_ID"] = access_key_id
-            s5cmd_env["AWS_SECRET_ACCESS_KEY"] = secret_access_key
-            s5cmd_env["AWS_DEFAULT_REGION"] = "auto"
-            s5cmd_env["AWS_REGION"] = "auto"
+            s5cmd_env, rl2_endpoint_url = cls._s5cmd_env_and_endpoint()
             cmd = [
                 "s5cmd",
                 "--endpoint-url",
@@ -343,13 +594,52 @@ class S3EpisodeResolver(EpisodeResolver):
                 str(batch_path),
             ]
             logger.info("Running s5cmd batch (%d lines): %s", len(lines), " ".join(cmd))
-            subprocess.run(cmd, check=True, env=s5cmd_env)
-
+            result = subprocess.run(cmd, check=False, env=s5cmd_env)
+            if result.returncode != 0:
+                logger.warning(
+                    "s5cmd batch exited with code %s; validating synced episodes.",
+                    result.returncode,
+                )
+            return result.returncode
         finally:
             try:
                 batch_path.unlink(missing_ok=True)
             except Exception as e:
                 logger.warning("Failed to delete batch file %s: %s", batch_path, e)
+
+    @classmethod
+    def _sync_jobs_once(cls, jobs: list[_SyncJob], numworkers: int = 10) -> None:
+        if not jobs:
+            return
+        for job in jobs:
+            cls._prepare_sync_job(job)
+        cls._run_s5cmd_batch(jobs, numworkers=numworkers)
+
+    @classmethod
+    def _promote_partial_episode(cls, job: _SyncJob) -> None:
+        if job.final_path.exists():
+            cls._remove_path(job.final_path)
+        job.partial_path.rename(job.final_path)
+
+    @classmethod
+    def _validate_and_promote_jobs(
+        cls, jobs: list[_SyncJob]
+    ) -> list[tuple[_SyncJob, str]]:
+        failures: list[tuple[_SyncJob, str]] = []
+        for job in jobs:
+            is_valid, reason = cls._validate_episode_store(job.partial_path)
+            if not is_valid:
+                logger.warning(
+                    "Synced episode failed integrity validation: episode_hash=%s %s",
+                    job.episode_hash,
+                    reason,
+                )
+                cls._remove_path(job.partial_path)
+                failures.append((job, reason))
+                continue
+
+            cls._promote_partial_episode(job)
+        return failures
 
     @classmethod
     def sync_from_filters(
