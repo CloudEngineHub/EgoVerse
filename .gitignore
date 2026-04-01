@@ -39,4 +39,3 @@ _turbojpeg_lib/
 external/scale/scripts/scale_data/
 *.zarr
 **/*.zarr
-.codex

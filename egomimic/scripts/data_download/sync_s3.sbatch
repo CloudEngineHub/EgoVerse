@@ -1,22 +1,18 @@
 #!/bin/bash
-
 #SBATCH --job-name=sync_s3
-#SBATCH --partition=hoffman-lab
-#SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
-#SBATCH --cpus-per-task=15
-#SBATCH --qos="short"
-#SBATCH --exclude="conroy"
+#SBATCH --partition=CPU-3TB-AMD          # Keep your lab partition (CPU jobs work here)
+#SBATCH --account=gts-dxu345-rl2
+#SBATCH --mem=100G
+#SBATCH --ntasks=1                  
+#SBATCH --nodes=1                    # One node only
+#SBATCH --output=sync_s3_%j.out
+#SBATCH --error=sync_s3_%j.err
+#SBATCH --qos=inferno
 
-export PYTHONUNBUFFERED=TRUE
-source ~/.bashrc
-cd /coc/flash9/fryan6/code/egohead/EgoVerse
-source emimic/bin/activate
+# Usage:
+#   sbatch sync_s3.sbatch -- [sync_s3.py args...]
 
-hostname
-nvidia-smi
-pwd
-ls
+set -euo pipefail
 
-export PYTHONIOENCODING=utf-8
-srun -u python -u egomimic/scripts/data_download/sync_s3.py --local-dir /coc/flash7/scratch/egoverseS3ZarrDataset/ --filters all-human
+SUBMIT_DIR="${SLURM_SUBMIT_DIR:-$PWD}"
+python "$SUBMIT_DIR/sync_s3.py" "$@"

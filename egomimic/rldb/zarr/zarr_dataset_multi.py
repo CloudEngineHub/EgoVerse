@@ -135,65 +135,6 @@ def _normalize_filter_row(
     return normalized
 
 
-def _load_sidecar_metadata(
-    sidecar_metadata_path: str | Path | None,
-) -> dict[str, dict[str, Any]]:
-    if sidecar_metadata_path is None:
-        return {}
-
-    path = Path(sidecar_metadata_path)
-    if not path.exists():
-        logger.warning(
-            "Sidecar metadata file not found at %s; continuing without sidecar metadata.",
-            path,
-        )
-        return {}
-
-    with path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    if not isinstance(data, dict):
-        raise ValueError(
-            f"Sidecar metadata at {path} must be a dict keyed by episode_hash."
-        )
-
-    normalized: dict[str, dict[str, Any]] = {}
-    for episode_hash, metadata in data.items():
-        if not isinstance(episode_hash, str):
-            raise TypeError("Sidecar metadata keys must be strings (episode_hash).")
-        if not isinstance(metadata, Mapping):
-            raise TypeError(
-                f"Sidecar metadata entry for {episode_hash!r} must be a mapping."
-            )
-        normalized[episode_hash] = dict(metadata)
-
-    return normalized
-
-
-def _merge_sidecar_metadata(
-    row: Mapping[str, Any],
-    *,
-    sidecar_metadata: Mapping[str, dict[str, Any]] | None = None,
-    episode_hash: str | None = None,
-) -> dict[str, Any]:
-    merged = _normalize_filter_row(row, episode_hash=episode_hash)
-    if not sidecar_metadata:
-        return merged
-
-    resolved_episode_hash = merged.get("episode_hash")
-    if not isinstance(resolved_episode_hash, str):
-        return merged
-
-    extra_metadata = sidecar_metadata.get(resolved_episode_hash, {})
-    if not isinstance(extra_metadata, Mapping):
-        raise TypeError(
-            f"Sidecar metadata entry for {resolved_episode_hash!r} must be a mapping."
-        )
-
-    merged.update(extra_metadata)
-    return merged
-
-
 class EpisodeResolver:
     """
     Base class for episode resolution utilities.
@@ -205,15 +146,10 @@ class EpisodeResolver:
         folder_path: Path,
         key_map: dict | None = None,
         transform_list: list | None = None,
-        sidecar_metadata_path: str | Path | None = None,
     ):
         self.folder_path = Path(folder_path)
         self.key_map = key_map
         self.transform_list = transform_list
-        self.sidecar_metadata_path = (
-            Path(sidecar_metadata_path) if sidecar_metadata_path is not None else None
-        )
-        self.sidecar_metadata = _load_sidecar_metadata(self.sidecar_metadata_path)
 
     def _load_zarr_datasets(self, search_path: Path, valid_folder_names: set[str]):
         """
@@ -229,7 +165,6 @@ class EpisodeResolver:
         all_paths = sorted(search_path.iterdir())
         datasets: dict[str, ZarrDataset] = {}
         skipped: list[str] = []
-        candidate_count = len(valid_folder_names)
         for p in all_paths:
             if not p.is_dir():
                 logger.info(f"{p} is not a valid directory")
@@ -242,53 +177,15 @@ class EpisodeResolver:
                 skipped.append(p.name)
                 continue
             try:
-                missing_keys = self._missing_required_zarr_keys(p)
-                if missing_keys:
-                    logger.warning(
-                        "Skipping dataset at %s because required zarr keys are missing: %s",
-                        p,
-                        ", ".join(sorted(missing_keys)),
-                    )
-                    skipped.append(p.name)
-                    continue
                 ds_obj = ZarrDataset(
                     p, key_map=self.key_map, transform_list=self.transform_list
                 )
-                ds_obj.run_preflight()
                 datasets[name] = ds_obj
             except Exception as e:
                 logger.error(f"Failed to load dataset at {p}: {e}")
                 skipped.append(p.name)
 
-        logger.info(
-            "Episode load summary for %s: candidates=%d loaded=%d skipped=%d",
-            search_path,
-            candidate_count,
-            len(datasets),
-            candidate_count - len(datasets),
-        )
         return datasets
-
-    def _missing_required_zarr_keys(self, episode_path: Path) -> set[str]:
-        if not isinstance(self.key_map, Mapping):
-            return set()
-
-        required_keys = {
-            value["zarr_key"]
-            for value in self.key_map.values()
-            if isinstance(value, Mapping) and isinstance(value.get("zarr_key"), str)
-        }
-        if not required_keys:
-            return set()
-
-        try:
-            store = zarr.open_group(str(episode_path), mode="r")
-        except Exception as exc:
-            logger.warning("Failed to inspect zarr keys for %s: %s", episode_path, exc)
-            return set()
-
-        present_keys = set(store.array_keys())
-        return required_keys - present_keys
 
     @classmethod
     def _episode_already_present(cls, local_dir: Path, episode_hash: str) -> bool:
@@ -309,18 +206,12 @@ class S3EpisodeResolver(EpisodeResolver):
         main_prefix: str = "processed_v3",
         key_map: dict | None = None,
         transform_list: list | None = None,
-        sidecar_metadata_path: str | Path | None = None,
         debug: bool = False,
     ):
         self.bucket_name = bucket_name
         self.main_prefix = main_prefix
         self.debug = debug
-        super().__init__(
-            folder_path,
-            key_map=key_map,
-            transform_list=transform_list,
-            sidecar_metadata_path=sidecar_metadata_path,
-        )
+        super().__init__(folder_path, key_map=key_map, transform_list=transform_list)
 
     def resolve(
         self,
@@ -343,16 +234,10 @@ class S3EpisodeResolver(EpisodeResolver):
             bucket_name=self.bucket_name,
             filters=filters,
             local_dir=self.folder_path,
-            sidecar_metadata=self.sidecar_metadata,
             debug=self.debug,
         )
 
         valid_hashes = {hashes for _, hashes in filtered_paths}
-        logger.info(
-            "S3 resolver candidate episode count for %s: %d",
-            self.folder_path,
-            len(valid_hashes),
-        )
         if not valid_hashes:
             raise ValueError(
                 "No valid collection names from _get_filtered_paths: "
@@ -368,9 +253,7 @@ class S3EpisodeResolver(EpisodeResolver):
 
     @staticmethod
     def _get_filtered_paths(
-        filters: DatasetFilter | None = None,
-        sidecar_metadata: Mapping[str, dict[str, Any]] | None = None,
-        debug: bool = False,
+        filters: DatasetFilter | None = None, debug: bool = False
     ) -> list[tuple[str, str]]:
         """
         Filters episodes from the SQL episode table according to the criteria specified in `filters`
@@ -393,12 +276,7 @@ class S3EpisodeResolver(EpisodeResolver):
             return []
 
         mask = df.apply(
-            lambda row: filters.matches(
-                _merge_sidecar_metadata(
-                    row.to_dict(),
-                    sidecar_metadata=sidecar_metadata,
-                )
-            ),
+            lambda row: filters.matches(_normalize_filter_row(row.to_dict())),
             axis=1,
         )
         output = df.loc[mask, ["zarr_processed_path", "episode_hash"]]
@@ -512,7 +390,6 @@ class S3EpisodeResolver(EpisodeResolver):
         bucket_name: str,
         filters: DatasetFilter | None = None,
         local_dir: Path,
-        sidecar_metadata: Mapping[str, dict[str, Any]] | None = None,
         numworkers: int = 10,
         debug: bool = False,
     ):
@@ -531,11 +408,7 @@ class S3EpisodeResolver(EpisodeResolver):
         filters = _ensure_dataset_filter(filters)
 
         # 1) Resolve episodes from DB
-        filtered_paths = cls._get_filtered_paths(
-            filters,
-            sidecar_metadata=sidecar_metadata,
-            debug=debug,
-        )
+        filtered_paths = cls._get_filtered_paths(filters, debug=debug)
         if not filtered_paths:
             logger.warning("No episodes matched filters.")
             return []
@@ -566,15 +439,9 @@ class LocalEpisodeResolver(EpisodeResolver):
         folder_path: Path,
         key_map: dict | None = None,
         transform_list: list | None = None,
-        sidecar_metadata_path: str | Path | None = None,
         debug=False,
     ):
-        super().__init__(
-            folder_path,
-            key_map,
-            transform_list,
-            sidecar_metadata_path=sidecar_metadata_path,
-        )
+        super().__init__(folder_path, key_map, transform_list)
         self.debug = debug
 
     @staticmethod
@@ -582,14 +449,9 @@ class LocalEpisodeResolver(EpisodeResolver):
         metadata: dict,
         episode_hash: str,
         filters: DatasetFilter,
-        sidecar_metadata: Mapping[str, dict[str, Any]] | None = None,
     ) -> bool:
         return filters.matches(
-            _merge_sidecar_metadata(
-                metadata,
-                episode_hash=episode_hash,
-                sidecar_metadata=sidecar_metadata,
-            )
+            _normalize_filter_row(metadata, episode_hash=episode_hash)
         )
 
     @classmethod
@@ -597,7 +459,6 @@ class LocalEpisodeResolver(EpisodeResolver):
         cls,
         search_path: Path,
         filters: DatasetFilter | None = None,
-        sidecar_metadata: Mapping[str, dict[str, Any]] | None = None,
         debug: bool = False,
     ):
         filters = _ensure_dataset_filter(filters)
@@ -619,12 +480,7 @@ class LocalEpisodeResolver(EpisodeResolver):
                 logger.warning("Failed to read metadata for %s: %s", p, e)
                 continue
 
-            if cls._local_filters_match(
-                metadata,
-                episode_hash,
-                filters,
-                sidecar_metadata=sidecar_metadata,
-            ):
+            if cls._local_filters_match(metadata, episode_hash, filters):
                 filtered.append((str(p), episode_hash))
 
         if debug:
@@ -650,18 +506,10 @@ class LocalEpisodeResolver(EpisodeResolver):
         filters = _ensure_dataset_filter(filters)
 
         filtered_paths = self._get_local_filtered_paths(
-            self.folder_path,
-            filters,
-            sidecar_metadata=self.sidecar_metadata,
-            debug=self.debug,
+            self.folder_path, filters, debug=self.debug
         )
 
         valid_folder_names = {folder_name for _, folder_name in filtered_paths}
-        logger.info(
-            "Local resolver candidate episode count for %s: %d",
-            self.folder_path,
-            len(valid_folder_names),
-        )
         logger.info(f"Valid folder names: {valid_folder_names}")
         if not valid_folder_names:
             raise ValueError(
@@ -864,31 +712,6 @@ class ZarrDataset(torch.utils.data.Dataset):
         decoded = [self._decode_json_entry(x) for x in raw]
         self._annotations = [d for d in decoded if isinstance(d, dict)]
         return self._annotations
-
-    def run_preflight(self) -> None:
-        """Cheap validation so corrupt episodes fail before training starts."""
-        if self.total_frames <= 0:
-            raise ValueError(f"Episode has no frames: {self.episode_path}")
-
-        if not self._image_keys:
-            return
-
-        for key_name, key_cfg in self.key_map.items():
-            zarr_key = key_cfg.get("zarr_key")
-            if zarr_key not in self._image_keys:
-                continue
-
-            raw = self.episode_reader.read({zarr_key: (0, None)})
-            jpeg_bytes = raw[zarr_key]
-            try:
-                simplejpeg.decode_jpeg(jpeg_bytes, colorspace="RGB")
-            except Exception as exc:
-                raise ValueError(
-                    f"JPEG preflight failed for key '{key_name}' "
-                    f"(zarr_key='{zarr_key}') in {self.episode_path}: {exc}"
-                ) from exc
-
-            return
 
     def _annotation_text_for_frame(self, frame_idx: int) -> str:
         """

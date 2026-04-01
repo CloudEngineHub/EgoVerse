@@ -10,7 +10,7 @@ wandb:
   project: "zarr_test"
   log_model: False # upload lightning ckpts
   prefix: "" # a string to put at the beginning of metric keys
-  entity: "fkryan-georgia-institute-of-technology" # set to name of your wandb team
-  group: "egohead"
+  entity: "rl2-group" # set to name of your wandb team
+  group: ""
   tags: []
   job_type: ""
