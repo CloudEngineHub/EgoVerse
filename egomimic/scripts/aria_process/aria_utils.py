@@ -19,25 +19,6 @@ from egomimic.utils.pose_utils import T_rot_orientation
 
 ROTATION_MATRIX = np.array([[0, 1, 0], [-1, 0, 0], [0, 0, 1]])
 T_ROT_CAM = np.array([[0, 0, 1], [1, 0, 0], [0, 1, 0]])
-# Right-hand orientation fix. Aria reports the right hand's palm_normal with the
-# opposite handedness to the left, so the cross-product frame built in
-# compute_orientation_rotation_matrix (y = x_axis x z_axis) comes out with the
-# y-axis mirrored on the right hand only. We correct it with a 180° rotation about
-# the stored body z-axis (diag(-1,-1,1)), right-multiplied onto the right hand's
-# stored rotation — equivalent to negating the right palm_normal. A single-axis
-# y-flip would be a reflection (det -1) and is not a storable rotation, so exactly
-# one other axis flips with y: this keeps the displayed Z axis (matching the left
-# hand) and flips the displayed X and Y axes. The left hand is already correct and
-# untouched.
-RIGHT_HAND_ORIENTATION_FIX = np.diag([-1.0, -1.0, 1.0])
-# Right-WRIST orientation fix (obs_wrist_pose, built in get_hand_keypoints from
-# aria's raw transform_device_wrist). The right wrist is mirrored relative to the
-# left, but with a DIFFERENT handedness than the ee-pose: here the displayed X and
-# Z axes are flipped (180° about the body y-axis, diag(-1,1,-1)) while Y is kept —
-# distinct from RIGHT_HAND_ORIENTATION_FIX (which flips X and Y). Verified by
-# matching the corrected right wrist to the left across several episodes. Left
-# wrist is already correct and untouched.
-RIGHT_WRIST_ORIENTATION_FIX = np.diag([-1.0, 1.0, -1.0])
 
 # ---------------------------------------------------------------------------
 # Aria 21-keypoint -> MANO 21-keypoint conversion (per-frame batched fit).

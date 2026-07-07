@@ -781,9 +781,9 @@ class ZarrWriter:
 
         Raises:
             ValueError: If no data is provided, if embodiment is not a valid
-                identifier (see §8), if intrinsics is not a non-empty
+                identifier (see §9), if intrinsics is not a non-empty
                 {camera_key: 3x4 K matrix} dict, or if extrinsics is neither None
-                nor a non-empty dict.
+                nor a non-empty {key: 4x4 transform} dict.
         """
         # Validate the embodiment up front (it is guaranteed to be consumed by
         # the reader via get_embodiment_id) so a bad/empty/typo'd value fails
@@ -794,20 +794,45 @@ class ZarrWriter:
             raise ValueError(
                 "embodiment must be one of "
                 f"{[m.name.lower() for m in EMBODIMENT]}, got {embodiment!r}. "
-                "See CONTRIBUTING_DATA.md §8."
+                "See CONTRIBUTING_DATA.md §9."
             )
         if not isinstance(intrinsics, dict) or not intrinsics:
             raise ValueError(
                 "Camera intrinsics must be a non-empty {camera_key: 3x4 K matrix} "
                 'dict for a contributed zarr episode, e.g. {"front_1": K}. '
-                "See CONTRIBUTING_DATA.md §5.4."
+                "See CONTRIBUTING_DATA.md §6.4."
             )
+        for cam_key, K in intrinsics.items():
+            try:
+                K_arr = np.asarray(K, dtype=np.float64)
+            except (TypeError, ValueError):
+                K_arr = None
+            if K_arr is None or K_arr.shape != (3, 4):
+                raise ValueError(
+                    f"intrinsics[{cam_key!r}] must be a 3x4 K matrix (the 3x3 "
+                    "pinhole K with a zero last column; pad a bare 3x3 with "
+                    "np.hstack([K, np.zeros((3, 1))])), got "
+                    f"{getattr(K_arr, 'shape', type(K).__name__)}. "
+                    "See CONTRIBUTING_DATA.md §6.4."
+                )
         if extrinsics is not None and (not isinstance(extrinsics, dict) or not extrinsics):
             raise ValueError(
                 "Camera extrinsics must be None or a non-empty dict mapping a key "
                 'to its transform matrix (robots key per-arm, e.g. {"left": T, '
-                '"right": T}). See CONTRIBUTING_DATA.md §5.4.'
+                '"right": T}). See CONTRIBUTING_DATA.md §6.3.'
             )
+        if extrinsics is not None:
+            for ext_key, T in extrinsics.items():
+                try:
+                    T_arr = np.asarray(T, dtype=np.float64)
+                except (TypeError, ValueError):
+                    T_arr = None
+                if T_arr is None or T_arr.shape != (4, 4):
+                    raise ValueError(
+                        f"extrinsics[{ext_key!r}] must be a 4x4 transform matrix, "
+                        f"got {getattr(T_arr, 'shape', type(T).__name__)}. "
+                        "See CONTRIBUTING_DATA.md §6.3."
+                    )
         writer = ZarrWriter(
             episode_path=episode_path,
             embodiment=embodiment,

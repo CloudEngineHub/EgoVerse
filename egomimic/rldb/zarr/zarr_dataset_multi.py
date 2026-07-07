@@ -1118,7 +1118,16 @@ class MultiDataset(torch.utils.data.Dataset):
             if os.path.isfile(precomputed_file):
                 with open(precomputed_file, "r") as f:
                     payload = json.load(f)
-                self.norm_stats[embodiment] = payload["stats"].get(str(embodiment), {})
+                if str(embodiment) not in payload["stats"]:
+                    raise ValueError(
+                        f"norm_stats file {precomputed_file} has no entry for "
+                        f"embodiment id {embodiment} (available: "
+                        f"{sorted(payload['stats'])}). Stats are keyed by numeric "
+                        "EMBODIMENT id, and ids were renumbered by the human/eva "
+                        "embodiment collapse — recompute norm stats instead of "
+                        "reusing a pre-collapse norm_stats.json."
+                    )
+                self.norm_stats[embodiment] = payload["stats"][str(embodiment)]
                 self._norm_run_metadata = payload.get("norm_run_metadata", None)
                 logger.info(
                     f"[MultiDataset] Loaded precomputed stats for embodiment={embodiment}"
