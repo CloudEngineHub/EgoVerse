@@ -78,7 +78,7 @@ def build_dataset(
     filters=None,  # base yaml may pass filters=null; ignored — we build our own
 ):
     """Build a dataset object based on `mode`:
-      - 'random' -> MultiDataset filtered by (task, robot_name)
+      - 'random' -> MultiDataset filtered by (task, embodiment)
       - 'pairs' / 'custom' -> EvenStrideDataset on the supplied hash list,
         subsampled by `frames_per_episode` (default) or `stride` (if set).
 
@@ -88,7 +88,7 @@ def build_dataset(
     if mode == "random":
         lam = (
             "lambda row: row['task'] == "
-            f"{task!r} and row['robot_name'] == {embodiment!r}"
+            f"{task!r} and row['embodiment'] == {embodiment!r}"
         )
         filters = DatasetFilter(filter_lambdas=[lam])
         logger.info("[build_dataset] %s | random mode | filter=%s", embodiment, lam)

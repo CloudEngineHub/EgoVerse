@@ -333,9 +333,11 @@ def build_tokenized_collate(
             for key, val in control_mode.items():
                 if key.lower() in emb_name:
                     return val
-        if emb_name is not None and "aria" in emb_name:
-            return "cam frame xyzypr per arm"
-        return "cam frame xyzypr gripper per arm"
+        raise ValueError(
+            f"control_mode has no entry matching embodiment {emb_name!r} "
+            f"(declared keys: {sorted(control_mode or {})}). Control modes "
+            "are declared per-embodiment in the data yaml; there is no fallback."
+        )
 
     def _discretize_sample_state(sample):
         if not proprio_keys:

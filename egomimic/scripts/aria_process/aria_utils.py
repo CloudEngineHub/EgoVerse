@@ -741,7 +741,10 @@ class AriaVRSExtractor:
                 ).T  # keypoints are in device frame
 
                 world_wrist_T = sp.SE3.from_matrix(
-                    T_rot_orientation(world_wrist_T.to_matrix(), T_ROT_CAM)
+                    T_rot_orientation(
+                        world_wrist_T.to_matrix(),
+                        T_ROT_CAM,
+                    )
                 )
                 wrist_quat_and_translation = quat_translation_swap(
                     world_wrist_T.to_quat_and_translation()
@@ -932,7 +935,9 @@ class AriaVRSExtractor:
                 right_T_t = sp.SE3.from_matrix(right_T_t)
                 right_T_t = world_device_T_t @ right_T_t
                 right_T_t = sp.SE3.from_matrix(
-                    T_rot_orientation(right_T_t.to_matrix(), T_ROT_CAM)
+                    T_rot_orientation(
+                        right_T_t.to_matrix(), T_ROT_CAM
+                    )
                 )
                 right_quat_and_translation = quat_translation_swap(
                     right_T_t.to_quat_and_translation()
