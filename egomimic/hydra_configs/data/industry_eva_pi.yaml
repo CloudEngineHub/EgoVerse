@@ -16,8 +16,9 @@ train_datasets:
       transform_list:
         _target_: egomimic.rldb.embodiment.eva.Eva.get_transform_list
     filters:
-      robot_name: "eva_bimanual"
-      task: "fold_clothes"
+      _target_: egomimic.rldb.filters.DatasetFilter
+      filter_lambdas:
+        - "lambda row: row['embodiment'] == 'eva_bimanual' and row['task'] == 'fold_clothes'"
     mode: train
   human_bimanual:
     _target_: egomimic.rldb.zarr.zarr_dataset_multi.MultiDataset._from_resolver

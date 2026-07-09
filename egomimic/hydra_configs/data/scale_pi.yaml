@@ -14,7 +14,7 @@ train_datasets:
         stride: 1
     filters:
       filter_lambdas:
-        - "lambda row: ((row['task'] == 'Folding Clothes') | (row['task'] == '[flagship] Folding Clothes')) & (row['lab'] == 'scale') & (row['robot_name'] == 'scale_bimanual') & (row['is_deleted'] == false)"
+        - "lambda row: ((row['task'] == 'Folding Clothes') | (row['task'] == '[flagship] Folding Clothes')) & (row['lab'] == 'scale') & (row['embodiment'] == 'human_bimanual') & (row['is_deleted'] == false)"
     mode: train
 
 valid_datasets:
@@ -23,7 +23,7 @@ valid_datasets:
     resolver: ${train_datasets.human_bimanual.resolver}
     filters:
       task:
-        - "lambda row: ((row['task'] == 'Folding Clothes') | (row['task'] == '[flagship] Folding Clothes')) & (row['lab'] == 'scale') & (row['robot_name'] == 'scale_bimanual') & (row['is_deleted'] == false)"
+        - "lambda row: ((row['task'] == 'Folding Clothes') | (row['task'] == '[flagship] Folding Clothes')) & (row['lab'] == 'scale') & (row['embodiment'] == 'human_bimanual') & (row['is_deleted'] == false)"
     mode: valid
 
 train_dataloader_params:

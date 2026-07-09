@@ -22,7 +22,7 @@ train_datasets:
     filters:
       _target_: egomimic.rldb.filters.DatasetFilter
       filter_lambdas:
-        - "lambda row: row['robot_name'] == 'human_bimanual' and row['zarr_processed_path'] != ''"
+        - "lambda row: row['embodiment'] == 'human_bimanual' and row['zarr_processed_path'] != ''"
     mode: total
 
 valid_datasets:

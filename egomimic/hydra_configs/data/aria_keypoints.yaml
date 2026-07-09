@@ -14,8 +14,9 @@ train_datasets:
         mode: keypoints_headframe_ypr
         stride: 3
     filters:
-      robot_name: "human_bimanual"
-      task: "fold_clothes_indomain"
+      _target_: egomimic.rldb.filters.DatasetFilter
+      filter_lambdas:
+        - "lambda row: row['embodiment'] == 'human_bimanual' and row['task'] == 'fold_clothes_indomain'"
     mode: total
 
 valid_datasets:
