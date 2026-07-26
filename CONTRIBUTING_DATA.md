@@ -320,8 +320,8 @@ Provide these if your setup produces 3D hand estimates. Omit the entire key (do 
 
 | Key | Shape | Dtype | Frame | Notes |
 |---|---|---|---|---|
-| `left.obs_ee_pose` | `(T, 7)` | `float64` | SLAM world frame | Left hand end-effector (fingertip centroid or palm center) pose as XYZWXYZ |
-| `right.obs_ee_pose` | `(T, 7)` | `float64` | SLAM world frame | Right hand end-effector pose as XYZWXYZ |
+| `left.obs_ee_pose` | `(T, 7)` | `float64` | SLAM world frame | Left hand end-effector (fingertip centroid or palm center) pose as XYZWXYZ. If you have keypoints, derive this from them — see [Deriving `obs_ee_pose` from MANO keypoints](#deriving-obs_ee_pose-from-mano-keypoints-recommended) |
+| `right.obs_ee_pose` | `(T, 7)` | `float64` | SLAM world frame | Right hand end-effector pose as XYZWXYZ (same derivation guidance as the left) |
 | `left.obs_wrist_pose` | `(T, 7)` | `float64` | SLAM world frame | Left wrist origin pose as XYZWXYZ |
 | `right.obs_wrist_pose` | `(T, 7)` | `float64` | SLAM world frame | Right wrist origin pose as XYZWXYZ |
 | `left.obs_keypoints` | `(T, 63)` | `float64` | SLAM world frame | 21 hand landmarks × 3 (x, y, z); flattened row-major (see ordering below) |
@@ -337,6 +337,51 @@ Use the keypoints convention of MANO.
 ![MANO keypoints](mano_keypoints.png)
 
 If you need to convert your proprietary keypoints to MANO, try using [otaheri/MANO](https://github.com/otaheri/MANO).
+
+##### Deriving `obs_ee_pose` from MANO keypoints (recommended)
+
+**Derive `*.obs_ee_pose` from your fitted MANO keypoints rather than from a
+separately-estimated palm pose.** Hand trackers commonly ship a palm position +
+palm normal alongside the landmarks, and it is tempting to build the EE frame
+from those directly — but that estimate is much less well-conditioned than the
+keypoints. On Aria MPS data, the palm/normal-derived frame intermittently
+emitted near-flipped hands (orientation error p99 **138°**, max **178°**),
+whereas the same frame rebuilt from fitted MANO keypoints stays at p99 **9.4°**,
+max **21°** (10 episodes, 4,504 frames×hands). The keypoints are fitted jointly
+against 20 landmarks, so a single bad normal cannot flip them.
+
+EgoVerse provides this as `mano_keypoints_to_cartesian` in
+[`egomimic/scripts/aria_process/aria_utils.py`](egomimic/scripts/aria_process/aria_utils.py):
+
+```python
+from egomimic.scripts.aria_process.aria_utils import mano_keypoints_to_cartesian
+
+# mano_kp: (T, 63) canonical-MANO keypoints in the SLAM world frame,
+#          i.e. exactly what you store in <side>.obs_keypoints
+ee_pose = mano_keypoints_to_cartesian(mano_kp, is_rhand=True)   # -> (T, 7)
+```
+
+The frame is constructed from three landmarks-derived quantities:
+
+| Quantity | Definition |
+|---|---|
+| `wrist` | canonical MANO joint `0` |
+| `palm` | centroid of the four finger MCPs (joints `5, 9, 13, 17`) — MANO has no palm-center joint, so the knuckle centroid is its analogue; this is the pose translation |
+| `palm_normal` | `(index_MCP − wrist) × (pinky_MCP − wrist)`, **sign-flipped for the left hand** so it points out of the palm for both hands |
+
+Two things to get right if you reimplement it:
+
+- **Handedness.** The cross product mirrors between left and right, so using one
+  sign for both hands leaves one hand's normal pointing *into* the palm — a
+  ~180° error. Verify empirically per hand; a self-consistent comparison
+  (keypoint-derived vs keypoint-derived) will *not* catch a global sign error
+  because it cancels on both sides.
+- **Invalid frames.** Emit the `1e9` sentinel (not zeros) for frames whose
+  keypoints are missing/NaN or geometrically degenerate, matching the rest of
+  the schema.
+
+Output is `(T, 7)` as `XYZWXYZ` (translation then `w`-first quaternion), the same
+layout as every other pose key.
 
 #### Robot Arm Poses (if operating alongside a robot)
 
