@@ -83,6 +83,19 @@ MANO_WRIST_IDX = 0
 MANO_INDEX_MCP_IDX = 5
 MANO_PINKY_MCP_IDX = 17
 MANO_MCP_IDX = [5, 9, 13, 17]  # index, middle, ring, pinky knuckles
+# Palm origin = centroid of the wrist + the index/middle/ring knuckles.
+# The PINKY MCP is deliberately excluded: Aria's palm landmark sits toward the
+# radial (thumb) side, and including the pinky drags the centroid ulnar.
+# Measured against Aria's own palm landmark (raw kp 20), both hands:
+#     MCP centroid, no wrist   19.8mm   (lands ON the knuckle row, ~17mm distal
+#                                        of the palm -- the MCPs are ~coplanar)
+#     wrist + 4 MCPs           13.8mm
+#     wrist + idx/mid/ring     11.3mm   <- this one
+# It also improves orientation vs the aria-derived frame (4.65/5.30 -> 3.84/4.50
+# deg), since the origin sets the x-axis via (wrist - palm).
+# NB an *equidistant* (circumcentre) origin is far worse: the knuckles lie on a
+# shallow arc of ~139mm radius, so their circumcentre flies ~131mm off the hand.
+MANO_PALM_IDX = [0, 5, 9, 13]
 
 
 def _default_mano_model_dir() -> str:
@@ -335,9 +348,12 @@ def mano_keypoints_to_cartesian(
     Frame construction (mirrors `get_ee_pose`'s convention so the output is
     drop-in compatible with the MPS-derived pose it replaces):
       wrist       = canonical MANO joint 0
-      palm        = centroid of the four finger MCPs; MANO has no palm-center
-                    joint (Aria's palm-center landmark is dropped by the fit),
-                    and the knuckle centroid is its geometric analogue
+      palm        = centroid of the wrist + index/middle/ring MCPs (pinky
+                    excluded); MANO has no palm-center joint, as Aria's
+                    palm-center landmark is dropped by the fit. The MCPs alone
+                    are ~coplanar along the knuckle row so their centroid sits on
+                    that row, ~17mm distal of the palm centre, and the pinky
+                    drags it ulnar. See MANO_PALM_IDX for the measured ranking.
       palm_normal = (index_MCP - wrist) x (pinky_MCP - wrist), sign-flipped for
                     the left hand so it points out of the palm for BOTH hands
                     (the cross product mirrors between left and right)
@@ -361,7 +377,7 @@ def mano_keypoints_to_cartesian(
     kp = np.asarray(mano_kp_t63, dtype=np.float64).reshape(-1, 21, 3)
     n_frames = kp.shape[0]
     out = np.full((n_frames, 7), 1e9, dtype=np.float64)
-    needed = [MANO_WRIST_IDX, *MANO_MCP_IDX]
+    needed = MANO_PALM_IDX
     normal_sign = 1.0 if is_rhand else -1.0
 
     for t in range(n_frames):
@@ -369,7 +385,7 @@ def mano_keypoints_to_cartesian(
         if not np.isfinite(pts[needed]).all():
             continue
         wrist = pts[MANO_WRIST_IDX]
-        palm = pts[MANO_MCP_IDX].mean(axis=0)
+        palm = pts[MANO_PALM_IDX].mean(axis=0)
         normal = normal_sign * np.cross(
             pts[MANO_INDEX_MCP_IDX] - wrist, pts[MANO_PINKY_MCP_IDX] - wrist
         )

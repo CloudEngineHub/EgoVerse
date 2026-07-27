@@ -346,8 +346,8 @@ palm normal alongside the landmarks, and it is tempting to build the EE frame
 from those directly — but that estimate is much less well-conditioned than the
 keypoints. On Aria MPS data, the palm/normal-derived frame intermittently
 emitted near-flipped hands (orientation error p99 **138°**, max **178°**),
-whereas the same frame rebuilt from fitted MANO keypoints stays at p99 **9.4°**,
-max **21°** (10 episodes, 4,504 frames×hands). The keypoints are fitted jointly
+whereas the same frame rebuilt from fitted MANO keypoints stays at p99 **9.2°**,
+max **21°** (10 episodes, 4,504 frames×hands; mean 4.1°). The keypoints are fitted jointly
 against 20 landmarks, so a single bad normal cannot flip them.
 
 EgoVerse provides this as `mano_keypoints_to_cartesian` in
@@ -366,8 +366,30 @@ The frame is constructed from three landmarks-derived quantities:
 | Quantity | Definition |
 |---|---|
 | `wrist` | canonical MANO joint `0` |
-| `palm` | centroid of the four finger MCPs (joints `5, 9, 13, 17`) — MANO has no palm-center joint, so the knuckle centroid is its analogue; this is the pose translation |
+| `palm` | centroid of the **wrist and the index/middle/ring MCPs** (joints `0, 5, 9, 13`) — MANO has no palm-center joint, so this stands in for it; it is the pose translation. See the note below on why the pinky is excluded and the wrist included |
 | `palm_normal` | `(index_MCP − wrist) × (pinky_MCP − wrist)`, **sign-flipped for the left hand** so it points out of the palm for both hands |
+
+**Choosing the palm landmarks.** Which points you average matters, and the
+obvious choice is wrong. Measured against Aria's own palm-center landmark (raw
+keypoint 20, which the MANO fit never sees), both hands:
+
+| palm origin | err vs Aria palm landmark |
+|---|---|
+| the four MCPs alone | 19.8 mm |
+| wrist + all four MCPs | 13.8 mm |
+| **wrist + index/middle/ring MCPs** | **11.3 mm** |
+
+- **Include the wrist.** The four MCPs are roughly coplanar along the knuckle
+  row, so their centroid lands *on* that row — about 17 mm distal of the palm,
+  which is visibly wrong when you render the frame. The wrist pulls it back in.
+- **Exclude the pinky.** Aria's palm point sits toward the radial (thumb) side;
+  the pinky MCP drags the centroid ulnar.
+- **Do not use an equidistant/circumcentre point.** The knuckles lie on a very
+  shallow arc (~139 mm radius on a ~180 mm hand), so the point equidistant from
+  them sits ~131 mm off the hand entirely and is numerically unstable.
+
+Note the origin also sets the x-axis via `wrist − palm`, so this choice moves the
+orientation too — the recommended set is the best on both axes.
 
 Two things to get right if you reimplement it:
 
