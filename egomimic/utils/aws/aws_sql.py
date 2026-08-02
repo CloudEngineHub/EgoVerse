@@ -32,6 +32,7 @@ class TableRow:
     lab: str
     task: str
     embodiment: str
+    rig_name: str = ""  # physical capture rig (e.g. aria_gen1, eva, mecka)
     num_frames: int = -1  # Updateable
     task_description: str = ""
     scene: str = ""
