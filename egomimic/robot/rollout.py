@@ -16,7 +16,6 @@ from scipy.spatial.transform import Rotation as R
 from torch.utils.data import default_collate
 
 from egomimic.models.denoising_policy import DenoisingPolicy
-from egomimic.pl_utils.pl_data_utils import build_tokenized_collate
 from egomimic.pl_utils.pl_model import ModelWrapper
 from egomimic.rldb.embodiment.embodiment import get_embodiment
 from egomimic.rldb.embodiment.eva import Eva
@@ -271,13 +270,6 @@ class PolicyRollout(Rollout):
             else:
                 with open(annotation_path, "r") as f:
                     self.annotation = f.read().strip()
-                self.collate_fn = build_tokenized_collate(
-                    max_length=128,
-                    model_name="google/paligemma-3b-mix-224",
-                    sampling_mode="first",
-                    annotation_key="annotations",
-                    default_prompt=self.annotation,
-                )
 
     LOCAL_WEIGHT_PATH = (
         "/home/robot/robot_ws/egomimic/algo/pi_checkpoints/pi05_base_pytorch"
@@ -530,14 +522,6 @@ class PolicyRollout(Rollout):
             return False
         with open(annotation_path, "r") as f:
             self.annotation = f.read().strip()
-        if self.collate_fn is default_collate:
-            self.collate_fn = build_tokenized_collate(
-                max_length=128,
-                model_name="google/paligemma-3b-mix-224",
-                sampling_mode="first",
-                annotation_key="annotations",
-                default_prompt=self.annotation,
-            )
         print(
             f"[rollout] Loaded new annotation from {annotation_path}: '{self.annotation}'"
         )
