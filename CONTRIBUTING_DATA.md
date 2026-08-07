@@ -340,17 +340,15 @@ If you need to convert your proprietary keypoints to MANO, try using [otaheri/MA
 
 ##### Deriving `obs_ee_pose` from MANO keypoints (recommended)
 
-**Derive `*.obs_ee_pose` from your fitted MANO keypoints rather than from a
-separately-estimated palm pose.** Hand trackers commonly ship a palm position +
-palm normal alongside the landmarks, and it is tempting to build the EE frame
-from those directly — but that estimate is much less well-conditioned than the
-keypoints. On Aria MPS data, the palm/normal-derived frame intermittently
-emitted near-flipped hands (orientation error p99 **138°**, max **178°**),
-whereas the same frame rebuilt from fitted MANO keypoints stays at p99 **9.2°**,
-max **21°** (10 episodes, 4,504 frames×hands; mean 4.1°). The keypoints are fitted jointly
-against 20 landmarks, so a single bad normal cannot flip them.
-
-EgoVerse provides this as `mano_keypoints_to_cartesian` in
+**Derive `*.obs_ee_pose` from your fitted MANO keypoints.** The frame is built
+directly from the landmarks: the translation is a palm-center stand-in — the
+centroid of the wrist and the index/middle/ring MCPs (joints `0, 5, 9, 13`) —
+and the orientation is built from the wrist→palm direction plus a palm normal
+taken as `(index_MCP − wrist) × (pinky_MCP − wrist)`, sign-flipped for the left
+hand so the normal points out of the palm on both sides. Frames with missing or
+degenerate keypoints carry the `1e9` sentinel. Output is `(T, 7)` `XYZWXYZ`,
+the same layout as every other pose key. EgoVerse provides this as
+`mano_keypoints_to_cartesian` in
 [`egomimic/scripts/aria_process/aria_utils.py`](egomimic/scripts/aria_process/aria_utils.py):
 
 ```python
@@ -361,49 +359,6 @@ from egomimic.scripts.aria_process.aria_utils import mano_keypoints_to_cartesian
 ee_pose = mano_keypoints_to_cartesian(mano_kp, is_rhand=True)   # -> (T, 7)
 ```
 
-The frame is constructed from three landmarks-derived quantities:
-
-| Quantity | Definition |
-|---|---|
-| `wrist` | canonical MANO joint `0` |
-| `palm` | centroid of the **wrist and the index/middle/ring MCPs** (joints `0, 5, 9, 13`) — MANO has no palm-center joint, so this stands in for it; it is the pose translation. See the note below on why the pinky is excluded and the wrist included |
-| `palm_normal` | `(index_MCP − wrist) × (pinky_MCP − wrist)`, **sign-flipped for the left hand** so it points out of the palm for both hands |
-
-**Choosing the palm landmarks.** Which points you average matters, and the
-obvious choice is wrong. Measured against Aria's own palm-center landmark (raw
-keypoint 20, which the MANO fit never sees), both hands:
-
-| palm origin | err vs Aria palm landmark |
-|---|---|
-| the four MCPs alone | 19.8 mm |
-| wrist + all four MCPs | 13.8 mm |
-| **wrist + index/middle/ring MCPs** | **11.3 mm** |
-
-- **Include the wrist.** The four MCPs are roughly coplanar along the knuckle
-  row, so their centroid lands *on* that row — about 17 mm distal of the palm,
-  which is visibly wrong when you render the frame. The wrist pulls it back in.
-- **Exclude the pinky.** Aria's palm point sits toward the radial (thumb) side;
-  the pinky MCP drags the centroid ulnar.
-- **Do not use an equidistant/circumcentre point.** The knuckles lie on a very
-  shallow arc (~139 mm radius on a ~180 mm hand), so the point equidistant from
-  them sits ~131 mm off the hand entirely and is numerically unstable.
-
-Note the origin also sets the x-axis via `wrist − palm`, so this choice moves the
-orientation too — the recommended set is the best on both axes.
-
-Two things to get right if you reimplement it:
-
-- **Handedness.** The cross product mirrors between left and right, so using one
-  sign for both hands leaves one hand's normal pointing *into* the palm — a
-  ~180° error. Verify empirically per hand; a self-consistent comparison
-  (keypoint-derived vs keypoint-derived) will *not* catch a global sign error
-  because it cancels on both sides.
-- **Invalid frames.** Emit the `1e9` sentinel (not zeros) for frames whose
-  keypoints are missing/NaN or geometrically degenerate, matching the rest of
-  the schema.
-
-Output is `(T, 7)` as `XYZWXYZ` (translation then `w`-first quaternion), the same
-layout as every other pose key.
 
 #### Robot Arm Poses (if operating alongside a robot)
 
