@@ -76,6 +76,27 @@ _ARIA_INVALID_SENTINEL = 1e8
 
 ARIA_WRIST_IDX = 5  # palm-root/wrist index in Aria's 21-kp layout
 
+# Canonical MANO-21 landmarks used to build the hand cartesian frame:
+# 0 wrist | 1-4 thumb | 5-8 index | 9-12 middle | 13-16 ring | 17-20 pinky,
+# so the MCP (knuckle) of each finger is the first joint of its run.
+MANO_WRIST_IDX = 0
+MANO_INDEX_MCP_IDX = 5
+MANO_PINKY_MCP_IDX = 17
+MANO_MCP_IDX = [5, 9, 13, 17]  # index, middle, ring, pinky knuckles
+# Palm origin = centroid of the wrist + the index/middle/ring knuckles.
+# The PINKY MCP is deliberately excluded: Aria's palm landmark sits toward the
+# radial (thumb) side, and including the pinky drags the centroid ulnar.
+# Measured against Aria's own palm landmark (raw kp 20), both hands:
+#     MCP centroid, no wrist   19.8mm   (lands ON the knuckle row, ~17mm distal
+#                                        of the palm -- the MCPs are ~coplanar)
+#     wrist + 4 MCPs           13.8mm
+#     wrist + idx/mid/ring     11.3mm   <- this one
+# It also improves orientation vs the aria-derived frame (4.65/5.30 -> 3.84/4.50
+# deg), since the origin sets the x-axis via (wrist - palm).
+# NB an *equidistant* (circumcentre) origin is far worse: the knuckles lie on a
+# shallow arc of ~139mm radius, so their circumcentre flies ~131mm off the hand.
+MANO_PALM_IDX = [0, 5, 9, 13]
+
 
 def _default_mano_model_dir() -> str:
     repo_root = Path(__file__).resolve().parents[3]
@@ -104,8 +125,8 @@ def fit_mano_to_aria_batched(
     is_rhand: bool,
     model_dir: str | None = None,
     device: torch.device | str | None = None,
-    n_iters: int = 400,
-    lr: float = 0.02,
+    n_iters: int = 2400,
+    lr: float = 0.05,
     beta_reg: float = 0.01,
     verbose: bool = False,
 ) -> torch.Tensor:
@@ -147,6 +168,10 @@ def fit_mano_to_aria_batched(
     t_global = init_translation.detach().clone().requires_grad_(True)
 
     opt = torch.optim.Adam([theta, beta, R_global, t_global], lr=lr)
+    # Cosine-decay the LR to 5% of peak over the budget. A constant high LR
+    # oscillates at long iteration counts and degrades the fit (~5.2mm vs 4.7mm
+    # corresponded-finger err); the decay is load-bearing, not optional.
+    sched = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=n_iters, eta_min=lr * 0.05)
 
     aria_idx_t = torch.tensor(ARIA_IDX_USED, device=device, dtype=torch.long)
     mano_idx_t = torch.tensor(MANO_IDX_TARGET, device=device, dtype=torch.long)
@@ -171,6 +196,7 @@ def fit_mano_to_aria_batched(
         opt.zero_grad(set_to_none=True)
         loss.backward()
         opt.step()
+        sched.step()
         if verbose and (step % 50 == 0 or step == n_iters - 1):
             print(f"    iter {step:4d}  pos={pos_loss.item():.5f}  reg={reg_loss.item():.5f}")
 
@@ -196,8 +222,8 @@ def convert_aria_keypoints_to_mano(
     is_rhand: bool,
     model_dir: str | None = None,
     device: torch.device | str | None = None,
-    n_iters: int = 400,
-    lr: float = 0.02,
+    n_iters: int = 2400,
+    lr: float = 0.05,
     beta_reg: float = 0.01,
     chunk_size: int = 512,
     verbose: bool = False,
@@ -305,6 +331,84 @@ def compute_orientation_rotation_matrix(palm_pose, wrist_pose, palm_normal):
 
     rot_matrix = np.column_stack([-1 * x_axis, y_axis, z_axis])
     return rot_matrix
+
+
+def mano_keypoints_to_cartesian(
+    mano_kp_t63: np.ndarray,
+    is_rhand: bool,
+) -> np.ndarray:
+    """Derive the hand cartesian EE pose from fitted canonical-MANO keypoints.
+
+    The MANO fit is a much better-conditioned estimate of hand orientation than
+    Aria's raw MPS palm/wrist/normal triple: measured over 10 episodes, the MPS
+    pose intermittently produced near-flipped frames (orientation error p99 138
+    deg, max 178 deg) while the MANO-derived pose stays at p99 9.2 deg, max 21
+    deg. The EE pose is therefore built from the fitted keypoints.
+
+    Frame construction (mirrors `get_ee_pose`'s convention so the output is
+    drop-in compatible with the MPS-derived pose it replaces):
+      wrist       = canonical MANO joint 0
+      palm        = centroid of the wrist + index/middle/ring MCPs (pinky
+                    excluded); MANO has no palm-center joint, as Aria's
+                    palm-center landmark is dropped by the fit. The MCPs alone
+                    are ~coplanar along the knuckle row so their centroid sits on
+                    that row, ~17mm distal of the palm centre, and the pinky
+                    drags it ulnar. See MANO_PALM_IDX for the measured ranking.
+      palm_normal = (index_MCP - wrist) x (pinky_MCP - wrist), sign-flipped for
+                    the left hand so it points out of the palm for BOTH hands
+                    (the cross product mirrors between left and right)
+    `compute_orientation_rotation_matrix` then builds R exactly as the MPS path
+    does, T_ROT_CAM is applied, and the pose is returned as [xyz, quat wxyz].
+
+    Parameters
+    ----------
+    mano_kp_t63 : np.ndarray
+        (T, 63) canonical-MANO keypoints in WORLD frame — i.e. exactly what is
+        stored in the `<side>.obs_keypoints` zarr key.
+    is_rhand : bool
+        Right hand if True; selects the palm-normal sign.
+
+    Returns
+    -------
+    np.ndarray
+        (T, 7) EE pose per frame as [x, y, z, qw, qx, qy, qz]. Frames with
+        invalid/NaN keypoints keep the 1e9 sentinel used by the MPS extractors.
+    """
+    kp = np.asarray(mano_kp_t63, dtype=np.float64).reshape(-1, 21, 3)
+    n_frames = kp.shape[0]
+    out = np.full((n_frames, 7), 1e9, dtype=np.float64)
+    needed = MANO_PALM_IDX
+    normal_sign = 1.0 if is_rhand else -1.0
+
+    for t in range(n_frames):
+        pts = kp[t]
+        if not np.isfinite(pts[needed]).all():
+            continue
+        wrist = pts[MANO_WRIST_IDX]
+        palm = pts[MANO_PALM_IDX].mean(axis=0)
+        normal = normal_sign * np.cross(
+            pts[MANO_INDEX_MCP_IDX] - wrist, pts[MANO_PINKY_MCP_IDX] - wrist
+        )
+        # Degenerate (collapsed) hand -> leave the sentinel rather than emit a
+        # garbage frame; compute_orientation_rotation_matrix would divide by ~0.
+        if np.linalg.norm(normal) < 1e-9 or np.linalg.norm(wrist - palm) < 1e-9:
+            continue
+        rot_matrix = compute_orientation_rotation_matrix(
+            palm_pose=palm, wrist_pose=wrist, palm_normal=normal
+        )
+        if not np.isfinite(rot_matrix).all():
+            continue
+        pose_T = np.eye(4)
+        pose_T[:3, :3] = rot_matrix
+        pose_T[:3, 3] = palm
+        pose_T = T_rot_orientation(pose_T, T_ROT_CAM)
+        quat_and_translation = quat_translation_swap(
+            sp.SE3.from_matrix(pose_T).to_quat_and_translation()
+        )
+        if quat_and_translation.ndim == 2:
+            quat_and_translation = quat_and_translation[0]
+        out[t] = quat_and_translation
+    return out
 
 
 def downsample_hwc_uint8_in_chunks(
@@ -538,8 +642,15 @@ class AriaVRSExtractor:
             if convert_mano:
                 episode_feats["left.obs_aria_keypoints"] = left_raw_kp
                 print(f"[MANO] Fitting LEFT hand ({left_raw_kp.shape[0]} frames)...")
-                episode_feats["left.obs_keypoints"] = convert_aria_keypoints_to_mano(
+                left_mano_kp = convert_aria_keypoints_to_mano(
                     left_raw_kp, is_rhand=False, **mano_cfg
+                )
+                episode_feats["left.obs_keypoints"] = left_mano_kp
+                # The cartesian EE pose is derived from the fitted MANO
+                # keypoints, not Aria's MPS palm/wrist/normal triple (which
+                # intermittently emitted ~180deg-flipped frames).
+                episode_feats["left.obs_ee_pose"] = mano_keypoints_to_cartesian(
+                    left_mano_kp, is_rhand=False
                 )
             else:
                 episode_feats["left.obs_keypoints"] = left_raw_kp
@@ -560,8 +671,13 @@ class AriaVRSExtractor:
             if convert_mano:
                 episode_feats["right.obs_aria_keypoints"] = right_raw_kp
                 print(f"[MANO] Fitting RIGHT hand ({right_raw_kp.shape[0]} frames)...")
-                episode_feats["right.obs_keypoints"] = convert_aria_keypoints_to_mano(
+                right_mano_kp = convert_aria_keypoints_to_mano(
                     right_raw_kp, is_rhand=True, **mano_cfg
+                )
+                episode_feats["right.obs_keypoints"] = right_mano_kp
+                # See the left-hand note: cartesian comes from the MANO fit.
+                episode_feats["right.obs_ee_pose"] = mano_keypoints_to_cartesian(
+                    right_mano_kp, is_rhand=True
                 )
             else:
                 episode_feats["right.obs_keypoints"] = right_raw_kp

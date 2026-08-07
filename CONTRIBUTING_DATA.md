@@ -320,8 +320,8 @@ Provide these if your setup produces 3D hand estimates. Omit the entire key (do 
 
 | Key | Shape | Dtype | Frame | Notes |
 |---|---|---|---|---|
-| `left.obs_ee_pose` | `(T, 7)` | `float64` | SLAM world frame | Left hand end-effector (fingertip centroid or palm center) pose as XYZWXYZ |
-| `right.obs_ee_pose` | `(T, 7)` | `float64` | SLAM world frame | Right hand end-effector pose as XYZWXYZ |
+| `left.obs_ee_pose` | `(T, 7)` | `float64` | SLAM world frame | Left hand end-effector (fingertip centroid or palm center) pose as XYZWXYZ. If you have keypoints, derive this from them — see [Deriving `obs_ee_pose` from MANO keypoints](#deriving-obs_ee_pose-from-mano-keypoints-recommended) |
+| `right.obs_ee_pose` | `(T, 7)` | `float64` | SLAM world frame | Right hand end-effector pose as XYZWXYZ (same derivation guidance as the left) |
 | `left.obs_wrist_pose` | `(T, 7)` | `float64` | SLAM world frame | Left wrist origin pose as XYZWXYZ |
 | `right.obs_wrist_pose` | `(T, 7)` | `float64` | SLAM world frame | Right wrist origin pose as XYZWXYZ |
 | `left.obs_keypoints` | `(T, 63)` | `float64` | SLAM world frame | 21 hand landmarks × 3 (x, y, z); flattened row-major (see ordering below) |
@@ -337,6 +337,28 @@ Use the keypoints convention of MANO.
 ![MANO keypoints](mano_keypoints.png)
 
 If you need to convert your proprietary keypoints to MANO, try using [otaheri/MANO](https://github.com/otaheri/MANO).
+
+##### Deriving `obs_ee_pose` from MANO keypoints (recommended)
+
+**Derive `*.obs_ee_pose` from your fitted MANO keypoints.** The frame is built
+directly from the landmarks: the translation is a palm-center stand-in — the
+centroid of the wrist and the index/middle/ring MCPs (joints `0, 5, 9, 13`) —
+and the orientation is built from the wrist→palm direction plus a palm normal
+taken as `(index_MCP − wrist) × (pinky_MCP − wrist)`, sign-flipped for the left
+hand so the normal points out of the palm on both sides. Frames with missing or
+degenerate keypoints carry the `1e9` sentinel. Output is `(T, 7)` `XYZWXYZ`,
+the same layout as every other pose key. EgoVerse provides this as
+`mano_keypoints_to_cartesian` in
+[`egomimic/scripts/aria_process/aria_utils.py`](egomimic/scripts/aria_process/aria_utils.py):
+
+```python
+from egomimic.scripts.aria_process.aria_utils import mano_keypoints_to_cartesian
+
+# mano_kp: (T, 63) canonical-MANO keypoints in the SLAM world frame,
+#          i.e. exactly what you store in <side>.obs_keypoints
+ee_pose = mano_keypoints_to_cartesian(mano_kp, is_rhand=True)   # -> (T, 7)
+```
+
 
 #### Robot Arm Poses (if operating alongside a robot)
 

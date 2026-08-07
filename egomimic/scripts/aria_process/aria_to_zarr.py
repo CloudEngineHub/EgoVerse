@@ -55,8 +55,8 @@ class DatasetConverter:
         convert_mano: bool = True,
         mano_model_dir: str | None = None,
         mano_device: str | None = None,
-        mano_n_iters: int = 400,
-        mano_lr: float = 0.02,
+        mano_n_iters: int = 2400,
+        mano_lr: float = 0.05,
         mano_beta_reg: float = 0.01,
         mano_chunk_size: int = 512,
     ):
@@ -214,8 +214,8 @@ def main(args) -> None:
             convert_mano=getattr(args, "convert_mano", True),
             mano_model_dir=getattr(args, "mano_model_dir", None),
             mano_device=getattr(args, "mano_device", None),
-            mano_n_iters=getattr(args, "mano_iters", 400),
-            mano_lr=getattr(args, "mano_lr", 0.02),
+            mano_n_iters=getattr(args, "mano_iters", 2400),
+            mano_lr=getattr(args, "mano_lr", 0.05),
             mano_beta_reg=getattr(args, "mano_beta_reg", 0.01),
             mano_chunk_size=getattr(args, "mano_chunk_size", 512),
         )
@@ -316,9 +316,9 @@ def argument_parse():
         help="Device for the MANO fit (e.g. cuda, mps, cpu). Default: auto (cuda > mps > cpu).",
     )
     parser.add_argument(
-        "--mano-iters", type=int, default=400, help="Adam iterations per MANO fit chunk."
+        "--mano-iters", type=int, default=2400, help="Adam iterations per MANO fit chunk."
     )
-    parser.add_argument("--mano-lr", type=float, default=0.02, help="MANO fit learning rate.")
+    parser.add_argument("--mano-lr", type=float, default=0.05, help="MANO fit learning rate.")
     parser.add_argument(
         "--mano-beta-reg", type=float, default=0.01, help="L2 regularization on MANO shape betas."
     )
