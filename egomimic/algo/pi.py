@@ -236,8 +236,8 @@ class PI(Algo):
         """Sample one prompt per item from the raw annotation lists and
         splice in any of the active blocks. Returns ``batch_size`` strings.
 
-        Mirrors the prompt assembly previously done in
-        ``build_tokenized_collate``. Embodiment is known per-batch (one
+        Prompt assembly lives here rather than in a collate_fn because the
+        template is model-specific. Embodiment is known per-batch (one
         DataLoader per embodiment), so we don't re-derive it per sample.
         """
         if self.annotation_key is None or self.annotation_key not in _batch:
