@@ -342,7 +342,7 @@ def mano_keypoints_to_cartesian(
     The MANO fit is a much better-conditioned estimate of hand orientation than
     Aria's raw MPS palm/wrist/normal triple: measured over 10 episodes, the MPS
     pose intermittently produced near-flipped frames (orientation error p99 138
-    deg, max 178 deg) while the MANO-derived pose stays at p99 9.4 deg, max 21
+    deg, max 178 deg) while the MANO-derived pose stays at p99 9.2 deg, max 21
     deg. The EE pose is therefore built from the fitted keypoints.
 
     Frame construction (mirrors `get_ee_pose`'s convention so the output is
