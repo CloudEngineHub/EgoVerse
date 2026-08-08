@@ -1,9 +1,46 @@
+"""Legacy grab-bag. Moved symbols are re-exported for compatibility.
+
+Symbols that found a proper home now live in pose_utils / viz_utils /
+tensor_utils / utils / metrics and are re-exported below so existing
+imports keep working. What remains below has no home yet and no caller;
+removing it is handled separately.
+"""
+from egomimic.utils.metrics import (  # noqa: F401
+    frechet_gaussian_over_time,
+    reverse_kl_from_samples,
+)
+from egomimic.utils.pose_utils import (  # noqa: F401
+    base_frame_to_cam_frame,
+    cam_frame_to_base_frame,
+    cam_frame_to_cam_pixels,
+    ee_pose_to_cam_frame,
+    get_vector_from_yaw_pitch,
+    interpolate_arr,
+    interpolate_arr_euler,
+    pose_to_transform,
+    transform_to_pose,
+)
+from egomimic.utils.tensor_utils import (  # noqa: F401
+    EinOpsRearrange,
+    get_sinusoid_encoding_table,
+)
+from egomimic.utils.utils import (  # noqa: F401
+    STD_SCALE,
+    download_from_huggingface,
+    fmt,
+    str2bool,
+)
+from egomimic.utils.viz_utils import (  # noqa: F401
+    draw_actions,
+    draw_dot_on_frame,
+    get_gaze_endpoint,
+)
+
 import argparse
 import math
 import os
 from numbers import Number
 from pathlib import Path
-
 import cv2
 import einops
 import huggingface_hub
@@ -18,161 +55,7 @@ import torch.nn as nn
 import torchvision.transforms.functional as TF
 import torchvision.transforms.v2.functional as TVTF
 from scipy.spatial.transform import Rotation
-
 import egomimic
-
-STD_SCALE = 0.02
-
-## HPT Utils
-def get_sinusoid_encoding_table(position_start, position_end, d_hid):
-    """Sinusoid position encoding table"""
-
-    # Create position tensor
-    positions = torch.arange(position_start, position_end, dtype=torch.float32)
-
-    # Create division term for angles
-    div_term = torch.exp(
-        torch.arange(0, d_hid, 2).float() * (-math.log(10000.0) / d_hid)
-    )
-
-    # Create empty table
-    sinusoid_table = torch.zeros((position_end - position_start, d_hid))
-
-    # Fill even indices with sin and odd indices with cos
-    sinusoid_table[:, 0::2] = torch.sin(positions.unsqueeze(1) * div_term)
-    sinusoid_table[:, 1::2] = torch.cos(positions.unsqueeze(1) * div_term[: d_hid // 2])
-
-    return sinusoid_table.unsqueeze(0)
-
-
-def reverse_kl_from_samples(pred_samples, targets):
-    M, B, T, D = pred_samples.shape
-
-    TD = T * D
-    const = -0.5 * TD * math.log(2.0 * math.pi)
-
-    A = pred_samples.permute(1, 0, 2, 3).reshape(B, M, TD)  # (B,M,TD)
-    MU = targets.reshape(B, 1, TD)  # (B,1,TD)
-
-    d2 = torch.cdist(A, A).pow(2)  # (B,M,M)
-    log_q_each = torch.logsumexp(const - 0.5 * d2, dim=-1) - math.log(M)  # (B,M)
-
-    d2p = ((A - MU) ** 2).sum(dim=-1)  # (B,M)
-    log_p_each = const - 0.5 * d2p  # (B,M)
-
-    rkl_each = (log_q_each - log_p_each).mean(dim=-1)  # (B,)
-    return rkl_each.mean()
-
-
-def frechet_gaussian_over_time(
-    pred: torch.Tensor,
-    tgt: torch.Tensor,
-    *,
-    squared: bool = False,
-    return_stats: bool = False,
-    eps: float = 1e-6,
-):
-    """
-    Gaussian Fréchet (Bures / 2-Wasserstein) distance between the empirical
-    time-distributions of pred and tgt, computed per sample.
-
-    Args:
-        pred: Tensor of shape (B, T, D) or (B, T, ...).
-        tgt : Tensor of shape (B, T, D) or (B, T, ...).
-        squared: If True, return W2^2 instead of W2.
-        return_stats: If True, also return {'avg','min','max'} over batch.
-        eps: Small jitter for numerical stability (eigenvalue clamp & cov reg).
-
-    Returns:
-        dist: Tensor (B,) of per-sample distances (W2 or W2^2).
-        stats (optional): {'avg': float, 'min': float, 'max': float}
-    """
-    assert pred.shape[:2] == tgt.shape[:2], "pred/tgt must match in (B,T)"
-    B, T = pred.shape[:2]
-
-    pred = pred.to(torch.float32)
-    tgt = tgt.to(torch.float32)
-    if pred.ndim > 3:
-        D = int(torch.tensor(pred.shape[2:], device=pred.device).prod().item())
-        X = pred.reshape(B, T, D)
-        Y = tgt.reshape(B, T, D)
-    else:
-        _, _, D = pred.shape
-        X, Y = pred, tgt
-
-    # Means
-    m1 = X.mean(dim=1)  # (B,D)
-    m2 = Y.mean(dim=1)  # (B,D)
-
-    # Covariances
-    if T <= 1:
-        C1 = torch.zeros(B, D, D, device=X.device, dtype=X.dtype)
-        C2 = torch.zeros(B, D, D, device=X.device, dtype=X.dtype)
-    else:
-        Xc = X - m1.unsqueeze(1)
-        Yc = Y - m2.unsqueeze(1)
-        C1 = (Xc.transpose(1, 2) @ Xc) / (T - 1)
-        C2 = (Yc.transpose(1, 2) @ Yc) / (T - 1)
-
-    eye = torch.eye(D, device=X.device, dtype=X.dtype).expand(B, D, D)
-    C1 = C1 + eps * eye
-    C2 = C2 + eps * eye
-
-    # Symmetric sqrt via eigendecomp
-    w2, V2 = torch.linalg.eigh(C2)
-    w2 = torch.clamp(w2, min=eps)
-    C2_sqrt = V2 @ torch.diag_embed(torch.sqrt(w2)) @ V2.transpose(-1, -2)
-
-    inner = C2_sqrt @ C1 @ C2_sqrt
-    w_inner, V_inner = torch.linalg.eigh(inner.to(torch.float32))
-    w_inner = torch.clamp(w_inner, min=eps)
-    inner_sqrt = (
-        V_inner @ torch.diag_embed(torch.sqrt(w_inner)) @ V_inner.transpose(-1, -2)
-    )
-
-    # Fréchet formula
-    mean_term = (m1 - m2).pow(2).sum(dim=1)  # (B,)
-    trace_term = (
-        C1.diagonal(dim1=-2, dim2=-1).sum(-1)
-        + C2.diagonal(dim1=-2, dim2=-1).sum(-1)
-        - 2.0 * inner_sqrt.diagonal(dim1=-2, dim2=-1).sum(-1)
-    )
-    w2_sq = torch.clamp(mean_term + trace_term, min=0.0)
-    dist = w2_sq if squared else torch.sqrt(w2_sq)
-
-    if return_stats:
-        return dist, {
-            "avg": dist.mean().item(),
-            "min": dist.min().item(),
-            "max": dist.max().item(),
-        }
-    return dist
-
-
-class EinOpsRearrange(nn.Module):
-    def __init__(self, rearrange_expr: str, **kwargs) -> None:
-        super().__init__()
-        self.rearrange_expr = rearrange_expr
-        self.kwargs = kwargs
-
-    def forward(self, x):
-        assert isinstance(x, torch.Tensor)
-        return einops.rearrange(x, self.rearrange_expr, **self.kwargs)
-
-
-def download_from_huggingface(huggingface_repo_id: str):
-    folder = huggingface_hub.snapshot_download(huggingface_repo_id)
-    return folder
-
-
-def fmt(v):
-    # Convert to flat list of floats no matter the input shape/type
-    if isinstance(v, torch.Tensor):
-        v = v.flatten().tolist()
-    elif isinstance(v, np.ndarray):
-        v = v.flatten().tolist()
-    return ", ".join(f"{f:.2f}" for f in v)
-
 
 def draw_annotation_text(
     image: np.ndarray,
@@ -212,7 +95,6 @@ def draw_annotation_text(
     )
 
     return image
-
 
 def draw_rotation_text(
     image: np.ndarray,
@@ -304,66 +186,11 @@ def draw_rotation_text(
 
     return image
 
-
-def draw_actions(
-    im, type, color, actions, extrinsics, intrinsics, arm="both", kinematics_solver=None
-):
-    """
-    args:
-        im: (H, W, C)
-        type: "joints" or "xyz"
-        color: ex) "Purples", "Blues", "Greens"
-        actions: (N, 6) or (N, 3) if type is "xyz" or (N, 7) or (N, 14) if type is "joints"
-        extrinsics: dict with keys "left" and "right" with values (4, 4)
-        intrinsics: (3, 4)
-        arm: "both", "left", "right"
-    returns
-        im: (H, W, C)
-    """
-    if type == "joints" and kinematics_solver is None:
-        raise ValueError("kinematics_solver is required for joints actions")
-    if type == "joints":
-        if arm == "both":
-            right_actions = kinematics_solver.fk_pos(actions[:, 7:13])
-            right_actions_drawable = ee_pose_to_cam_frame(
-                right_actions, extrinsics["right"]
-            )
-            left_actions = kinematics_solver.fk_pos(actions[:, :6])
-            left_actions_drawable = ee_pose_to_cam_frame(
-                left_actions, extrinsics["left"]
-            )
-            actions_drawable = np.concatenate(
-                (left_actions_drawable, right_actions_drawable), axis=0
-            )
-        elif arm == "right":
-            right_actions = kinematics_solver.fk_pos(actions[:, 7:13])
-            right_actions_drawable = ee_pose_to_cam_frame(
-                right_actions, extrinsics["right"]
-            )
-            actions_drawable = right_actions_drawable
-        elif arm == "left":
-            left_actions = kinematics_solver.fk_pos(actions[:, :6])
-            left_actions_drawable = ee_pose_to_cam_frame(
-                left_actions, extrinsics["left"]
-            )
-            actions_drawable = left_actions_drawable
-    else:
-        actions = actions.reshape(-1, 3)
-        actions_drawable = actions
-
-    actions_drawable = cam_frame_to_cam_pixels(actions_drawable, intrinsics)
-    im = draw_dot_on_frame(im, actions_drawable, show=False, palette=color)
-
-    return im
-
-
 def is_key(x):
     return hasattr(x, "keys") and callable(x.keys)
 
-
 def is_listy(x):
     return isinstance(x, list)
-
 
 def nds_pq(file_path):
     """
@@ -390,23 +217,6 @@ def nds_pq(file_path):
             print("No nested headers found.")
     except Exception as e:
         print(f"An error occurred: {e}")
-
-
-nested_ds_pq = nds_pq
-nds_parquet = nds_pq
-nested_ds_parquet = nds_pq
-
-
-def str2bool(value):
-    if isinstance(value, bool):
-        return value
-    value = value.lower()
-    if value in ("yes", "true", "t", "y", "1"):
-        return True
-    if value in ("no", "false", "f", "n", "0"):
-        return False
-    raise argparse.ArgumentTypeError("Boolean value expected.")
-
 
 def nds(nested_ds, tab_level=0):
     """
@@ -438,57 +248,6 @@ def nds(nested_ds, tab_level=0):
         print("Index[0]", end="")
         nds(nested_ds[0], tab_level + 1)
 
-
-def ee_pose_to_cam_frame(ee_pose_base, T_cam_base):
-    """
-    ee_pose_base: (N, 3)
-    T_cam_base: (4, 4)
-
-    returns ee_pose_cam: (N, 3)
-    """
-    N, _ = ee_pose_base.shape
-    ee_pose_base = np.concatenate([ee_pose_base, np.ones((N, 1))], axis=1)
-
-    ee_pose_grip_cam = np.linalg.inv(T_cam_base) @ ee_pose_base.T
-    return ee_pose_grip_cam.T[:, :3]
-
-
-def base_frame_to_cam_frame(base_frame, T_cam_base):
-    """
-    base_frame: (N, 6) (x, y, z, yaw, pitch, roll)
-    T_cam_base: (4, 4)
-
-    returns cam_frame: (N, 6) (x, y, z, yaw, pitch, roll)
-    """
-    N, _ = base_frame.shape
-    se3 = np.zeros((N, 4, 4))
-    se3[:, :3, :3] = Rotation.from_euler("ZYX", base_frame[:, 3:6]).as_matrix()
-    se3[:, :3, 3] = base_frame[:, :3]
-    se3[:, 3, 3] = 1
-    cam_frame = np.linalg.inv(T_cam_base) @ se3
-    xyz = cam_frame[:, :3, 3]
-    ypr = Rotation.from_matrix(cam_frame[:, :3, :3]).as_euler("ZYX", degrees=False)
-    return np.concatenate([xyz, ypr], axis=1)
-
-
-def cam_frame_to_base_frame(cam_frame, T_cam_base):
-    """
-    cam_frame: (N, 6) (x, y, z, yaw, pitch, roll)
-    T_cam_base: (4, 4)
-
-    returns base_frame: (N, 6) (x, y, z, yaw, pitch, roll)
-    """
-    N, _ = cam_frame.shape
-    se3 = np.zeros((N, 4, 4))
-    se3[:, :3, :3] = Rotation.from_euler("ZYX", cam_frame[:, 3:6]).as_matrix()
-    se3[:, :3, 3] = cam_frame[:, :3]
-    se3[:, 3, 3] = 1
-    base_frame = T_cam_base @ se3
-    xyz = base_frame[:, :3, 3]
-    ypr = Rotation.from_matrix(base_frame[:, :3, :3]).as_euler("ZYX", degrees=False)
-    return np.concatenate([xyz, ypr], axis=1)
-
-
 def ee_orientation_to_cam_frame(ee_orientation_base, T_cam_base):
     """
     ee_orientation_base: (N, 3, 3) rotation matrices representing orientations in the base frame.
@@ -506,7 +265,6 @@ def ee_orientation_to_cam_frame(ee_orientation_base, T_cam_base):
         torch.tensor(ee_orientation_cam)
     )
     return ee_orientation_cam, batched_ypr
-
 
 def batched_rotation_matrices_to_euler_angles(batch_R):
     """
@@ -536,7 +294,6 @@ def batched_rotation_matrices_to_euler_angles(batch_R):
     euler_angles = euler_angles.view(batch_size, 3)
     return euler_angles
 
-
 def pose_transform(a_pose, T_a_b):
     """
     a_pose: (N, 3) series of poses in frame a
@@ -552,7 +309,6 @@ def pose_transform(a_pose, T_a_b):
     ee_pose_grip_cam = T_a_b @ a_pose.T
     orig_shape[-1] += 1
     return ee_pose_grip_cam.T.reshape(orig_shape)
-
 
 def ee_pose_to_cam_pixels(ee_pose_base, T_cam_base, intrinsics):
     """
@@ -573,113 +329,6 @@ def ee_pose_to_cam_pixels(ee_pose_base, T_cam_base, intrinsics):
 
     return px_val.T
 
-
-def pose_to_transform(pose):
-    """
-    Convert a 6D pose [x, y, z, yaw, pitch, roll] into a 4x4 homogeneous transform.
-    Assumes Euler angles are in radians and follow ZYX (yaw-pitch-roll) order.
-    """
-    x, y, z, yaw, pitch, roll = pose
-
-    # Compute individual rotation matrices
-    Rz = np.array(
-        [[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]]
-    )
-    Ry = np.array(
-        [
-            [np.cos(pitch), 0, np.sin(pitch)],
-            [0, 1, 0],
-            [-np.sin(pitch), 0, np.cos(pitch)],
-        ]
-    )
-    Rx = np.array(
-        [[1, 0, 0], [0, np.cos(roll), -np.sin(roll)], [0, np.sin(roll), np.cos(roll)]]
-    )
-
-    # Combined rotation: note the multiplication order
-    R = Rz @ Ry @ Rx
-
-    # Assemble homogeneous transformation matrix
-    T = np.eye(4)
-    T[:3, :3] = R
-    T[:3, 3] = [x, y, z]
-    return T
-
-
-def transform_to_pose(T):
-    """
-    Convert a 4x4 homogeneous transform back to a 6D pose [x, y, z, yaw, pitch, roll].
-    Uses the ZYX (yaw-pitch-roll) convention.
-    """
-    x, y, z = T[:3, 3]
-    R = T[:3, :3]
-
-    # Extract pitch from the (3,1) element of R
-    pitch = np.arcsin(-R[2, 0])
-    # To avoid numerical issues, check for gimbal lock:
-    cos_pitch = np.cos(pitch)
-    if np.abs(cos_pitch) > 1e-6:
-        yaw = np.arctan2(R[1, 0], R[0, 0])
-        roll = np.arctan2(R[2, 1], R[2, 2])
-    else:
-        # Gimbal lock: arbitrarily set yaw=0
-        yaw = 0
-        roll = np.arctan2(-R[0, 1], R[1, 1])
-    return np.array([x, y, z, yaw, pitch, roll])
-
-
-def cam_frame_to_cam_pixels(ee_pose_cam, intrinsics):
-    """
-    camera frame 3d coordinates to pixels in camera frame
-    ee_pose_cam: (N, 3)
-    intrinsics: 3x4 matrix
-    """
-    N, _ = ee_pose_cam.shape
-    ee_pose_cam = np.concatenate([ee_pose_cam, np.ones((N, 1))], axis=1)
-    # print("3d pos in cam frame: ", ee_pose_cam)
-
-    # print("intrinsics: ", intrinsics.shape, ee_pose_cam.shape)
-    px_val = intrinsics @ ee_pose_cam.T
-    px_val = px_val / px_val[2, :]
-    # print("2d pos cam frame: ", px_val)
-
-    return px_val.T
-
-
-def draw_dot_on_frame(frame, pixel_vals, show=True, palette="Purples", dot_size=5):
-    """
-    frame: (H, W, C) numpy array
-    pixel_vals: (N, 2) numpy array of pixel values to draw on frame
-    Drawn in light to dark order
-    """
-    frame = frame.astype(np.uint8).copy()
-    if isinstance(pixel_vals, tuple):
-        pixel_vals = [pixel_vals]
-
-    # get purples color palette, and color the circles accordingly
-    color_palette = plt.get_cmap(palette)
-    color_palette = color_palette(np.linspace(0, 1, len(pixel_vals)))
-    color_palette = (color_palette[:, :3] * 255).astype(np.uint8)
-    color_palette = color_palette.tolist()
-
-    for i, pixel_val in enumerate(pixel_vals):
-        try:
-            frame = cv2.circle(
-                frame,
-                (int(pixel_val[0]), int(pixel_val[1])),
-                dot_size,
-                color_palette[i],
-                -1,
-            )
-        except Exception:
-            print("Got bad pixel_val: ", pixel_val)
-        if show:
-            plt.imshow(frame)
-            plt.show()
-
-    return frame
-
-
 def general_norm(array, min_val, max_val, arr_min=None, arr_max=None):
     if arr_min is None:
         arr_min = array.min()
@@ -688,10 +337,8 @@ def general_norm(array, min_val, max_val, arr_min=None, arr_max=None):
 
     return (max_val - min_val) * ((array - arr_min) / (arr_max - arr_min)) + min_val
 
-
 def general_unnorm(array, orig_min, orig_max, min_val, max_val):
     return ((array - min_val) / (max_val - min_val)) * (orig_max - orig_min) + orig_min
-
 
 def miniviewer(frame, goal_frame, location="top_right"):
     """
@@ -726,74 +373,12 @@ def miniviewer(frame, goal_frame, location="top_right"):
     # frame[:, :goal_frame.shape[1], -goal_frame.shape[2]:] = goal_frame
     return frame.permute((1, 2, 0)).numpy()
 
-
 def transformation_matrix_to_pose(T):
     R = T[:3, :3]
     p = T[:3, 3]
     rotation_quaternion = Rotation.from_matrix(R).as_quat()
     pose_array = np.concatenate((p, rotation_quaternion))
     return pose_array
-
-
-def interpolate_arr_euler(v: np.ndarray, seq_length: int) -> np.ndarray:
-    """
-    Interpolate 6DoF poses (translation + Euler angles in radians),
-    optionally with a 7th gripper dimension, along the time axis.
-
-    v: (B, T, 6) or (B, T, 7)
-        [x, y, z, yaw, pitch, roll, (optional) gripper]
-    """
-    assert v.ndim == 3 and v.shape[2] in (
-        6,
-        7,
-    ), "Input v must be of shape (B, T, 6) or (B, T, 7)"
-    B, T, D = v.shape
-
-    new_time = np.linspace(0, 1, seq_length)
-    old_time = np.linspace(0, 1, T)
-
-    outputs = []
-
-    for i in range(B):
-        seq = v[i]  # (T, D)
-
-        if np.any(seq >= 1e8):
-            outputs.append(np.full((seq_length, D), 1e9))
-            continue
-
-        trans_seq = seq[:, :3]  # x, y, z
-        rot_seq = seq[:, 3:6]  # yaw, pitch, roll
-
-        # Avoid discontinuities in angle interpolation
-        rot_seq_unwrapped = np.unwrap(rot_seq, axis=0)
-
-        trans_interp_func = scipy.interpolate.interp1d(
-            old_time, trans_seq, axis=0, kind="linear"
-        )
-        rot_interp_func = scipy.interpolate.interp1d(
-            old_time, rot_seq_unwrapped, axis=0, kind="linear"
-        )
-
-        trans_interp = trans_interp_func(new_time)  # (seq_length, 3)
-        rot_interp = rot_interp_func(new_time)  # (seq_length, 3)
-
-        # Wrap back to [-pi, pi)
-        rot_interp = (rot_interp + np.pi) % (2 * np.pi) - np.pi
-
-        if D == 6:
-            out_seq = np.concatenate([trans_interp, rot_interp], axis=-1)
-        else:
-            grip_seq = seq[:, 6:7]  # (T, 1)
-            grip_interp_func = scipy.interpolate.interp1d(
-                old_time, grip_seq, axis=0, kind="linear"
-            )
-            grip_interp = grip_interp_func(new_time)  # (seq_length, 1)
-            out_seq = np.concatenate([trans_interp, rot_interp, grip_interp], axis=-1)
-
-        outputs.append(out_seq)
-
-    return np.stack(outputs, axis=0)  # (B, seq_length, D)
-
 
 class AlohaFK:
     def __init__(self, robot="arx"):
@@ -820,14 +405,12 @@ class AlohaFK:
 
         return self.chain.forward_kinematics(qpos, end_only=True).get_matrix()[:, :3, 3]
 
-
 def robo_to_aria_imstyle(im):
     im = TVTF.adjust_hue(im, -0.05)
     im = TVTF.adjust_saturation(im, 1.2)
     im = apply_vignette(im, exponent=1)
 
     return im
-
 
 def create_vignette_mask(height, width, exponent=2):
     """
@@ -841,7 +424,6 @@ def create_vignette_mask(height, width, exponent=2):
     mask = 1 - torch.pow(radius, exponent)
     mask = torch.clamp(mask, 0, 1)
     return mask
-
 
 def apply_vignette(image_tensor, exponent=2):
     """
@@ -857,7 +439,6 @@ def apply_vignette(image_tensor, exponent=2):
     )  # Expand to match the batch of images
     vignette_mask = vignette_mask.to(image_tensor.device)
     return image_tensor * vignette_mask
-
 
 def add_extra_train_splits(data, split_percentages):
     """
@@ -880,28 +461,6 @@ def add_extra_train_splits(data, split_percentages):
     for i in range(4):
         print(i)
         assert set(splits[i]).issubset(set(splits[i + 1]))
-
-
-def interpolate_arr(v, seq_length):
-    """
-    v: (B, T, D)
-    seq_length: int
-    """
-    assert len(v.shape) == 3
-    if v.shape[1] == seq_length:
-        return
-
-    interpolated = []
-    for i in range(v.shape[0]):
-        index = v[i]
-
-        interp = scipy.interpolate.interp1d(
-            np.linspace(0, 1, index.shape[0]), index, axis=0
-        )
-        interpolated.append(interp(np.linspace(0, 1, seq_length)))
-
-    return np.array(interpolated)
-
 
 def interpolate_keys(obs, keys, seq_length):
     """
@@ -926,7 +485,6 @@ def interpolate_keys(obs, keys, seq_length):
                 raise ValueError(
                     f"Interpolation failed for key: {k} with shape{k.shape}"
                 )
-
 
 def ypr_to_matrix(ypr):
     """Convert yaw-pitch-roll (ZYX) to rotation matrix. ypr: (..., 3) → (..., 3, 3)"""
@@ -982,7 +540,6 @@ def ypr_to_matrix(ypr):
 
     return Rz @ Ry @ Rx
 
-
 def matrix_to_ypr(R):
     """Convert rotation matrix to yaw-pitch-roll (ZYX). R: (..., 3, 3) → (..., 3)"""
     # Safe conversion for all angles
@@ -993,7 +550,6 @@ def matrix_to_ypr(R):
     roll = torch.atan2(R[..., 2, 1] / cos_pitch, R[..., 2, 2] / cos_pitch)
 
     return torch.stack([yaw, pitch, roll], dim=-1)
-
 
 def convert_to_cam_frame(pose_base: torch.Tensor, T_cam_base: torch.Tensor):
     """
@@ -1031,7 +587,6 @@ def convert_to_cam_frame(pose_base: torch.Tensor, T_cam_base: torch.Tensor):
 
     return torch.cat([pos_cam, ypr_cam], dim=-1)  # (B, T, 6)
 
-
 def transform_matrix_to_pose(mat: torch.Tensor) -> torch.Tensor:
     """
     Convert a (B, T, 4, 4) homogeneous transform matrix to (B, T, 6) [xyz + ypr]
@@ -1057,64 +612,3 @@ def transform_matrix_to_pose(mat: torch.Tensor) -> torch.Tensor:
     # Return pose: (B, T, 6)
     return torch.cat([xyz, ypr], dim=-1)
 
-
-def get_vector_from_yaw_pitch(
-    yaw_rads: float,
-    pitch_rads: float,
-    depth: float | None = None,
-) -> np.ndarray:
-    """
-    Convert yaw / pitch angles into a 3D gaze vector in CPF coordinates.
-
-    Args:
-        yaw_rads: Yaw angle in radians.
-        pitch_rads: Pitch angle in radians.
-        depth: Optional gaze distance. If provided, returns a vector with this
-            magnitude. If None, returns a unit vector.
-
-    Returns:
-        np.ndarray: (3,) gaze vector in CPF coordinates.
-    """
-    z = 1.0
-    x = np.tan(yaw_rads) * z
-    y = np.tan(pitch_rads) * z
-
-    direction = np.array([x, y, z], dtype=np.float64)
-    norm = np.linalg.norm(direction)
-    if norm == 0:
-        raise ValueError("Zero-length direction vector")
-
-    unit_dir = direction / norm
-
-    if depth is None:
-        return unit_dir
-    else:
-        return unit_dir * depth
-
-
-def get_gaze_endpoint(yaw_rads, pitch_rads, depth, T_cam_cpf):
-    """
-    Compute the 3D gaze endpoint in camera coordinates.
-
-    The gaze originates at the CPF origin, with direction defined by yaw/pitch,
-    and length set by depth. The endpoint is transformed from CPF to camera
-    frame using T_cam_cpf.
-
-    Args:
-        yaw_rads: Yaw angle in radians.
-        pitch_rads: Pitch angle in radians.
-        depth: Gaze vector magnitude.
-        T_cam_cpf: (4, 4) SE(3) homogeneous transform from CPF to camera frame.
-
-    Returns:
-        np.ndarray: (3,) gaze endpoint in camera coordinates.
-    """
-    gaze_vec_cpf = get_vector_from_yaw_pitch(yaw_rads, pitch_rads, depth)
-
-    T_cam_cpf = np.asarray(T_cam_cpf, dtype=np.float64)
-    if T_cam_cpf.shape != (4, 4):
-        raise ValueError(f"T_cam_cpf must be a 4x4 transform, got {T_cam_cpf.shape}")
-
-    endpoint_cpf_h = np.concatenate([gaze_vec_cpf, np.array([1.0], dtype=np.float64)])
-    endpoint_cam_h = T_cam_cpf @ endpoint_cpf_h
-    return endpoint_cam_h[:3]

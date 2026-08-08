@@ -3,12 +3,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 
-from egomimic.utils.egomimicUtils import (
-    cam_frame_to_cam_pixels,
-    draw_actions,
-    draw_dot_on_frame,
-    get_gaze_endpoint,
-)
+from egomimic.utils.pose_utils import cam_frame_to_cam_pixels
 from egomimic.utils.pose_utils import _split_action_pose, _split_keypoints
 
 
@@ -448,3 +443,119 @@ def _viz_annotations(image, annotations: list[str], **kwargs):
 
 def save_image(image: np.ndarray, path: str) -> None:
     cv2.imwrite(path, cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
+
+from egomimic.utils.pose_utils import ee_pose_to_cam_frame, get_vector_from_yaw_pitch
+
+
+# ---- moved from egomimicUtils.py (code unchanged) ----
+
+def draw_actions(
+    im, type, color, actions, extrinsics, intrinsics, arm="both", kinematics_solver=None
+):
+    """
+    args:
+        im: (H, W, C)
+        type: "joints" or "xyz"
+        color: ex) "Purples", "Blues", "Greens"
+        actions: (N, 6) or (N, 3) if type is "xyz" or (N, 7) or (N, 14) if type is "joints"
+        extrinsics: dict with keys "left" and "right" with values (4, 4)
+        intrinsics: (3, 4)
+        arm: "both", "left", "right"
+    returns
+        im: (H, W, C)
+    """
+    if type == "joints" and kinematics_solver is None:
+        raise ValueError("kinematics_solver is required for joints actions")
+    if type == "joints":
+        if arm == "both":
+            right_actions = kinematics_solver.fk_pos(actions[:, 7:13])
+            right_actions_drawable = ee_pose_to_cam_frame(
+                right_actions, extrinsics["right"]
+            )
+            left_actions = kinematics_solver.fk_pos(actions[:, :6])
+            left_actions_drawable = ee_pose_to_cam_frame(
+                left_actions, extrinsics["left"]
+            )
+            actions_drawable = np.concatenate(
+                (left_actions_drawable, right_actions_drawable), axis=0
+            )
+        elif arm == "right":
+            right_actions = kinematics_solver.fk_pos(actions[:, 7:13])
+            right_actions_drawable = ee_pose_to_cam_frame(
+                right_actions, extrinsics["right"]
+            )
+            actions_drawable = right_actions_drawable
+        elif arm == "left":
+            left_actions = kinematics_solver.fk_pos(actions[:, :6])
+            left_actions_drawable = ee_pose_to_cam_frame(
+                left_actions, extrinsics["left"]
+            )
+            actions_drawable = left_actions_drawable
+    else:
+        actions = actions.reshape(-1, 3)
+        actions_drawable = actions
+
+    actions_drawable = cam_frame_to_cam_pixels(actions_drawable, intrinsics)
+    im = draw_dot_on_frame(im, actions_drawable, show=False, palette=color)
+
+    return im
+
+def draw_dot_on_frame(frame, pixel_vals, show=True, palette="Purples", dot_size=5):
+    """
+    frame: (H, W, C) numpy array
+    pixel_vals: (N, 2) numpy array of pixel values to draw on frame
+    Drawn in light to dark order
+    """
+    frame = frame.astype(np.uint8).copy()
+    if isinstance(pixel_vals, tuple):
+        pixel_vals = [pixel_vals]
+
+    # get purples color palette, and color the circles accordingly
+    color_palette = plt.get_cmap(palette)
+    color_palette = color_palette(np.linspace(0, 1, len(pixel_vals)))
+    color_palette = (color_palette[:, :3] * 255).astype(np.uint8)
+    color_palette = color_palette.tolist()
+
+    for i, pixel_val in enumerate(pixel_vals):
+        try:
+            frame = cv2.circle(
+                frame,
+                (int(pixel_val[0]), int(pixel_val[1])),
+                dot_size,
+                color_palette[i],
+                -1,
+            )
+        except Exception:
+            print("Got bad pixel_val: ", pixel_val)
+        if show:
+            plt.imshow(frame)
+            plt.show()
+
+    return frame
+
+def get_gaze_endpoint(yaw_rads, pitch_rads, depth, T_cam_cpf):
+    """
+    Compute the 3D gaze endpoint in camera coordinates.
+
+    The gaze originates at the CPF origin, with direction defined by yaw/pitch,
+    and length set by depth. The endpoint is transformed from CPF to camera
+    frame using T_cam_cpf.
+
+    Args:
+        yaw_rads: Yaw angle in radians.
+        pitch_rads: Pitch angle in radians.
+        depth: Gaze vector magnitude.
+        T_cam_cpf: (4, 4) SE(3) homogeneous transform from CPF to camera frame.
+
+    Returns:
+        np.ndarray: (3,) gaze endpoint in camera coordinates.
+    """
+    gaze_vec_cpf = get_vector_from_yaw_pitch(yaw_rads, pitch_rads, depth)
+
+    T_cam_cpf = np.asarray(T_cam_cpf, dtype=np.float64)
+    if T_cam_cpf.shape != (4, 4):
+        raise ValueError(f"T_cam_cpf must be a 4x4 transform, got {T_cam_cpf.shape}")
+
+    endpoint_cpf_h = np.concatenate([gaze_vec_cpf, np.array([1.0], dtype=np.float64)])
+    endpoint_cam_h = T_cam_cpf @ endpoint_cpf_h
+    return endpoint_cam_h[:3]
