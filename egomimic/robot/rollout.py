@@ -11,7 +11,7 @@ import cv2
 import h5py
 import numpy as np
 import torch
-from robot_utils import RateLoop
+from egomimic.robot.robot_utils import RateLoop
 from scipy.spatial.transform import Rotation as R
 from torch.utils.data import default_collate
 

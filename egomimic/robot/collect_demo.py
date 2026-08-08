@@ -22,7 +22,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), "oculus_reader"))
 from oculus_reader import OculusReader
 
 # Import local modules
-from robot_utils import RateLoop
+from egomimic.robot.robot_utils import RateLoop
 
 # Add path to robot_interface
 sys.path.append(os.path.join(os.path.dirname(__file__), "eva/eva_ws/src/eva"))
