@@ -13,7 +13,7 @@ from torch import einsum
 from torchvision import transforms
 from transformers import T5Model, T5Tokenizer
 
-from egomimic.utils.egomimicUtils import get_sinusoid_encoding_table
+from egomimic.utils.tensor_utils import get_sinusoid_encoding_table
 
 
 ## Taken directly from hpt/models/transformer with no modifications

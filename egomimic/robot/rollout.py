@@ -20,12 +20,8 @@ from egomimic.pl_utils.pl_model import ModelWrapper
 from egomimic.rldb.embodiment.embodiment import get_embodiment
 from egomimic.rldb.embodiment.eva import Eva
 from egomimic.rldb.embodiment.human import Human
-from egomimic.utils.egomimicUtils import (
-    cam_frame_to_base_frame,
-    draw_actions,
-    interpolate_arr,
-    interpolate_arr_euler,
-)
+from egomimic.utils.pose_utils import cam_frame_to_base_frame, interpolate_arr, interpolate_arr_euler
+from egomimic.utils.viz_utils import draw_actions
 from egomimic.utils.pose_utils import xyzw_to_wxyz
 
 sys.path.append(os.path.join(os.path.dirname(__file__), "eva/eva_ws/src/eva"))
