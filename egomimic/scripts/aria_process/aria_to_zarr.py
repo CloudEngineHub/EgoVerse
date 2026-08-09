@@ -11,7 +11,7 @@ from egomimic.rldb.embodiment.human import ARIA_INTRINSICS
 from egomimic.rldb.zarr.zarr_writer import ZarrWriter
 from egomimic.scripts.aria_process.aria_utils import AriaVRSExtractor
 from egomimic.utils.aws.aws_sql import timestamp_ms_to_episode_hash
-from egomimic.utils.utils import str2bool
+from egomimic.utils.type_utils import str2bool
 from egomimic.utils.video_utils import save_preview_mp4
 
 logger = logging.getLogger(__name__)

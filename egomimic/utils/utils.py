@@ -120,34 +120,6 @@ def get_metric_value(
 
     return metric_value
 
-import argparse
-import huggingface_hub
-import numpy as np
-import torch
 
 
 # ---- moved from egomimicUtils.py (code unchanged) ----
-
-STD_SCALE = 0.02
-
-def download_from_huggingface(huggingface_repo_id: str):
-    folder = huggingface_hub.snapshot_download(huggingface_repo_id)
-    return folder
-
-def fmt(v):
-    # Convert to flat list of floats no matter the input shape/type
-    if isinstance(v, torch.Tensor):
-        v = v.flatten().tolist()
-    elif isinstance(v, np.ndarray):
-        v = v.flatten().tolist()
-    return ", ".join(f"{f:.2f}" for f in v)
-
-def str2bool(value):
-    if isinstance(value, bool):
-        return value
-    value = value.lower()
-    if value in ("yes", "true", "t", "y", "1"):
-        return True
-    if value in ("no", "false", "f", "n", "0"):
-        return False
-    raise argparse.ArgumentTypeError("Boolean value expected.")
