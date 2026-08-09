@@ -62,7 +62,7 @@ from .views import ACCENT, BORDER, CANVAS, CARD_STYLE, LABEL_STYLE, MUTED, PANEL
 # The embodiment classes pull in the `projectaria_tools` stack; that's present in
 # the egomimic env (skynet) but optional in the standalone viz venv, so the import
 # is guarded — if it's unavailable the overlay falls back to the badge.
-from egomimic.utils.egomimicUtils import ee_pose_to_cam_frame
+from egomimic.utils.pose_utils import ee_pose_to_cam_frame
 
 logger = logging.getLogger(__name__)
 

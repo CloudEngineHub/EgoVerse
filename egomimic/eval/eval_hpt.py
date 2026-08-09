@@ -5,10 +5,7 @@ from torchmetrics import MeanSquaredError
 
 from egomimic.eval.eval_video import EvalVideo
 from egomimic.rldb.embodiment.embodiment import Embodiment, get_embodiment
-from egomimic.utils.egomimicUtils import (
-    frechet_gaussian_over_time,
-    reverse_kl_from_samples,
-)
+from egomimic.utils.metrics import frechet_gaussian_over_time, reverse_kl_from_samples
 
 
 class HPTEvalVideo(EvalVideo):

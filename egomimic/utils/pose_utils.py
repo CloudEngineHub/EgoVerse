@@ -255,3 +255,237 @@ def _split_keypoints(keypoints, wrist_in_data: bool = False, is_quat: bool = Tru
         left_keypoints = keypoints[..., :63]
         right_keypoints = keypoints[..., 63:]
         return left_keypoints, right_keypoints
+
+from scipy.spatial.transform import Rotation
+import scipy
+
+
+# ---- moved from egomimicUtils.py (code unchanged) ----
+
+def ee_pose_to_cam_frame(ee_pose_base, T_cam_base):
+    """
+    ee_pose_base: (N, 3)
+    T_cam_base: (4, 4)
+
+    returns ee_pose_cam: (N, 3)
+    """
+    N, _ = ee_pose_base.shape
+    ee_pose_base = np.concatenate([ee_pose_base, np.ones((N, 1))], axis=1)
+
+    ee_pose_grip_cam = np.linalg.inv(T_cam_base) @ ee_pose_base.T
+    return ee_pose_grip_cam.T[:, :3]
+
+def base_frame_to_cam_frame(base_frame, T_cam_base):
+    """
+    base_frame: (N, 6) (x, y, z, yaw, pitch, roll)
+    T_cam_base: (4, 4)
+
+    returns cam_frame: (N, 6) (x, y, z, yaw, pitch, roll)
+    """
+    N, _ = base_frame.shape
+    se3 = np.zeros((N, 4, 4))
+    se3[:, :3, :3] = Rotation.from_euler("ZYX", base_frame[:, 3:6]).as_matrix()
+    se3[:, :3, 3] = base_frame[:, :3]
+    se3[:, 3, 3] = 1
+    cam_frame = np.linalg.inv(T_cam_base) @ se3
+    xyz = cam_frame[:, :3, 3]
+    ypr = Rotation.from_matrix(cam_frame[:, :3, :3]).as_euler("ZYX", degrees=False)
+    return np.concatenate([xyz, ypr], axis=1)
+
+def cam_frame_to_base_frame(cam_frame, T_cam_base):
+    """
+    cam_frame: (N, 6) (x, y, z, yaw, pitch, roll)
+    T_cam_base: (4, 4)
+
+    returns base_frame: (N, 6) (x, y, z, yaw, pitch, roll)
+    """
+    N, _ = cam_frame.shape
+    se3 = np.zeros((N, 4, 4))
+    se3[:, :3, :3] = Rotation.from_euler("ZYX", cam_frame[:, 3:6]).as_matrix()
+    se3[:, :3, 3] = cam_frame[:, :3]
+    se3[:, 3, 3] = 1
+    base_frame = T_cam_base @ se3
+    xyz = base_frame[:, :3, 3]
+    ypr = Rotation.from_matrix(base_frame[:, :3, :3]).as_euler("ZYX", degrees=False)
+    return np.concatenate([xyz, ypr], axis=1)
+
+def pose_to_transform(pose):
+    """
+    Convert a 6D pose [x, y, z, yaw, pitch, roll] into a 4x4 homogeneous transform.
+    Assumes Euler angles are in radians and follow ZYX (yaw-pitch-roll) order.
+    """
+    x, y, z, yaw, pitch, roll = pose
+
+    # Compute individual rotation matrices
+    Rz = np.array(
+        [[np.cos(yaw), -np.sin(yaw), 0], [np.sin(yaw), np.cos(yaw), 0], [0, 0, 1]]
+    )
+    Ry = np.array(
+        [
+            [np.cos(pitch), 0, np.sin(pitch)],
+            [0, 1, 0],
+            [-np.sin(pitch), 0, np.cos(pitch)],
+        ]
+    )
+    Rx = np.array(
+        [[1, 0, 0], [0, np.cos(roll), -np.sin(roll)], [0, np.sin(roll), np.cos(roll)]]
+    )
+
+    # Combined rotation: note the multiplication order
+    R = Rz @ Ry @ Rx
+
+    # Assemble homogeneous transformation matrix
+    T = np.eye(4)
+    T[:3, :3] = R
+    T[:3, 3] = [x, y, z]
+    return T
+
+def transform_to_pose(T):
+    """
+    Convert a 4x4 homogeneous transform back to a 6D pose [x, y, z, yaw, pitch, roll].
+    Uses the ZYX (yaw-pitch-roll) convention.
+    """
+    x, y, z = T[:3, 3]
+    R = T[:3, :3]
+
+    # Extract pitch from the (3,1) element of R
+    pitch = np.arcsin(-R[2, 0])
+    # To avoid numerical issues, check for gimbal lock:
+    cos_pitch = np.cos(pitch)
+    if np.abs(cos_pitch) > 1e-6:
+        yaw = np.arctan2(R[1, 0], R[0, 0])
+        roll = np.arctan2(R[2, 1], R[2, 2])
+    else:
+        # Gimbal lock: arbitrarily set yaw=0
+        yaw = 0
+        roll = np.arctan2(-R[0, 1], R[1, 1])
+    return np.array([x, y, z, yaw, pitch, roll])
+
+def cam_frame_to_cam_pixels(ee_pose_cam, intrinsics):
+    """
+    camera frame 3d coordinates to pixels in camera frame
+    ee_pose_cam: (N, 3)
+    intrinsics: 3x4 matrix
+    """
+    N, _ = ee_pose_cam.shape
+    ee_pose_cam = np.concatenate([ee_pose_cam, np.ones((N, 1))], axis=1)
+    # print("3d pos in cam frame: ", ee_pose_cam)
+
+    # print("intrinsics: ", intrinsics.shape, ee_pose_cam.shape)
+    px_val = intrinsics @ ee_pose_cam.T
+    px_val = px_val / px_val[2, :]
+    # print("2d pos cam frame: ", px_val)
+
+    return px_val.T
+
+def interpolate_arr_euler(v: np.ndarray, seq_length: int) -> np.ndarray:
+    """
+    Interpolate 6DoF poses (translation + Euler angles in radians),
+    optionally with a 7th gripper dimension, along the time axis.
+
+    v: (B, T, 6) or (B, T, 7)
+        [x, y, z, yaw, pitch, roll, (optional) gripper]
+    """
+    assert v.ndim == 3 and v.shape[2] in (
+        6,
+        7,
+    ), "Input v must be of shape (B, T, 6) or (B, T, 7)"
+    B, T, D = v.shape
+
+    new_time = np.linspace(0, 1, seq_length)
+    old_time = np.linspace(0, 1, T)
+
+    outputs = []
+
+    for i in range(B):
+        seq = v[i]  # (T, D)
+
+        if np.any(seq >= 1e8):
+            outputs.append(np.full((seq_length, D), 1e9))
+            continue
+
+        trans_seq = seq[:, :3]  # x, y, z
+        rot_seq = seq[:, 3:6]  # yaw, pitch, roll
+
+        # Avoid discontinuities in angle interpolation
+        rot_seq_unwrapped = np.unwrap(rot_seq, axis=0)
+
+        trans_interp_func = scipy.interpolate.interp1d(
+            old_time, trans_seq, axis=0, kind="linear"
+        )
+        rot_interp_func = scipy.interpolate.interp1d(
+            old_time, rot_seq_unwrapped, axis=0, kind="linear"
+        )
+
+        trans_interp = trans_interp_func(new_time)  # (seq_length, 3)
+        rot_interp = rot_interp_func(new_time)  # (seq_length, 3)
+
+        # Wrap back to [-pi, pi)
+        rot_interp = (rot_interp + np.pi) % (2 * np.pi) - np.pi
+
+        if D == 6:
+            out_seq = np.concatenate([trans_interp, rot_interp], axis=-1)
+        else:
+            grip_seq = seq[:, 6:7]  # (T, 1)
+            grip_interp_func = scipy.interpolate.interp1d(
+                old_time, grip_seq, axis=0, kind="linear"
+            )
+            grip_interp = grip_interp_func(new_time)  # (seq_length, 1)
+            out_seq = np.concatenate([trans_interp, rot_interp, grip_interp], axis=-1)
+
+        outputs.append(out_seq)
+
+    return np.stack(outputs, axis=0)  # (B, seq_length, D)
+
+def interpolate_arr(v, seq_length):
+    """
+    v: (B, T, D)
+    seq_length: int
+    """
+    assert len(v.shape) == 3
+    if v.shape[1] == seq_length:
+        return
+
+    interpolated = []
+    for i in range(v.shape[0]):
+        index = v[i]
+
+        interp = scipy.interpolate.interp1d(
+            np.linspace(0, 1, index.shape[0]), index, axis=0
+        )
+        interpolated.append(interp(np.linspace(0, 1, seq_length)))
+
+    return np.array(interpolated)
+
+def get_vector_from_yaw_pitch(
+    yaw_rads: float,
+    pitch_rads: float,
+    depth: float | None = None,
+) -> np.ndarray:
+    """
+    Convert yaw / pitch angles into a 3D gaze vector in CPF coordinates.
+
+    Args:
+        yaw_rads: Yaw angle in radians.
+        pitch_rads: Pitch angle in radians.
+        depth: Optional gaze distance. If provided, returns a vector with this
+            magnitude. If None, returns a unit vector.
+
+    Returns:
+        np.ndarray: (3,) gaze vector in CPF coordinates.
+    """
+    z = 1.0
+    x = np.tan(yaw_rads) * z
+    y = np.tan(pitch_rads) * z
+
+    direction = np.array([x, y, z], dtype=np.float64)
+    norm = np.linalg.norm(direction)
+    if norm == 0:
+        raise ValueError("Zero-length direction vector")
+
+    unit_dir = direction / norm
+
+    if depth is None:
+        return unit_dir
+    else:
+        return unit_dir * depth

@@ -8,10 +8,8 @@ import torchvision.io as io
 from egomimic.rldb.embodiment.eva import Eva
 from egomimic.rldb.embodiment.human import Human
 from egomimic.rldb.utils import RLDBDataset
-from egomimic.utils.egomimicUtils import (
-    cam_frame_to_base_frame,
-    draw_actions,
-)
+from egomimic.utils.pose_utils import cam_frame_to_base_frame
+from egomimic.utils.viz_utils import draw_actions
 
 # Load dataset
 root = "/home/robot/robot_ws/lerobot_data/lerobot_test"
