@@ -202,7 +202,11 @@ ts_ms = episode_hash_to_timestamp_ms("2026-01-12-03-47-29-664000")
 
 ## 5. Database Registry
 
-Every episode must be registered in the PostgreSQL `app.episodes` table **before** its Zarr store is uploaded. The registry is the authoritative index used by all download and training tooling.
+Every episode is registered in the PostgreSQL `app.episodes` table, the authoritative
+index used by all download and training tooling. **Registration is performed by the RL2
+team — external contributors do NOT need database access and should skip this section.**
+Deliver your episodes (`.zarr` stores + `.mp4` previews, with the attributes from §6) and
+we register them on ingest. The schema below is documented for RL2-internal use.
 
 ### 5.1 Schema
 
@@ -298,7 +302,11 @@ Each episode is a **Zarr v3 group** (a directory ending in `.zarr`) containing a
 
 ### 6.2 Required Arrays
 
-All arrays are indexed along axis 0 by frame index. Every array must have **exactly `total_frames` entries** along axis 0 (matching the value in `zarr.attrs["total_frames"]`).
+All arrays are indexed along axis 0 by frame index. **`zarr.attrs["total_frames"]` is the
+authoritative episode length**: every array covers frames `[0, total_frames)` along axis 0.
+Arrays MAY extend past `total_frames` with zero-padding (writers commonly pad to a chunk
+boundary — e.g. `ZarrWriter` pads to `chunk_timesteps`); consumers must slice
+`[:total_frames]` and never interpret the padded tail as data.
 
 #### Images
 
@@ -330,6 +338,11 @@ Provide these if your setup produces 3D hand estimates. Omit the entire key (do 
 **If your system only provides wrist pose (not full keypoints)**, include `*.obs_wrist_pose` and `*.obs_ee_pose` and omit `*.obs_keypoints`.
 
 **If your system provides only a single aggregate hand pose** (e.g. palm center from a depth sensor), populate `*.obs_ee_pose` only.
+
+**Additional arrays** beyond this schema are permitted (e.g. depth, stereo, 2D hand
+projections, quality masks): use clearly namespaced keys, declare each in the
+`features` attribute, and keep the required keys above intact. Undeclared extras may be
+ignored by ingest.
 
 Keypoint ordering (21 landmarks):
 Use the keypoints convention of MANO.
