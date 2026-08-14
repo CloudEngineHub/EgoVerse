@@ -134,25 +134,44 @@ uv pip install -e .
 
 ### 3.3 Credentials
 
-You need two things: AWS credentials for the episode registry (PostgreSQL via Secrets Manager) and Cloudflare R2 credentials for the data bucket.
+**External contributors (partner labs / vendors): you only need Cloudflare R2
+credentials for the data bucket — nothing else.** An RL2 team member will send
+them to you directly (DM), scoped to your upload prefix. You do NOT need AWS
+account keys, Secrets Manager, or database access (episode registration is
+handled by the RL2 team, see §5).
 
-**Step 1 — AWS keys (one-time, ask the consortium lead for these):**
+Set the credentials in your environment:
+
 ```bash
-aws configure
-# AccessKeyId: <provided by consortium>
-# SecretAccessKey: <provided by consortium>
-# Default region: us-east-2
-# Output format: (leave blank)
+export AWS_ACCESS_KEY_ID=<R2 access key from your RL2 contact>
+export AWS_SECRET_ACCESS_KEY=<R2 secret from your RL2 contact>
+export AWS_ENDPOINT_URL_S3=<R2 endpoint URL from your RL2 contact>
+export AWS_DEFAULT_REGION=auto
 ```
 
-**Step 2 — Fetch R2 and DB credentials:**
+Verify (should list your prefix, or return empty without erroring):
+
 ```bash
+aws s3 ls --endpoint-url "$AWS_ENDPOINT_URL_S3" s3://rldb/processed_v3/<your_prefix>/
+```
+
+Note the endpoint: plain `aws s3` against AWS servers will return AccessDenied —
+the bucket lives on R2, so every call needs `--endpoint-url`.
+
+**RL2-internal members** additionally need AWS credentials for the episode
+registry (PostgreSQL via Secrets Manager):
+
+```bash
+aws configure
+# AccessKeyId / SecretAccessKey: ask the consortium lead
+# Default region: us-east-2
 bash egomimic/utils/aws/setup_secret.sh
 # Writes ~/.egoverse_env with R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
 # AWS_ENDPOINT_URL_S3, SECRETS_ARN, etc.
 ```
 
-Verify your setup:
+Internal verification:
+
 ```python
 from egomimic.utils.aws.aws_data_utils import load_env
 from egomimic.utils.aws.aws_sql import create_default_engine
