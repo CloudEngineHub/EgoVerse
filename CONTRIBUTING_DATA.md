@@ -32,7 +32,7 @@ Every contributed episode must satisfy these check lists:
 |---|---|
 | **File format** | Zarr v3 store with specific key names, dtypes, and shapes |
 | **Coordinate frame** | All poses expressed in a consistent reference frame |
-| **Database record** | Consistent one row per episode registered in the PostgreSQL episode registry before upload |
+| **Database record** | One row per episode in the PostgreSQL episode registry (added by the RL2 team on ingest — external contributors skip this, see §5) |
 | **[Dataset Practices](#2-dataset-practices)** | Example: reducing idle times, check for data flaws |
 
 The pipeline at a glance:
