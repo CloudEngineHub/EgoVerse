@@ -358,11 +358,6 @@ Provide these if your setup produces 3D hand estimates. Omit the entire key (do 
 
 **If your system provides only a single aggregate hand pose** (e.g. palm center from a depth sensor), populate `*.obs_ee_pose` only.
 
-**Additional arrays** beyond this schema are permitted (e.g. depth, stereo, 2D hand
-projections, quality masks): use clearly namespaced keys, declare each in the
-`features` attribute, and keep the required keys above intact. Undeclared extras may be
-ignored by ingest.
-
 Keypoint ordering (21 landmarks):
 Use the keypoints convention of MANO.
 
