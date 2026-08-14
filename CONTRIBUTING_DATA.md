@@ -667,16 +667,30 @@ Notes:
 
 ### 10.1 S3 Path Convention
 
+**External contributors (partner labs / vendors): upload everything under your
+assigned company prefix —**
+
 ```
-s3://rldb/processed_v3/<embodiment_prefix>/<episode_hash>.zarr/
+s3://rldb/processed_v3/<company_name>/<episode_hash>.zarr/
 ```
+
+`<company_name>` is the short lowercase name your RL2 contact gives you along
+with your credentials (which are scoped to exactly this prefix — uploads
+anywhere else will be denied). Batch deliveries (e.g. a `.tar.zst` of many
+episodes) also go under this prefix.
+
+Example:
+```
+s3://rldb/processed_v3/acmecorp/2026-03-15-14-22-10-000000.zarr/
+```
+
+**RL2-internal uploads** use the embodiment prefix instead:
 
 | Embodiment | `<embodiment_prefix>` |
 |---|---|
 | `human_*` | `human` |
 | `eva_*` | `eva` |
 
-Examples:
 ```
 s3://rldb/processed_v3/human/2026-03-15-14-22-10-000000.zarr/
 s3://rldb/processed_v3/eva/2025-11-04-09-30-00-000000.zarr/
