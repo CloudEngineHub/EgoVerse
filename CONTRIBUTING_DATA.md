@@ -32,7 +32,7 @@ Every contributed episode must satisfy these check lists:
 |---|---|
 | **File format** | Zarr v3 store with specific key names, dtypes, and shapes |
 | **Coordinate frame** | All poses expressed in a consistent reference frame |
-| **Database record** | Consistent one row per episode registered in the PostgreSQL episode registry before upload |
+| **Database record** | One row per episode in the PostgreSQL episode registry (added by the RL2 team on ingest — external contributors skip this, see §5) |
 | **[Dataset Practices](#2-dataset-practices)** | Example: reducing idle times, check for data flaws |
 
 The pipeline at a glance:
@@ -134,25 +134,44 @@ uv pip install -e .
 
 ### 3.3 Credentials
 
-You need two things: AWS credentials for the episode registry (PostgreSQL via Secrets Manager) and Cloudflare R2 credentials for the data bucket.
+**External contributors (partner labs / vendors): you only need Cloudflare R2
+credentials for the data bucket — nothing else.** An RL2 team member will send
+them to you directly (DM), scoped to your upload prefix. You do NOT need AWS
+account keys, Secrets Manager, or database access (episode registration is
+handled by the RL2 team, see §5).
 
-**Step 1 — AWS keys (one-time, ask the consortium lead for these):**
+Set the credentials in your environment:
+
 ```bash
-aws configure
-# AccessKeyId: <provided by consortium>
-# SecretAccessKey: <provided by consortium>
-# Default region: us-east-2
-# Output format: (leave blank)
+export AWS_ACCESS_KEY_ID=<R2 access key from your RL2 contact>
+export AWS_SECRET_ACCESS_KEY=<R2 secret from your RL2 contact>
+export AWS_ENDPOINT_URL_S3=<R2 endpoint URL from your RL2 contact>
+export AWS_DEFAULT_REGION=auto
 ```
 
-**Step 2 — Fetch R2 and DB credentials:**
+Verify (should list your prefix, or return empty without erroring):
+
 ```bash
+aws s3 ls --endpoint-url "$AWS_ENDPOINT_URL_S3" s3://rldb/processed_v3/<your_prefix>/
+```
+
+Note the endpoint: plain `aws s3` against AWS servers will return AccessDenied —
+the bucket lives on R2, so every call needs `--endpoint-url`.
+
+**RL2-internal members** additionally need AWS credentials for the episode
+registry (PostgreSQL via Secrets Manager):
+
+```bash
+aws configure
+# AccessKeyId / SecretAccessKey: ask the consortium lead
+# Default region: us-east-2
 bash egomimic/utils/aws/setup_secret.sh
 # Writes ~/.egoverse_env with R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY,
 # AWS_ENDPOINT_URL_S3, SECRETS_ARN, etc.
 ```
 
-Verify your setup:
+Internal verification:
+
 ```python
 from egomimic.utils.aws.aws_data_utils import load_env
 from egomimic.utils.aws.aws_sql import create_default_engine
@@ -202,7 +221,11 @@ ts_ms = episode_hash_to_timestamp_ms("2026-01-12-03-47-29-664000")
 
 ## 5. Database Registry
 
-Every episode must be registered in the PostgreSQL `app.episodes` table **before** its Zarr store is uploaded. The registry is the authoritative index used by all download and training tooling.
+Every episode is registered in the PostgreSQL `app.episodes` table, the authoritative
+index used by all download and training tooling. **Registration is performed by the RL2
+team — external contributors do NOT need database access and should skip this section.**
+Deliver your episodes (`.zarr` stores + `.mp4` previews, with the attributes from §6) and
+we register them on ingest. The schema below is documented for RL2-internal use.
 
 ### 5.1 Schema
 
@@ -298,7 +321,11 @@ Each episode is a **Zarr v3 group** (a directory ending in `.zarr`) containing a
 
 ### 6.2 Required Arrays
 
-All arrays are indexed along axis 0 by frame index. Every array must have **exactly `total_frames` entries** along axis 0 (matching the value in `zarr.attrs["total_frames"]`).
+All arrays are indexed along axis 0 by frame index. **`zarr.attrs["total_frames"]` is the
+authoritative episode length**: every array covers frames `[0, total_frames)` along axis 0.
+Arrays MAY extend past `total_frames` with zero-padding (writers commonly pad to a chunk
+boundary — e.g. `ZarrWriter` pads to `chunk_timesteps`); consumers must slice
+`[:total_frames]` and never interpret the padded tail as data.
 
 #### Images
 
@@ -635,16 +662,30 @@ Notes:
 
 ### 10.1 S3 Path Convention
 
+**External contributors (partner labs / vendors): upload everything under your
+assigned company prefix —**
+
 ```
-s3://rldb/processed_v3/<embodiment_prefix>/<episode_hash>.zarr/
+s3://rldb/processed_v3/<company_name>/<episode_hash>.zarr/
 ```
+
+`<company_name>` is the short lowercase name your RL2 contact gives you along
+with your credentials (which are scoped to exactly this prefix — uploads
+anywhere else will be denied). Batch deliveries (e.g. a `.tar.zst` of many
+episodes) also go under this prefix.
+
+Example:
+```
+s3://rldb/processed_v3/acmecorp/2026-03-15-14-22-10-000000.zarr/
+```
+
+**RL2-internal uploads** use the embodiment prefix instead:
 
 | Embodiment | `<embodiment_prefix>` |
 |---|---|
 | `human_*` | `human` |
 | `eva_*` | `eva` |
 
-Examples:
 ```
 s3://rldb/processed_v3/human/2026-03-15-14-22-10-000000.zarr/
 s3://rldb/processed_v3/eva/2025-11-04-09-30-00-000000.zarr/
