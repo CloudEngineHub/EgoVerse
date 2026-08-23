@@ -15,8 +15,9 @@ task_description, num_frames, zarr_processed_path) and PRESERVE the staged
 ``created_at`` (the recording time parsed from the hash). ``updated_at`` gets the
 merge time (DEFAULT now()); the eval/flag columns get the standard defaults
 (is_deleted=false, is_eval=false, eval_score=-1, eval_success=true), matching a
-normally-ingested row. operator/lab/scene/objects/license/segments are left NULL
-(the zarr metadata does not provide them). ON CONFLICT (episode_hash) DO NOTHING
+normally-ingested row. ``lab`` is set from the staged ``source_folder`` and ``zarr_mp4_path`` is derived
+from the zarr path (the sibling ``<episode_hash>.mp4`` preview); operator/scene/objects/
+license/segments are left NULL (the zarr metadata does not provide them). ON CONFLICT (episode_hash) DO NOTHING
 is applied as a final safety net.
 
 Usage:
@@ -44,6 +45,27 @@ DEFAULT_REQUIRED = ["episode_hash", "embodiment", "task", "num_frames", "zarr_pr
 _MERGE_COLUMNS = [
     "episode_hash", "embodiment", "task", "task_description",
     "num_frames", "zarr_processed_path", "created_at",
+]
+
+# app.episodes column -> SQL expression over the staging row. These are NOT
+# identity copies, so they are listed separately to keep the mapping auditable:
+#   lab            <- source_folder (the processed_v3/<folder> the episode came
+#                     from, i.e. the contributing lab/vendor). `lab` is populated
+#                     for ~all existing rows and is the field split-builders
+#                     filter on, so leaving it NULL would make merged episodes
+#                     unfilterable by source.
+#   zarr_mp4_path  <- the sibling preview video required by CONTRIBUTING_DATA
+#                     (`<episode_hash>.mp4` next to `<episode_hash>.zarr`).
+#                     NULL when the stored path is not a .zarr, so a malformed
+#                     path never yields a bogus preview path.
+_DERIVED_COLUMNS = [
+    ("lab", "s.source_folder"),
+    (
+        "zarr_mp4_path",
+        "CASE WHEN rtrim(s.zarr_processed_path, '/') LIKE '%.zarr' "
+        "THEN regexp_replace(rtrim(s.zarr_processed_path, '/'), '\\.zarr$', '.mp4') "
+        "ELSE NULL END",
+    ),
 ]
 
 
@@ -108,8 +130,14 @@ def main() -> int:
         engine.dispose()
         return 0
 
-    select_cols = ", ".join(f"s.{c}" for c in _MERGE_COLUMNS)
-    insert_cols = ", ".join(_MERGE_COLUMNS + ["is_deleted", "is_eval", "eval_score", "eval_success"])
+    select_cols = ", ".join(
+        [f"s.{c}" for c in _MERGE_COLUMNS] + [expr for _, expr in _DERIVED_COLUMNS]
+    )
+    insert_cols = ", ".join(
+        _MERGE_COLUMNS
+        + [col for col, _ in _DERIVED_COLUMNS]
+        + ["is_deleted", "is_eval", "eval_score", "eval_success"]
+    )
     limit_sql = f"LIMIT {int(args.limit)}" if args.limit else ""
     insert_sql = text(f"""
         INSERT INTO app.episodes ({insert_cols})
