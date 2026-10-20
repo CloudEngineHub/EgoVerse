@@ -93,8 +93,6 @@ def convert_hdf5_to_zarr(
     low_res: bool = False,
     no_rot: bool = False,
     fps: int = 30,
-    incremental: bool = False,
-    batch_size: int = 64,
 ):
     """
     Convert an Eva HDF5 episode file to Zarr format using EvaHD5Extractor.
@@ -234,55 +232,25 @@ def convert_hdf5_to_zarr(
     print(f"Output file: {zarr_episode_path.name}")
 
     # Write to Zarr with explicit numeric/image separation
-    print(f"\nWriting to Zarr (incremental={incremental})...")
+    print("\nWriting to Zarr...")
     try:
-        if incremental:
-            # Determine total_frames from data
-            all_arrays = list(numeric_data.values()) + list(image_data.values())
-            total_frames = len(all_arrays[0])
-
-            writer = ZarrWriter(
-                episode_path=zarr_episode_path,
-                fps=fps,
-                embodiment=embodiment,
-                task_name="debug",
-                task_description="",
-            )
-            with writer.write_incremental(total_frames=total_frames) as inc:
-                for start in range(0, total_frames, batch_size):
-                    end = min(start + batch_size, total_frames)
-                    batch_numeric = (
-                        {k: v[start:end] for k, v in numeric_data.items()}
-                        if numeric_data
-                        else {}
-                    )
-                    batch_images = (
-                        {k: v[start:end] for k, v in image_data.items()}
-                        if image_data
-                        else {}
-                    )
-                    inc.add_frames(numeric=batch_numeric, images=batch_images)
-                    print(f"  Wrote frames {start}:{end} / {total_frames}")
-
-            zarr_path = writer.episode_path
-        else:
-            zarr_path = ZarrWriter.create_and_write(
-                episode_path=zarr_episode_path,
-                numeric_data=numeric_data if numeric_data else None,
-                image_data=image_data if image_data else None,
-                fps=fps,
-                embodiment=embodiment,
-                task_name="debug",
-                task_description="",
-                # intrinsics are mandatory; debug placeholder {camera_key: 3x4} dict
-                intrinsics={
-                    "front_1": [
-                        [1.0, 0.0, 0.0, 0.0],
-                        [0.0, 1.0, 0.0, 0.0],
-                        [0.0, 0.0, 1.0, 0.0],
-                    ]
-                },
-            )
+        zarr_path = ZarrWriter.create_and_write(
+            episode_path=zarr_episode_path,
+            numeric_data=numeric_data if numeric_data else None,
+            image_data=image_data if image_data else None,
+            fps=fps,
+            embodiment=embodiment,
+            task_name="debug",
+            task_description="",
+            # intrinsics are mandatory; debug placeholder {camera_key: 3x4} dict
+            intrinsics={
+                "front_1": [
+                    [1.0, 0.0, 0.0, 0.0],
+                    [0.0, 1.0, 0.0, 0.0],
+                    [0.0, 0.0, 1.0, 0.0],
+                ]
+            },
+        )
     except Exception as e:
         print(f"\n❌ ERROR writing Zarr file: {e}")
         import traceback
@@ -388,18 +356,6 @@ Image arrays will be automatically detected and JPEG-compressed.
         default=30,
         help="Frames per second for the episode (default: 30)",
     )
-    parser.add_argument(
-        "--incremental",
-        action="store_true",
-        help="Use write_incremental with add_frames instead of bulk write",
-    )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        default=64,
-        help="Frames per batch when using --incremental (default: 64)",
-    )
-
     args = parser.parse_args()
 
     # Create output directory
@@ -427,8 +383,6 @@ Image arrays will be automatically detected and JPEG-compressed.
             low_res=args.low_res,
             no_rot=args.no_rot,
             fps=args.fps,
-            incremental=args.incremental,
-            batch_size=args.batch_size,
         )
 
     else:
@@ -459,8 +413,6 @@ Image arrays will be automatically detected and JPEG-compressed.
                     low_res=args.low_res,
                     no_rot=args.no_rot,
                     fps=args.fps,
-                    incremental=args.incremental,
-                    batch_size=args.batch_size,
                 )
             except Exception as e:
                 print(f"Error converting {hdf5_path}: {e}")
