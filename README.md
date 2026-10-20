@@ -166,4 +166,4 @@ python egomimic/trainHydra.py --config-name=train_zarr_cartesian
 For full instructions on training see [``training.md``](./training.md)
 
 ### Converting your own data
-See [``embodiment_tutorial.ipynb``](./egomimic/scripts/tutorials/embodiment_tutorial.ipynb) as reference to write a conversion script for your own data.
+See [``CONTRIBUTING_DATA.md``](./CONTRIBUTING_DATA.md) for the episode format and required metadata (§6), and check every episode with ``python -m egomimic.rldb.zarr.validate`` (§11.1) before uploading.
