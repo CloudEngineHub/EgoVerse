@@ -39,7 +39,7 @@ The pipeline at a glance:
 
 ```
 Your raw data
-    └─► Convert to Zarr v3 (this guide)
+    └─► Convert to Zarr v3 (start from the reference converter, §6.0)
     └─► Register row in app.episodes DB
     └─► Upload to s3://rldb/processed_v3/<embodiment>/<episode_hash>.zarr/
     └─► Available for download dynamically through S3MultiDataset
@@ -286,6 +286,21 @@ update_episode(engine, row)
 ## 6. Zarr v3 Episode Format
 
 Each episode is a **Zarr v3 group** (a directory ending in `.zarr`) containing arrays and top-level attributes.
+
+### 6.0 Writing Your Converter
+
+Start from the reference converter, [`egomimic/scripts/convert_template/template_to_zarr.py`](egomimic/scripts/convert_template/template_to_zarr.py). Copy it and replace two functions:
+
+- `find_raw_episodes(raw_root)` — one entry per raw episode in your layout.
+- `load_episode(raw_path)` — return a `RawEpisode`: the image stream, head and hand poses as `(T, 7)` xyz + wxyz quaternion in your SLAM world frame (§7), optional `(T, 63)` keypoints, the camera K, the recording start time (§4), and **that episode's** `task_name` / `operator` / `lab` / `scene` / `objects` (§6.3) read from your own capture logs.
+
+The rest is handled for you: the `<episode_hash>.zarr` name, the `ZarrWriter` call with the correct `human_*` embodiment and intrinsics, validation of every episode right after it is written (§11.1 — a failing episode is deleted and reported, the batch keeps going), and the MP4 preview (§6.5). Run it on a folder, or call `convert_all(paths, output_dir, workers=N)` from your own batch script:
+
+```bash
+python egomimic/scripts/convert_template/template_to_zarr.py --raw-root /raw --output-dir /out --workers 8
+```
+
+As shipped, `load_episode` returns synthetic data, so you can run the template end to end before writing any code. The sections below are the spec it implements.
 
 ### 6.1 Directory Structure
 
