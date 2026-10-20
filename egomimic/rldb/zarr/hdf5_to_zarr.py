@@ -21,7 +21,11 @@ from pathlib import Path
 import numpy as np
 
 from egomimic.rldb.embodiment.eva import Eva
-from egomimic.rldb.zarr import ZarrWriter
+from egomimic.rldb.zarr.required_metadata import (
+    add_required_metadata_args,
+    required_metadata_from_args,
+)
+from egomimic.rldb.zarr.zarr_writer import ZarrWriter
 from egomimic.scripts.eva_process.zarr_utils import EvaHD5Extractor
 
 
@@ -93,6 +97,8 @@ def convert_hdf5_to_zarr(
     low_res: bool = False,
     no_rot: bool = False,
     fps: int = 30,
+    *,
+    required_metadata: dict,
 ):
     """
     Convert an Eva HDF5 episode file to Zarr format using EvaHD5Extractor.
@@ -106,6 +112,8 @@ def convert_hdf5_to_zarr(
         arm: Which arm to process - "left", "right", or "both"
         extrinsics_key: Key to lookup camera extrinsics from EXTRINSICS dict
         prestack: Whether to prestack future actions into chunks
+        required_metadata: task_name/operator/lab/scene/objects kwargs for
+            create_and_write (see egomimic.rldb.zarr.required_metadata).
         low_res: Whether to downsample images to low resolution
         no_rot: Whether to skip rotation processing (position only)
         fps: Frames per second for the episode
@@ -240,8 +248,8 @@ def convert_hdf5_to_zarr(
             image_data=image_data if image_data else None,
             fps=fps,
             embodiment=embodiment,
-            task_name="debug",
             task_description="",
+            **required_metadata,
             # intrinsics are mandatory; debug placeholder {camera_key: 3x4} dict
             intrinsics={
                 "front_1": [
@@ -356,7 +364,13 @@ Image arrays will be automatically detected and JPEG-compressed.
         default=30,
         help="Frames per second for the episode (default: 30)",
     )
+    parser.add_argument(
+        "--task-name", type=str, default=None, help="Must match the DB row's task."
+    )
+    add_required_metadata_args(parser)
+
     args = parser.parse_args()
+    required_metadata = required_metadata_from_args(args)
 
     # Create output directory
     args.output_dir.mkdir(parents=True, exist_ok=True)
@@ -383,6 +397,7 @@ Image arrays will be automatically detected and JPEG-compressed.
             low_res=args.low_res,
             no_rot=args.no_rot,
             fps=args.fps,
+            required_metadata=required_metadata,
         )
 
     else:
@@ -413,6 +428,7 @@ Image arrays will be automatically detected and JPEG-compressed.
                     low_res=args.low_res,
                     no_rot=args.no_rot,
                     fps=args.fps,
+                    required_metadata=required_metadata,
                 )
             except Exception as e:
                 print(f"Error converting {hdf5_path}: {e}")

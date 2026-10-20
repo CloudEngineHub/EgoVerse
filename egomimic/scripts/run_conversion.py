@@ -89,10 +89,33 @@ def infer_arm_from_row(row: TableRow) -> str:
 
 def infer_task_name_from_row(row: TableRow) -> str:
     """
-    Infer task name from SQL row.task_name (e.g., 'task_name').
-    Falls back to ''.
+    Infer task name from SQL row.task (e.g., 'fold_clothes').
+    Falls back to '' (recorded as missing by infer_required_metadata_from_row).
     """
-    return row.task or "unknown"
+    return (row.task or "").strip()
+
+
+def infer_required_metadata_from_row(row: TableRow) -> dict:
+    """
+    operator/lab/scene/objects for the converter, plus a {field: reason}
+    missing_metadata entry for every required metadata field the legacy row left empty
+    (including task), so the gap is recorded in zarr.attrs instead of silently
+    written as a placeholder. Plain data so it travels through Ray.
+    """
+    values = {
+        "task_name": infer_task_name_from_row(row),
+        "operator": (row.operator or "").strip(),
+        "lab": (row.lab or "").strip(),
+        "scene": (row.scene or "").strip(),
+        "objects": (row.objects or "").strip(),
+    }
+    missing = {
+        field: f"legacy DB row {row.episode_hash} has an empty {field}"
+        for field, value in values.items()
+        if not value
+    }
+    del values["task_name"]
+    return {**{k: v or None for k, v in values.items()}, "missing_metadata": missing}
 
 
 def infer_task_description_from_row(row: TableRow) -> str:
@@ -256,7 +279,8 @@ def launch(
         #     continue
 
         args["arm"] = arm
-        args["task_name"] = task_name
+        args["task_name"] = task_name or None
+        args["required_metadata"] = infer_required_metadata_from_row(row)
         args["task_description"] = task_description
         start_time = time.time()
         ref = submit_convert(embodiment_ray, "small", **args)

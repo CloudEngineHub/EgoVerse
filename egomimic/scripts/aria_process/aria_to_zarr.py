@@ -8,6 +8,10 @@ from pathlib import Path
 import numpy as np
 
 from egomimic.rldb.embodiment.human import ARIA_INTRINSICS
+from egomimic.rldb.zarr.required_metadata import (
+    add_required_metadata_args,
+    required_metadata_from_args,
+)
 from egomimic.rldb.zarr.zarr_writer import ZarrWriter
 from egomimic.scripts.aria_process.aria_utils import AriaVRSExtractor
 from egomimic.utils.aws.aws_sql import timestamp_ms_to_episode_hash
@@ -127,6 +131,7 @@ class DatasetConverter:
         output_dir: Path = Path("."),
         dataset_name: str = "",
         chunk_timesteps: int = 100,
+        required_metadata: dict | None = None,
     ):
         """
         Extracts frames from an episode and saves them to the dataset.
@@ -136,6 +141,9 @@ class DatasetConverter:
             The path to the episode file.
         task_description : str, optional
             A description of the task associated with the episode (default is an empty string).
+        required_metadata : dict
+            operator/lab/scene/objects kwargs for create_and_write (see
+            egomimic.rldb.zarr.required_metadata.required_metadata_from_args).
         Returns
         -------
         None
@@ -180,6 +188,7 @@ class DatasetConverter:
             task_description=task_description,
             chunk_timesteps=chunk_timesteps,
             intrinsics={"front_1": ARIA_INTRINSICS},
+            **(required_metadata or {}),
         )
         if self.save_mp4:
             mp4_path = output_dir / f"{episode_name}.mp4"
@@ -220,14 +229,18 @@ def main(args) -> None:
             mano_chunk_size=getattr(args, "mano_chunk_size", 512),
         )
 
+        required_metadata = required_metadata_from_args(args)
+        task_name = required_metadata.pop("task_name")
+
         gc.collect()
         ctypes.CDLL("libc.so.6").malloc_trim(0)
         zarr_path, mp4_path = converter.extract_episode(
             episode_path=Path(args.raw_path),
-            task_name=args.task_name,
+            task_name=task_name,
             task_description=args.task_description,
             output_dir=Path(args.output_dir),
             dataset_name=episode_hash,
+            required_metadata=required_metadata,
         )
         return zarr_path, mp4_path
     except Exception:
@@ -256,8 +269,8 @@ def argument_parse():
     parser.add_argument(
         "--task-name",
         type=str,
-        default="Aria recorded dataset.",
-        help="Task name of the data.",
+        default=None,
+        help="Task name of the data (must match the DB row's task).",
     )
     parser.add_argument(
         "--task-description",
@@ -272,6 +285,7 @@ def argument_parse():
         default="both",
         help="Specify the arm for processing.",
     )
+    add_required_metadata_args(parser)
     parser.add_argument(
         "--image-compressed",
         type=str2bool,

@@ -6,6 +6,7 @@ compatible with the ZarrEpisode reader.
 """
 
 import json
+import logging
 from pathlib import Path
 from typing import Any, Literal
 
@@ -13,6 +14,14 @@ import numpy as np
 import simplejpeg
 import zarr
 from zarr.core.dtype import VariableLengthBytes
+
+from egomimic.rldb.zarr.required_metadata import (
+    REQUIRED_METADATA_FIELDS,
+    MissingMetadata,
+    required_metadata_error,
+)
+
+logger = logging.getLogger(__name__)
 
 
 def _intrinsics_to_jsonable(
@@ -51,6 +60,7 @@ class ZarrWriter:
         intrinsics: dict | None = None,
         extrinsics: dict | None = None,
         verbose: bool = False,
+        required_metadata: dict[str, Any] | None = None,
     ):
         """
         Initialize ZarrWriter.
@@ -72,6 +82,11 @@ class ZarrWriter:
                 (e.g. {"left": world<-cam, "right": world<-cam}). Stored under the
                 "extrinsics" key in zarr.json metadata. create_and_write enforces
                 the None-or-non-empty-dict contract.
+            required_metadata: Optional {field: value} for REQUIRED_METADATA_FIELDS other than
+                task_name (operator, lab, scene, objects). A MissingMetadata value
+                is stored as None with its reason under "missing_metadata".
+                Optional in this low-level constructor; create_and_write
+                requires and validates every field.
         """
         self.episode_path = Path(episode_path)
 
@@ -85,6 +100,7 @@ class ZarrWriter:
         self.intrinsics = intrinsics
         self.extrinsics = extrinsics
         self.verbose = verbose
+        self.required_metadata = dict(required_metadata) if required_metadata else {}
         # Track image shapes for metadata
         self._features: dict[str, dict[str, Any]] = {}
 
@@ -432,16 +448,35 @@ class ZarrWriter:
         if self.extrinsics is not None:
             metadata["extrinsics"] = _intrinsics_to_jsonable(self.extrinsics)
 
+        missing: dict[str, str] = {}
+        for field in REQUIRED_METADATA_FIELDS:
+            value = (
+                self.task_name
+                if field == "task_name"
+                else self.required_metadata.get(field)
+            )
+            if field != "task_name" and field not in self.required_metadata:
+                continue
+            if isinstance(value, MissingMetadata):
+                missing[field] = value.reason
+                value = None
+            elif isinstance(value, tuple):
+                value = list(value)
+            metadata[field] = value
+        if missing:
+            metadata["missing_metadata"] = missing
+
         # Apply overrides — but NEVER let them clobber the validated camera
         # metadata. intrinsics/extrinsics are validated in create_and_write; a
         # converter's metadata_override that happens to carry a stale or empty
         # "intrinsics"/"extrinsics" key must not silently overwrite the validated
         # values (this was the Mecka clobber bug → empty intrinsics in zarr.json).
+        # The same goes for the validated required metadata fields.
         if metadata_override:
+            protected = {"intrinsics", "extrinsics", "missing_metadata"}
+            protected.update(REQUIRED_METADATA_FIELDS)
             override = {
-                k: v
-                for k, v in metadata_override.items()
-                if k not in ("intrinsics", "extrinsics")
+                k: v for k, v in metadata_override.items() if k not in protected
             }
             metadata.update(override)
 
@@ -455,12 +490,16 @@ class ZarrWriter:
         pre_encoded_image_data: dict[str, tuple[np.ndarray, list[int]]] | None = None,
         embodiment: str = "",
         fps: int = 30,
-        task_name: str = "debug",
         task_description: str = "",
         annotations: list[tuple[str, int, int]] | None = None,
         chunk_timesteps: int = 100,
         *,
         intrinsics: dict,
+        task_name: "str | MissingMetadata",
+        operator: "str | MissingMetadata",
+        lab: "str | MissingMetadata",
+        scene: "str | MissingMetadata",
+        objects: "str | list[str] | MissingMetadata",
         extrinsics: dict | None = None,
         metadata_override: dict[str, Any] | None = None,
     ) -> Path:
@@ -475,7 +514,6 @@ class ZarrWriter:
                 Skips internal JPEG encoding for these keys.
             embodiment: Robot type identifier.
             fps: Frames per second (default: 30).
-            task_name: Task name.
             task_description: Task description.
             annotations: List of (text, start_idx, end_idx) tuples describing language annotations.
             chunk_timesteps: Number of timesteps per chunk for numeric arrays (default: 100).
@@ -485,7 +523,16 @@ class ZarrWriter:
                 human data) or a non-empty dict mapping a key to its transform
                 matrix (robots key per-arm, e.g. {"left": T, "right": T}). Stored
                 in zarr.json metadata.
-            metadata_override: Optional metadata overrides.
+            task_name: REQUIRED high-level task (must match the DB row's task).
+            operator: REQUIRED per-episode ID of the person who collected it.
+            lab: REQUIRED short, stable, lowercase source identifier (e.g. "mecka").
+            scene: REQUIRED scene / location label.
+            objects: REQUIRED objects manipulated (str or list[str]).
+                Each of these five has no default and rejects empty strings and
+                placeholders such as "unknown". If the source data genuinely has
+                no value, pass MissingMetadata("<why>") for that field.
+            metadata_override: Optional metadata overrides. Cannot overwrite
+                intrinsics/extrinsics or the required metadata fields above.
 
         Returns:
             Path to created episode.
@@ -494,7 +541,9 @@ class ZarrWriter:
             ValueError: If no data is provided, if embodiment is not a valid
                 identifier (see §9), if intrinsics is not a non-empty
                 {camera_key: 3x4 K matrix} dict, or if extrinsics is neither None
-                nor a non-empty {key: 4x4 transform} dict.
+                nor a non-empty {key: 4x4 transform} dict, or if a required metadata
+                field (task_name/operator/lab/scene/objects) is empty, a
+                placeholder, or malformed.
         """
         # Validate the embodiment up front (it is guaranteed to be consumed by
         # the reader via get_embodiment_id) so a bad/empty/typo'd value fails
@@ -546,6 +595,23 @@ class ZarrWriter:
                         f"got {getattr(T_arr, 'shape', type(T).__name__)}. "
                         "See CONTRIBUTING_DATA.md §6.3."
                     )
+        required_metadata = {
+            "task_name": task_name,
+            "operator": operator,
+            "lab": lab,
+            "scene": scene,
+            "objects": objects,
+        }
+        for field, value in required_metadata.items():
+            if isinstance(value, MissingMetadata):
+                logger.warning(
+                    "Writing %s without %s: %s", episode_path, field, value.reason
+                )
+                continue
+            err = required_metadata_error(field, value)
+            if err is not None:
+                raise ValueError(err)
+        del required_metadata["task_name"]
         writer = ZarrWriter(
             episode_path=episode_path,
             embodiment=embodiment,
@@ -556,6 +622,7 @@ class ZarrWriter:
             chunk_timesteps=chunk_timesteps,
             intrinsics=intrinsics,
             extrinsics=extrinsics,
+            required_metadata=required_metadata,
         )
 
         writer.write(

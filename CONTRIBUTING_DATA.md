@@ -237,7 +237,7 @@ Key field notes:
 - `lab`: short, stable, lowercase string. Once set, do not change it (used in filters).
 - `task`: high-level `task_name` that groups related episodes. Before inventing a new name, check the existing tasks in the episode registry via [`sql_tutorial.ipynb`](egomimic/scripts/tutorials/sql_tutorial.ipynb) (`df.groupby("task").size()`) and reuse one if your episode fits. If no existing task matches, canonicalize your new `task_name` to a short, stable, lowercase string that names a semantically meaningful category (e.g. `fold_clothes`, `object_in_container`) — not a one-off trial description. Put trial-specific detail in `task_description`, `scene`, and `objects`.
 - `embodiment`: must be one of the strings in §9.
-- `robot_name`: the same `human_*` / `eva_*` string as `embodiment` (there is no per-platform variant — record your lab/hardware in the `lab` field, not here).
+- `rig_name`: the physical capture rig (e.g. `aria_gen1`, `eva`). Optional.
 
 ### 5.2 Inserting a Row
 
@@ -259,7 +259,7 @@ row = TableRow(
     lab            = "rl2",
     task           = "fold_clothes",
     embodiment     = "human_bimanual",
-    robot_name     = "human_bimanual",
+    rig_name       = "aria_gen1",
     task_description = "folding a 2T baby shirt on a blue table",
     scene          = "kitchen_A",
     objects        = "baby_shirt_2T",
@@ -416,8 +416,13 @@ The root group's `.attrs` dictionary is the **episode metadata**. It is written 
     "embodiment":        str,   # e.g. "human_bimanual"  (must match DB row)
     "total_frames":      int,   # number of valid frames (not padded)
     "fps":               int,   # capture frame rate (typically 30)
-    "task_name":         str,   # e.g. "fold_clothes"  (must match DB row)
+    "task_name":         str,   # REQUIRED, e.g. "fold_clothes"  (must match DB row)
     "task_description":  str,   # free-text description of the trial
+    "operator":          str,   # REQUIRED: per-episode ID of the person who collected it
+    "lab":               str,   # REQUIRED: short, stable, lowercase source id, e.g. "mecka"
+    "scene":             str,   # REQUIRED: scene / location label
+    "objects":   str | list[str], # REQUIRED: objects manipulated
+    "missing_metadata": dict,   # ONLY if a field above was waived: {field: reason}
     "intrinsics":        dict,  # MANDATORY: {camera_key: 3x4 K matrix} dict (single-camera =
                                 #   one entry, e.g. {"front_1": K}; 3x4 = the 3x3 pinhole K
                                 #   with a zero last column). Projection uses the "front" entry.
@@ -446,6 +451,27 @@ The root group's `.attrs` dictionary is the **episode metadata**. It is written 
 - `embodiment` and `task_name` must exactly match the values in the DB row for this episode.
 - `intrinsics` is **mandatory** and is always a `{camera_key: 3×4 K matrix}` dict in `zarr.attrs` (single-camera = one entry, e.g. `{"front_1": K}`). `ZarrWriter.create_and_write` raises if it is not a non-empty dict.
 - `extrinsics` is **either `None` or a non-empty `dict`** of 4×4 world↔cam transforms (robots key per-arm, e.g. `{"left": T, "right": T}`); egocentric human contributors omit it (`None`). `ZarrWriter.create_and_write` raises if it is anything other than `None` or a non-empty dict.
+
+#### Required metadata fields (`task_name`, `operator`, `lab`, `scene`, `objects`)
+
+These are what let people filter the data and train on it — per-operator splits, held-out scenes, object-conditioned subsets — so **we heavily recommend providing every one of them for every episode.** `ZarrWriter.create_and_write` takes each as a required keyword argument with **no default**, and raises `ValueError` on an empty string or a placeholder (`"unknown"`, `"none"`, `"n/a"`, `"tbd"`, `"debug"`, `"test"`, …).
+
+- `operator` is per-episode — use your own stable collector ID (a pseudonymous ID is fine).
+- `lab` must match `^[a-z0-9][a-z0-9_-]*$` and must never change once chosen.
+- `objects` may be a string or a list of strings.
+
+If your source data genuinely has no value for a field, you must say so explicitly, with a reason:
+
+```python
+from egomimic.rldb.zarr.required_metadata import MissingMetadata
+
+ZarrWriter.create_and_write(
+    ...,
+    scene=MissingMetadata("Capture app does not record a scene label"),
+)
+```
+
+The field is then stored as `null`, the reason goes into `zarr.attrs["missing_metadata"]`, and the validator (§11.1) fails the episode unless it is run with `--allow-missing`. Converter CLIs built with `egomimic.rldb.zarr.required_metadata.add_required_metadata_args` expose this as `--missing-metadata scene="Capture app does not record a scene label"`.
 
 ### 6.4 Storage / Chunking
 
@@ -487,7 +513,11 @@ ZarrWriter.create_and_write(
     intrinsics={"front_1": K_front},    # REQUIRED — always a {camera_key: 3x4} dict
     # extrinsics=...,                   # REQUIRED for robot embodiments only
     fps=30,
-    task_name="...",
+    task_name="...",                    # REQUIRED metadata fields, see §6.3
+    operator="...",
+    lab="...",
+    scene="...",
+    objects=["..."],
     task_description="...",
 )
 ```
@@ -598,13 +628,16 @@ annotations = [
     ("folding the bottom half up",             910,  1200),
 ]
 
-writer = ZarrWriter(
+ZarrWriter.create_and_write(
     episode_path="path/to/<episode_hash>.zarr",
     embodiment="human_bimanual",
     fps=30,
-    task_name="fold_clothes",
     task_description="folding a 2T baby shirt",
     annotations=annotations,
+    intrinsics={"front_1": K_front},
+    task_name="fold_clothes",
+    operator="...", lab="...", scene="...", objects=["baby_shirt_2T"],  # §6.3
+    # numeric_data=..., image_data=...
 )
 ```
 
@@ -626,7 +659,7 @@ If you are delivering data through Scale AI, annotations are generated via the S
 
 ## 9. Embodiment Identifiers
 
-The `embodiment` field in the DB row and in `zarr.attrs` must be exactly one of the strings below. **All human demonstration data is a single `human` embodiment — there is no per-vendor or per-hardware embodiment.** The lab / hardware that produced the data is recorded separately in the SQL `lab` field, never in `embodiment`. Only the robot **Eva** is a distinct non-human embodiment.
+The `embodiment` field in the DB row and in `zarr.attrs` must be exactly one of the strings below. **All human demonstration data is a single `human` embodiment — there is no per-vendor or per-hardware embodiment.** The lab / hardware that produced the data is recorded separately in the `lab` field (DB row and `zarr.attrs`, §6.3), never in `embodiment`. Only the robot **Eva** is a distinct non-human embodiment.
 
 | `embodiment` string | Integer id | Description |
 |---|---|---|
@@ -745,188 +778,24 @@ ray.get(tasks)
 
 ### 11.1 Automated Checks
 
-Run these checks on every episode before uploading:
+Run the validator on every episode before uploading:
 
-```python
-import zarr, numpy as np
-import json
-from pathlib import Path
-from egomimic.rldb.zarr.zarr_dataset_multi import ZarrEpisode
-import simplejpeg
-
-def validate_episode(zarr_path: str) -> tuple[list[str], list[str]]:
-    """Returns (errors, successes). Empty errors list = pass."""
-    errors: list[str] = []
-    successes: list[str] = []
-    ep = ZarrEpisode(zarr_path)
-    meta = ep.metadata
-    T = meta["total_frames"]
-    store = zarr.open(zarr_path, mode="r")
-
-    # ── Metadata ────────────────────────────────────────────────────────────
-    for field in ("embodiment", "total_frames", "fps", "task_name", "features"):
-        if field not in meta:
-            errors.append(f"Missing metadata field: {field}")
-        else:
-            successes.append(f"metadata field present: {field}")
-
-    if meta.get("fps", 0) not in (30, 60):
-        errors.append(f"Unexpected fps={meta['fps']}. Expected 30 or 60.")
-    else:
-        successes.append(f"fps={meta['fps']} is valid")
-
-    # ── Embodiment identifier (must resolve to a valid id; see §9) ──────────
-    from egomimic.rldb.embodiment.embodiment import get_embodiment_id
-    try:
-        get_embodiment_id(meta.get("embodiment", ""))
-        successes.append(f"embodiment={meta.get('embodiment')} is a valid identifier")
-    except (KeyError, AttributeError):
-        errors.append(f"embodiment={meta.get('embodiment')!r} is not a valid identifier (see §9)")
-
-    # ── Camera intrinsics (MANDATORY; {camera_key: 3x4 K matrix} dict) ──────
-    intr = meta.get("intrinsics")
-    if not isinstance(intr, dict) or not intr:
-        errors.append("intrinsics: missing or not a non-empty {camera_key: 3x4} dict")
-    else:
-        if not any("front" in str(k).lower() for k in intr):
-            errors.append(f"intrinsics: no front-camera entry (keys: {list(intr)})")
-        for cam, K in intr.items():
-            if np.asarray(K, dtype=float).shape != (3, 4):
-                errors.append(f"intrinsics['{cam}']: expected 3x4 K, got shape {np.asarray(K).shape}")
-            else:
-                successes.append(f"intrinsics['{cam}']: 3x4 OK")
-
-    # ── Camera extrinsics (OPTIONAL; None, or a non-empty dict of transforms) ─
-    if "extrinsics" in meta and meta["extrinsics"] is not None:
-        extr = meta["extrinsics"]
-        if not isinstance(extr, dict) or not extr:
-            errors.append("extrinsics: present but not a non-empty dict (must be None or a dict)")
-        else:
-            successes.append(f"extrinsics: non-empty dict OK (keys: {list(extr)})")
-
-    # ── Frame counts ────────────────────────────────────────────────────────
-    features = meta.get("features", {})
-    for key in store.keys():
-        node = store[key]
-        if not isinstance(node, zarr.Array):
-            continue
-        if features.get(key, {}).get("dtype") == "json":
-            continue
-        arr_len = node.shape[0]
-        if arr_len < T:
-            errors.append(f"{key}: array length {arr_len} < total_frames {T}")
-        else:
-            successes.append(f"{key}: frame count OK ({arr_len} >= {T})")
-
-    # ── Required keys ───────────────────────────────────────────────────────
-    required = ["images.front_1", "left.obs_ee_pose", "right.obs_ee_pose"]
-    for key in required:
-        if key not in store:
-            errors.append(f"Missing required key: {key}")
-        else:
-            successes.append(f"required key present: {key}")
-
-    # ── Pose shapes and norms ───────────────────────────────────────────────
-    required_poses = ("left.obs_ee_pose", "right.obs_ee_pose")
-    optional_poses = ("left.obs_wrist_pose", "right.obs_wrist_pose", "obs_head_pose", "left.cmd_ee_pose", "right.cmd_ee_pose")
-    for key in required_poses + optional_poses:
-        if key in store:
-            arr = store[key][:]
-            if arr.shape != (T, 7) and arr.shape[0] >= T:
-                arr = arr[:T]
-            if arr.shape[-1] != 7:
-                errors.append(f"{key}: expected shape (T, 7), got {arr.shape}")
-                continue
-            else:
-                successes.append(f"{key}: shape OK (T, 7)")
-            quat = arr[:, 3:7]
-            norms = np.linalg.norm(quat, axis=1)
-            if not np.allclose(norms, 1.0, atol=1e-4):
-                bad = np.where(np.abs(norms - 1.0) > 1e-4)[0]
-                errors.append(f"{key}: {len(bad)} frames with non-unit quaternions (e.g. frame {bad[0]}, norm={norms[bad[0]]:.6f})")
-            else:
-                successes.append(f"{key}: all quaternions unit-norm")
-
-    # ── Gripper shapes (optional) ───────────────────────────────────────────
-    for key in ("left.obs_gripper", "right.obs_gripper", "left.gripper", "right.gripper"):
-        if key in store:
-            arr = store[key][:]
-            if arr.shape[0] < T:
-                errors.append(f"{key}: array length {arr.shape[0]} < total_frames {T}")
-                continue
-            if arr.ndim != 2 or arr.shape[-1] != 1:
-                errors.append(f"{key}: expected shape (T, 1), got {arr.shape}")
-            else:
-                successes.append(f"{key}: gripper shape OK (T, 1)")
-
-    # ── Keypoint shapes ─────────────────────────────────────────────────────
-    for key in ("left.obs_keypoints", "right.obs_keypoints"):
-        if key in store:
-            arr = store[key][:]
-            if arr.shape[-1] != 63:
-                errors.append(f"{key}: expected last dim 63 (21×3), got {arr.shape[-1]}")
-            else:
-                successes.append(f"{key}: keypoint shape OK (last dim = 63)")
-
-    # ── Annotation format (JSON-encoded records) ────────────────────────────
-    annotation_keys = [k for k, f in features.items() if f.get("dtype") == "json" and k in store]
-    for key in annotation_keys:
-        node = store[key]
-        n = node.shape[0]
-        bad = 0
-        first_err = None
-        for i in range(n):
-            raw = node[i]
-            # Unwrap any nested 0-d object/bytes ndarrays down to raw bytes.
-            while isinstance(raw, np.ndarray):
-                raw = raw.item() if raw.shape == () else raw.flat[0]
-            if isinstance(raw, np.bytes_):
-                raw = bytes(raw)
-            try:
-                rec = json.loads(raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw)
-                if not isinstance(rec, dict):
-                    raise ValueError(f"record is {type(rec).__name__}, expected dict")
-                for field, expected in (("text", str), ("start_idx", int), ("end_idx", int)):
-                    if field not in rec:
-                        raise ValueError(f"missing field '{field}'")
-                    if not isinstance(rec[field], expected):
-                        raise ValueError(f"field '{field}' is {type(rec[field]).__name__}, expected {expected.__name__}")
-                if not (0 <= rec["start_idx"] <= rec["end_idx"] <= T):
-                    raise ValueError(f"index range invalid: start={rec['start_idx']}, end={rec['end_idx']}, T={T}")
-            except Exception as e:
-                bad += 1
-                if first_err is None:
-                    first_err = (i, str(e))
-        if bad:
-            errors.append(f"{key}: {bad}/{n} annotations malformed (e.g. index {first_err[0]}: {first_err[1]})")
-        else:
-            successes.append(f"{key}: all {n} annotations well-formed")
-
-    # ── Image decodability (spot-check first frame of each JPEG key) ────────
-    jpeg_keys = [k for k, f in features.items() if f.get("dtype") == "jpeg" and k in store]
-    for key in jpeg_keys:
-        data = ep.read({key: (0, None)})
-        try:
-            frame = simplejpeg.decode_jpeg(bytes(data[key]), colorspace="RGB")
-            if frame.ndim != 3 or frame.shape[2] != 3:
-                errors.append(f"{key}: decoded frame has unexpected shape {frame.shape}")
-            else:
-                successes.append(f"{key}: frame 0 decoded OK, shape={frame.shape}")
-        except Exception as e:
-            errors.append(f"{key}: failed to decode frame 0: {e}")
-
-    return errors, successes
-
-# Usage
-errors, successes = validate_episode("/storage/project/r-dxu345-0/shared/pick_place/2026-03-17-18-09-03-000000")
-for s in successes:
-    print("OK:", s)
-if errors:
-    for e in errors:
-        print("ERROR:", e)
-else:
-    print("All checks passed.")
+```bash
+python -m egomimic.rldb.zarr.validate path/to/*.zarr
 ```
+
+It prints `PASS`/`FAIL` per episode with every problem found, and exits nonzero if any episode fails. Add `-v` to also list the checks that passed. It checks:
+
+- metadata (§6.3): `embodiment`, `total_frames`, `fps` (30 or 60), `features`, and the required metadata fields `task_name`/`operator`/`lab`/`scene`/`objects`, with the same rules as `create_and_write`
+- `embodiment` is a valid identifier (§9)
+- `intrinsics` is a non-empty `{camera_key: 3x4}` dict with a front camera; `extrinsics` is `None` or a dict of 4x4 matrices
+- every array has a `features` entry (and vice versa) and at least `total_frames` rows
+- required keys: `images.front_1` plus `left`/`right.obs_ee_pose` for the arms in the embodiment
+- pose arrays are `(T, 7)` with unit quaternions; grippers `(T, 1)`; keypoints last dim 63
+- annotations are well-formed `annotation_v1` records within `[0, T]`
+- frame 0 of every JPEG key decodes to an RGB image
+
+A field written as `MissingMetadata(...)` fails the check by default. `--allow-missing` downgrades it to a warning; only use it once you have confirmed the source data really has no value for that field. From Python, `validate_episode(path)` returns a `ValidationReport` with `.errors`, `.warnings` and `.ok`.
 
 ### 11.2 End-to-End Load Test
 
@@ -1027,9 +896,10 @@ Complete every item before considering an episode ready for upload.
 - [ ] All `obs_keypoints` arrays have shape `(T, 63)`.
 - [ ] `features` dict in `zarr.attrs` has one entry per array key.
 - [ ] `embodiment` and `task_name` in `zarr.attrs` match the DB row values.
+- [ ] `operator`, `lab`, `scene` and `objects` are set for every episode (§6.3).
 - [ ] `intrinsics` is present in `zarr.attrs` as a `{camera_key: 3×4}` dict (single-camera = one entry) — **mandatory**.
 - [ ] `extrinsics` is present in `zarr.attrs` for robot embodiments.
-- [ ] All episode succeeds on zarr validation check code
+- [ ] `python -m egomimic.rldb.zarr.validate` passes on every episode **without** `--allow-missing` (§11.1).
 - [ ] An embodiment class is registered in `egomimic/rldb/embodiment/` (§9.1).
 - [ ] A sample episode has been visually verified via `zarr_data_viz.ipynb` (§11.3).
 
