@@ -146,40 +146,29 @@ def test_values_land_in_attrs(tmp_path):
     attrs = _attrs(_write(tmp_path / "ep.zarr"))
     for k, v in GOOD.items():
         assert attrs[k] == v
-    assert "missing_metadata" not in attrs
 
 
-@pytest.mark.parametrize("reason", ["", "unknown", "too short", None])
-def test_missing_metadata_needs_a_real_reason(reason):
-    with pytest.raises(ValueError):
-        MissingMetadata(reason)
-
-
-def test_missing_metadata_round_trips(tmp_path):
-    reason = "Vendor export has no per-episode collector ID"
-    attrs = _attrs(_write(tmp_path / "ep.zarr", operator=MissingMetadata(reason)))
+def test_missing_metadata_is_stored_as_null(tmp_path):
+    attrs = _attrs(_write(tmp_path / "ep.zarr", operator=MissingMetadata()))
     assert attrs["operator"] is None
-    assert attrs["missing_metadata"] == {"operator": reason}
+    assert "missing_metadata" not in attrs
 
 
 def test_metadata_override_cannot_clobber_required_metadata(tmp_path):
     path = _write(
         tmp_path / "ep.zarr",
-        metadata_override={"operator": "", "lab": "x", "missing_metadata": {}},
+        metadata_override={"operator": "", "lab": "x"},
     )
     attrs = _attrs(path)
     assert attrs["operator"] == GOOD["operator"]
     assert attrs["lab"] == GOOD["lab"]
-    assert "missing_metadata" not in attrs
 
 
 def test_build_required_metadata_rejects_value_and_waiver_together():
     with pytest.raises(ValueError, match="both"):
-        build_required_metadata(
-            {"operator": "op"}, {"operator": "a long enough reason"}
-        )
+        build_required_metadata({"operator": "op"}, ["operator"])
     with pytest.raises(ValueError, match="unknown fields"):
-        build_required_metadata({}, {"opertor": "a long enough reason"})
+        build_required_metadata({}, ["opertor"])
 
 
 def test_cli_args_feed_writer(tmp_path):
@@ -193,13 +182,16 @@ def test_cli_args_feed_writer(tmp_path):
             "--lab=rl2",
             "--objects=shirt",
             "--missing-metadata",
-            "scene=capture rig logs no scene label",
+            "scene",
         ]
     )
     prov = required_metadata_from_args(args)
     assert isinstance(prov["scene"], MissingMetadata)
     attrs = _attrs(_write(tmp_path / "ep.zarr", **prov))
-    assert attrs["missing_metadata"] == {"scene": "capture rig logs no scene label"}
+    assert attrs["scene"] is None
+
+    with pytest.raises(SystemExit):  # typo'd field name is an argparse error
+        parser.parse_args(["--missing-metadata", "scen"])
 
     # Forgetting a flag (no waiver) fails at write time.
     bare = parser.parse_args(["--task-name=fold_clothes"])
@@ -218,7 +210,6 @@ def test_validator_flags_waived_and_absent_fields(tmp_path):
     ep = write_episode(tmp_path, "aria", T=16, H=32, W=32)
     group = zarr.open_group(str(ep), mode="r+")
     group.attrs["operator"] = None
-    group.attrs["missing_metadata"] = {"operator": "vendor export has no operator"}
     del group.attrs["scene"]
 
     strict = validate.validate_episode(ep)
@@ -236,6 +227,5 @@ def test_validator_accepts_waiver_with_allow_missing(tmp_path):
     ep = write_episode(tmp_path, "aria", T=16, H=32, W=32)
     group = zarr.open_group(str(ep), mode="r+")
     group.attrs["operator"] = None
-    group.attrs["missing_metadata"] = {"operator": "vendor export has no operator"}
     assert validate.main([str(ep)]) == 1
     assert validate.main([str(ep), "--allow-missing"]) == 0

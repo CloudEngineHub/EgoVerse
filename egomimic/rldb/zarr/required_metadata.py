@@ -1,20 +1,22 @@
 """
 Metadata required in every contributed zarr episode.
 
-See CONTRIBUTING_DATA.md §6.3. ZarrWriter.create_and_write requires each
-REQUIRED_METADATA_FIELDS entry as a keyword argument with no default, and the episode
-validator (egomimic.rldb.zarr.validate) applies the same rules to a finished
-store. The only way to leave a field out is an explicit MissingMetadata(reason).
+See CONTRIBUTING_DATA.md §6.3. ZarrWriter takes each REQUIRED_METADATA_FIELDS
+entry as a keyword argument with no default and checks it in write(); the
+episode validator (egomimic.rldb.zarr.validate) applies the same rules to a
+finished store. The only way to leave a field out is an explicit
+MissingMetadata().
 """
 
 import argparse
 import re
+from collections.abc import Iterable
 from typing import Any
 
 # Metadata every contributed episode must carry in zarr.attrs (see
-# CONTRIBUTING_DATA.md §6.3). create_and_write requires each one as a keyword
+# CONTRIBUTING_DATA.md §6.3). ZarrWriter requires each one as a keyword
 # argument with no default; the only way to leave one out is an explicit
-# MissingMetadata(reason).
+# MissingMetadata().
 REQUIRED_METADATA_FIELDS = ("task_name", "operator", "lab", "scene", "objects")
 
 # Values that mean "I didn't fill this in". Rejected so a placeholder can't
@@ -45,39 +47,25 @@ def _is_placeholder(value: str) -> bool:
 
 
 class MissingMetadata:
-    """Explicit opt-out for one required metadata field the source data does not have.
+    """Explicit opt-out for a required metadata field the source data does not have.
 
-    Pass it in place of the value, e.g.
-    ``operator=MissingMetadata("Vendor export has no per-episode collector ID")``.
-    ``None``, ``""`` and placeholders like ``"unknown"`` are rejected, so a field
-    can only be left out on purpose. The field is stored as ``None`` and the
-    reason under ``zarr.attrs["missing_metadata"][field]``.
+    Pass it in place of the value, e.g. ``scene=MissingMetadata()``. ``None``,
+    ``""`` and placeholders like ``"unknown"`` are rejected, so a field can only
+    be left out on purpose. The field is stored as ``null`` in zarr.attrs.
+
+    Only use this if absolutely necessary, i.e. the source data truly has no
+    way to recover the value. Episodes with missing metadata are much harder
+    to filter and train on, and fail validation without --allow-missing.
     """
 
-    MIN_REASON_LEN = 15
-
-    def __init__(self, reason: str):
-        if (
-            not isinstance(reason, str)
-            or len(reason.strip()) < self.MIN_REASON_LEN
-            or _is_placeholder(reason)
-        ):
-            raise ValueError(
-                "MissingMetadata needs a real reason (at least "
-                f"{self.MIN_REASON_LEN} characters) explaining why the source data "
-                f"has no value for this field, got {reason!r}. "
-                "See CONTRIBUTING_DATA.md §6.3."
-            )
-        self.reason = reason.strip()
-
     def __repr__(self) -> str:
-        return f"MissingMetadata({self.reason!r})"
+        return "MissingMetadata()"
 
 
 def required_metadata_error(field: str, value: Any) -> str | None:
     """Return why ``value`` is not acceptable for required metadata ``field``, or None.
 
-    Shared by ZarrWriter.create_and_write and the episode validator so both
+    Shared by ZarrWriter.write and the episode validator so both
     apply the same rules. ``value`` is a concrete value, not MissingMetadata.
     """
     hint = "See CONTRIBUTING_DATA.md §6.3."
@@ -93,12 +81,12 @@ def required_metadata_error(field: str, value: Any) -> str | None:
         return (
             f"{field} must be a str{extra}, got {type(value).__name__} ({value!r}). "
             f"If the source data has no {field}, pass "
-            f'{field}=MissingMetadata("<why>"). {hint}'
+            f"{field}=MissingMetadata(). {hint}"
         )
     if _is_placeholder(value):
         return (
             f"{field}={value!r} is a placeholder, not a value. If the source data "
-            f'has no {field}, pass {field}=MissingMetadata("<why>"). {hint}'
+            f"has no {field}, pass {field}=MissingMetadata(). {hint}"
         )
     if field == "lab" and not _LAB_RE.match(value):
         return (
@@ -112,8 +100,8 @@ def add_required_metadata_args(parser: argparse.ArgumentParser) -> None:
     """Add --operator/--lab/--scene/--objects/--missing-metadata to a converter CLI.
 
     The converter supplies its own --task-name. None of these have usable
-    defaults: an omitted field fails in create_and_write unless it is waived
-    with ``--missing-metadata FIELD="reason"``.
+    defaults: an omitted field fails in ZarrWriter.write unless it is waived
+    with ``--missing-metadata FIELD``.
     """
     group = parser.add_argument_group(
         "required episode metadata (CONTRIBUTING_DATA.md §6.3)"
@@ -126,23 +114,25 @@ def add_required_metadata_args(parser: argparse.ArgumentParser) -> None:
         "--missing-metadata",
         action="append",
         default=[],
-        metavar='FIELD="REASON"',
-        help="Explicitly record that the source data has no value for FIELD. "
-        "Repeatable. Strongly discouraged: provide the value if at all possible.",
+        choices=REQUIRED_METADATA_FIELDS,
+        metavar="FIELD",
+        help="Explicitly mark FIELD as not available in the source data. "
+        "Repeatable. Only use this if absolutely necessary: provide the value "
+        "whenever the source data has it.",
     )
 
 
 def build_required_metadata(
-    values: dict[str, Any], missing: dict[str, str] | None = None
+    values: dict[str, Any], missing: Iterable[str] = ()
 ) -> dict[str, Any]:
-    """Merge plain values and {field: reason} waivers into create_and_write kwargs.
+    """Merge plain values and the names of waived fields into ZarrWriter kwargs.
 
     Both inputs are plain data so they can travel through Ray / argparse.
-    A field in ``missing`` becomes MissingMetadata(reason); giving a field both
+    A field named in ``missing`` becomes MissingMetadata(); giving a field both
     a value and a waiver is an error.
     """
-    missing = dict(missing or {})
-    unknown = set(missing) - set(REQUIRED_METADATA_FIELDS)
+    missing = set(missing)
+    unknown = missing - set(REQUIRED_METADATA_FIELDS)
     if unknown:
         raise ValueError(
             f"missing_metadata names unknown fields {sorted(unknown)}; "
@@ -154,34 +144,21 @@ def build_required_metadata(
         if field in missing:
             if value not in (None, ""):
                 raise ValueError(
-                    f"{field} has both a value ({value!r}) and a missing_metadata "
-                    "reason; pass one or the other"
+                    f"{field} has both a value ({value!r}) and is marked missing; "
+                    "pass one or the other"
                 )
-            out[field] = MissingMetadata(missing[field])
+            out[field] = MissingMetadata()
         else:
             out[field] = value
     return out
 
 
-def parse_missing_metadata(items: list[str] | None) -> dict[str, str]:
-    """Parse repeated ``FIELD=REASON`` CLI strings into {field: reason}."""
-    missing = {}
-    for item in items or []:
-        field, sep, reason = item.partition("=")
-        if not sep:
-            raise ValueError(f"--missing-metadata expects FIELD=REASON, got {item!r}")
-        missing[field.strip()] = reason.strip()
-    return missing
-
-
 def required_metadata_from_args(args: Any) -> dict[str, Any]:
-    """create_and_write required-metadata kwargs from an argparse/SimpleNamespace.
+    """ZarrWriter required-metadata kwargs from an argparse/SimpleNamespace.
 
-    ``args.missing_metadata`` may be a list of FIELD=REASON strings (CLI) or a
-    {field: reason} dict (programmatic callers such as run_conversion).
+    ``args.missing_metadata`` is an iterable of waived field names (repeated
+    --missing-metadata on the CLI, or a list from run_conversion).
     """
-    missing = getattr(args, "missing_metadata", None)
-    if not isinstance(missing, dict):
-        missing = parse_missing_metadata(missing)
+    missing = getattr(args, "missing_metadata", None) or ()
     values = {f: getattr(args, f, None) for f in REQUIRED_METADATA_FIELDS}
     return build_required_metadata(values, missing)

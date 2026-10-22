@@ -437,7 +437,6 @@ The root group's `.attrs` dictionary is the **episode metadata**. It is written 
     "lab":               str,   # REQUIRED: short, stable, lowercase source id, e.g. "mecka"
     "scene":             str,   # REQUIRED: scene / location label
     "objects":   str | list[str], # REQUIRED: objects manipulated
-    "missing_metadata": dict,   # ONLY if a field above was waived: {field: reason}
     "intrinsics":        dict,  # MANDATORY: {camera_key: 3x4 K matrix} dict (single-camera =
                                 #   one entry, e.g. {"front_1": K}; 3x4 = the 3x3 pinhole K
                                 #   with a zero last column). Projection uses the "front" entry.
@@ -475,18 +474,18 @@ These are what let people filter the data and train on it — per-operator split
 - `lab` must match `^[a-z0-9][a-z0-9_-]*$` and must never change once chosen.
 - `objects` may be a string or a list of strings.
 
-If your source data genuinely has no value for a field, you must say so explicitly, with a reason:
+If your source data genuinely has no value for a field, you must say so explicitly:
 
 ```python
 from egomimic.rldb.zarr.required_metadata import MissingMetadata
 
 ZarrWriter.create_and_write(
     ...,
-    scene=MissingMetadata("Capture app does not record a scene label"),
+    scene=MissingMetadata(),
 )
 ```
 
-The field is then stored as `null`, the reason goes into `zarr.attrs["missing_metadata"]`, and the validator (§11.1) fails the episode unless it is run with `--allow-missing`. Converter CLIs built with `egomimic.rldb.zarr.required_metadata.add_required_metadata_args` expose this as `--missing-metadata scene="Capture app does not record a scene label"`.
+The field is then stored as `null`, and the validator (§11.1) fails the episode unless it is run with `--allow-missing`. Converter CLIs built with `egomimic.rldb.zarr.required_metadata.add_required_metadata_args` expose this as `--missing-metadata scene`.
 
 ### 6.4 Storage / Chunking
 
@@ -812,7 +811,7 @@ It prints `PASS`/`FAIL` per episode with every problem found, and exits nonzero 
 - annotations are well-formed `annotation_v1` records within `[0, T]`
 - frame 0 of every JPEG key decodes to an RGB image
 
-A field written as `MissingMetadata(...)` fails the check by default. `--allow-missing` downgrades it to a warning; only use it once you have confirmed the source data really has no value for that field. From Python, `validate_episode(path)` returns a `ValidationReport` with `.errors`, `.warnings` and `.ok`.
+A field written as `MissingMetadata()` (stored as `null`) fails the check by default. `--allow-missing` downgrades it to a warning; only use it once you have confirmed the source data really has no value for that field. From Python, `validate_episode(path)` returns a `ValidationReport` with `.errors`, `.warnings` and `.ok`.
 
 ### 11.2 End-to-End Load Test
 

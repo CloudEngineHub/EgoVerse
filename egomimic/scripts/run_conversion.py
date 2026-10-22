@@ -97,10 +97,10 @@ def infer_task_name_from_row(row: TableRow) -> str:
 
 def infer_required_metadata_from_row(row: TableRow) -> dict:
     """
-    operator/lab/scene/objects for the converter, plus a {field: reason}
-    missing_metadata entry for every required metadata field the legacy row left empty
-    (including task), so the gap is recorded in zarr.attrs instead of silently
-    written as a placeholder. Plain data so it travels through Ray.
+    operator/lab/scene/objects for the converter, plus a missing_metadata list
+    naming every required metadata field the legacy row left empty (including
+    task), so it is written as an explicit MissingMetadata() instead of a
+    placeholder. Plain data so it travels through Ray.
     """
     values = {
         "task_name": infer_task_name_from_row(row),
@@ -109,11 +109,7 @@ def infer_required_metadata_from_row(row: TableRow) -> dict:
         "scene": (row.scene or "").strip(),
         "objects": (row.objects or "").strip(),
     }
-    missing = {
-        field: f"legacy DB row {row.episode_hash} has an empty {field}"
-        for field, value in values.items()
-        if not value
-    }
+    missing = [field for field, value in values.items() if not value]
     del values["task_name"]
     return {**{k: v or None for k, v in values.items()}, "missing_metadata": missing}
 

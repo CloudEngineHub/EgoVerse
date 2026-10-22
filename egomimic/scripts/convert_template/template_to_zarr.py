@@ -90,7 +90,8 @@ def load_episode(raw_path: Path) -> RawEpisode:
     ``metadata`` is per episode: read the operator, scene and objects from your
     own capture logs rather than hardcoding them for the whole batch — they
     are what lets people filter and train on the data. If your source truly
-    has no value for a field, use MissingMetadata("<why>") for it.
+    has no value for a field, use MissingMetadata() for it — only if
+    absolutely necessary.
     """
     # Synthetic stand-in so the template runs as shipped.
     seed = int(hashlib.sha256(Path(raw_path).name.encode()).hexdigest()[:8], 16)
@@ -114,7 +115,8 @@ def load_episode(raw_path: Path) -> RawEpisode:
             "lab": "template",
             "scene": "kitchen_a",
             "objects": ["towel"],
-            # e.g. "scene": MissingMetadata("Capture app does not record a scene"),
+            # Only if absolutely necessary, e.g. your capture logs have no scene:
+            # "scene": MissingMetadata(),
         },
     )
 

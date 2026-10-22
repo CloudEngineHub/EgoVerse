@@ -97,8 +97,8 @@ class ZarrWriter:
             objects: REQUIRED: objects manipulated (str or list[str]).
                 write() rejects an empty string or a placeholder
                 such as "unknown" for any of these five. If the source data
-                genuinely has no value, pass MissingMetadata("<why>"); it is
-                stored as None with the reason under "missing_metadata".
+                genuinely has no value, pass MissingMetadata(); it is stored
+                as null.
         """
         self.episode_path = Path(episode_path)
 
@@ -274,9 +274,7 @@ class ZarrWriter:
                     )
         for field, value in self.required_metadata.items():
             if isinstance(value, MissingMetadata):
-                logger.warning(
-                    "Writing %s without %s: %s", self.episode_path, field, value.reason
-                )
+                logger.warning("Writing %s without %s", self.episode_path, field)
                 continue
             err = required_metadata_error(field, value)
             if err is not None:
@@ -456,17 +454,13 @@ class ZarrWriter:
         if self.extrinsics is not None:
             metadata["extrinsics"] = _intrinsics_to_jsonable(self.extrinsics)
 
-        missing: dict[str, str] = {}
         for field in REQUIRED_METADATA_FIELDS:
             value = self.required_metadata[field]
             if isinstance(value, MissingMetadata):
-                missing[field] = value.reason
                 value = None
             elif isinstance(value, tuple):
                 value = list(value)
             metadata[field] = value
-        if missing:
-            metadata["missing_metadata"] = missing
 
         # Apply overrides — but NEVER let them clobber the validated camera
         # metadata. intrinsics/extrinsics are validated in _validate; a
@@ -475,7 +469,7 @@ class ZarrWriter:
         # values (this was the Mecka clobber bug → empty intrinsics in zarr.json).
         # The same goes for the validated required metadata fields.
         if metadata_override:
-            protected = {"intrinsics", "extrinsics", "missing_metadata"}
+            protected = {"intrinsics", "extrinsics"}
             protected.update(REQUIRED_METADATA_FIELDS)
             override = {
                 k: v for k, v in metadata_override.items() if k not in protected

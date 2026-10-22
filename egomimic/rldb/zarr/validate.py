@@ -6,7 +6,7 @@ Run on every episode before uploading (vendors) and on ingest (RL2):
     python -m egomimic.rldb.zarr.validate ep1.zarr ep2.zarr ...
 
 Exits nonzero if any episode has errors. Required metadata fields written as
-MissingMetadata(reason) are errors unless --allow-missing is passed.
+MissingMetadata() (stored as null) are errors unless --allow-missing is passed.
 """
 
 import argparse
@@ -73,29 +73,21 @@ def _required_arm_keys(embodiment: str) -> list[str]:
 
 
 def _check_required_metadata(meta: dict, report: ValidationReport, allow_missing: bool):
-    missing = meta.get("missing_metadata") or {}
-    if not isinstance(missing, dict):
-        report.errors.append("missing_metadata: must be a {field: reason} dict")
-        missing = {}
     for name in REQUIRED_METADATA_FIELDS:
-        if name in missing:
-            msg = f"{name}: not provided — MissingMetadata({missing[name]!r})"
-            if meta.get(name) is not None:
-                report.errors.append(
-                    f"{name}: has a value but is also listed in missing_metadata"
-                )
-            elif allow_missing:
+        if name not in meta:
+            report.errors.append(
+                f"Missing metadata field: {name}. See CONTRIBUTING_DATA.md §6.3."
+            )
+            continue
+        if meta[name] is None:  # written as MissingMetadata()
+            msg = f"{name}: marked as not available (MissingMetadata)"
+            if allow_missing:
                 report.warnings.append(msg)
             else:
                 report.errors.append(
                     msg + ". We heavily recommend providing it; pass "
                     "--allow-missing to accept the episode anyway."
                 )
-            continue
-        if name not in meta:
-            report.errors.append(
-                f"Missing metadata field: {name}. See CONTRIBUTING_DATA.md §6.3."
-            )
             continue
         err = required_metadata_error(name, meta[name])
         if err is not None:
