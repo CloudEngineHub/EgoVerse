@@ -1,16 +1,19 @@
-# EgoVerse vendor MCAP spec 0.1
+# EgoVerse raw-data spec 0.1 (MCAP)
 
-What a data vendor delivers to EgoVerse: one raw, self-contained MCAP recording per
-episode, from which we build the Lance tables (`recordings`, `tasks`, `annotations`,
-`steps`) and the training videos, or any other format later, without asking the vendor
-anything.
+The reference for **raw data**: what a raw recording should contain so we can rebuild any
+training format from it later (Lance tables, training videos, new formats) without asking
+the vendor anything. Vendors deliver **Zarr first**, which is what we train on
+([CONTRIBUTING_DATA.md §6](../../../CONTRIBUTING_DATA.md)), and the raw recordings
+alongside it (§6.6 there). Raw data may come in any format; this document, written as
+an MCAP layout, lists the information and fields it should carry. A vendor who does
+deliver MCAP follows it exactly: one raw, self-contained MCAP recording per episode.
 
 - **Raw, not processed.** Original sensor data at its own rates: no resampling, no
-  aligning streams to one clock rate, no undistorting or cropping video. We convert on
-  our side.
+  aligning streams to one clock rate, no undistorting, cropping or downscaling video. We
+  convert on our side.
 - **Self-contained.** Calibration, camera positions and episode info live inside the
   file. No side JSONs, no constants in our converters.
-- **Checked on arrival.** Every delivered episode is run through the validator
+- **Checked on arrival.** Every MCAP episode is run through the validator
   (`python -m egomimic.rldb.mcap.validate`), which lists what is missing or wrong.
 
 The machine-readable version of this document is [`spec.py`](spec.py); the message
@@ -204,7 +207,9 @@ ring_dip,pinky_mcp,pinky_pip,pinky_dip,palm_center
 - **Video.** H.264 or H.265, Annex B byte stream, `CompressedVideo.format` `h264` /
   `h265`. **Each message is exactly one frame**, stamped with that frame's capture time;
   the first message is a keyframe and carries SPS/PPS (repeat them at every keyframe).
-  Original resolution and orientation: no resizing, cropping, undistorting or rotating.
+  Original resolution, frame rate and orientation: no resizing, cropping, undistorting
+  or rotating. Send the video as the device stores it, or lightly compressed (H.264 /
+  H.265 at a high-quality setting), encoded at most once.
 - **Calibration** `<camera>-info`: exactly one `foxglove.CameraCalibration` message,
   finite values, principal point inside the image:
   `width` / `height` equal the decoded frames; `K` has fx, fy > 0. Name the lens model in
@@ -225,8 +230,9 @@ ring_dip,pinky_mcp,pinky_pip,pinky_dip,palm_center
 
 ## 8. Please don't
 
-- Re-encode, resize, crop, rotate or undistort video. *(Devices that store frames as
-  images, e.g. Aria VRS, encode them once to H.264 / H.265 at full resolution.)*
+- Resize, crop, rotate or undistort video, or re-encode it more than once. One light
+  compression pass is fine. *(Devices that store frames as images, e.g. Aria VRS,
+  encode them once to H.264 / H.265 at full resolution.)*
 - Pack several frames into one video message.
 - Resample or align streams to one rate; we match by timestamp.
 - Trim streams to the camera's span; deliver every sample.

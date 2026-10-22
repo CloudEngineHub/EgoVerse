@@ -1,4 +1,4 @@
-"""Vendor MCAP spec 0.1 in machine-readable form: what `validate.py` checks against.
+"""Raw-data MCAP spec 0.1 in machine-readable form: what `validate.py` checks against.
 
 SPEC.md is the human-readable version of this file; change both together. Numbers the
 plan states are used as-is; the ones it does not state are marked PROVISIONAL, to be tuned

@@ -40,6 +40,7 @@ The pipeline at a glance:
 ```
 Your raw data
     └─► Convert to Zarr v3 (start from the reference converter, §6.0)
+    └─► Keep the raw recordings too, in any format, with video (§6.6)
     └─► Register row in app.episodes DB
     └─► Upload to s3://rldb/processed_v3/<embodiment>/<episode_hash>.zarr/
     └─► Available for download dynamically through S3MultiDataset
@@ -542,6 +543,27 @@ Alongside each `<episode_hash>.zarr` store, write a preview video of the egocent
 
 Any standard MP4 encoder works. If it's convenient, the [`save_preview_mp4`](egomimic/utils/video_utils.py) helper is available — `aria_to_zarr.py` and `eva_to_zarr.py` use it (via the `--save-mp4` flag) and emit the file next to the `.zarr` directory.
 
+### 6.6 Raw Data (alongside the Zarr)
+
+Zarr is what we train on, so deliver it first. Also upload the **raw recordings** each
+episode was converted from, so we can rebuild the data later (new formats, higher
+resolution, different processing) without coming back to you.
+
+- **Any format.** Send raw data the way your pipeline stores it. Use the raw-data
+  reference, [`egomimic/rldb/mcap/SPEC.md`](egomimic/rldb/mcap/SPEC.md), as the checklist
+  of what it should contain: per-camera calibration, capture timestamps on every
+  stream, raw IMU, head / hand (or arm) poses with tracking validity, transforms between
+  frames, and the §6.3 metadata (`task_name`, `operator`, `lab`, `scene`, `objects`).
+- **Include video**, as the device stores it or lightly compressed (e.g. H.264 / H.265 at
+  a high-quality setting). Keep the original resolution and frame rate: no downscaling or
+  cropping, and encode at most once.
+- **One raw episode per Zarr episode**, linked by the same episode hash (§4).
+- **If you use MCAP**, follow SPEC.md exactly and check every episode with
+  `python -m egomimic.rldb.mcap.validate episode_<id>/ [...]`; required metadata waived in
+  `missing_metadata` fails unless `--allow-missing`, as for Zarr.
+
+Ask your RL2 contact where to upload raw data.
+
 ---
 
 ## 7. Coordinate Frame Conventions
@@ -939,6 +961,10 @@ Complete every item before considering an episode ready for upload.
 - [ ] `zarr_processed_path` updated to the correct S3 path after upload.
 - [ ] `num_frames` in DB row matches `total_frames` in `zarr.attrs`.
 - [ ] `embodiment` in DB row exactly matches the embodiment enum string (§9).
+
+**Raw data**
+- [ ] The raw recording of every episode is uploaded, video included, at original resolution (§6.6).
+- [ ] It contains what [`SPEC.md`](egomimic/rldb/mcap/SPEC.md) lists (calibration, timestamps, IMU, poses, §6.3 metadata); MCAP deliveries pass `python -m egomimic.rldb.mcap.validate`.
 
 **Upload**
 - [ ] Episode is accessible at `s3://rldb/processed_v3/<prefix>/<episode_hash>.zarr/`.

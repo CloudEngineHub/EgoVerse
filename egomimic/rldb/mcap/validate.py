@@ -1,4 +1,4 @@
-"""Check a delivered episode against the vendor MCAP spec (spec.py, SPEC.md).
+"""Check a raw MCAP episode against the raw-data spec (spec.py, SPEC.md).
 
     python -m egomimic.rldb.mcap.validate episode_<id>/ [episode_<id>/ ...]
 
