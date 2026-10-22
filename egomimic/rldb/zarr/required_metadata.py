@@ -96,6 +96,35 @@ def required_metadata_error(field: str, value: Any) -> str | None:
     return None
 
 
+def check_required_metadata(
+    meta: dict[str, Any], *, allow_missing: bool = False
+) -> tuple[list[str], list[str]]:
+    """(errors, warnings) for the required fields of a finished episode's metadata.
+
+    Shared by the zarr and MCAP validators. An absent key is always an error; a
+    ``None`` value is an explicit waiver (MissingMetadata), an error unless
+    ``allow_missing``. Concrete values go through ``required_metadata_error``.
+    """
+    errors, warnings = [], []
+    for name in REQUIRED_METADATA_FIELDS:
+        if name not in meta:
+            errors.append(
+                f"Missing metadata field: {name}. See CONTRIBUTING_DATA.md §6.3."
+            )
+        elif meta[name] is None:
+            msg = f"{name}: marked as not available (MissingMetadata)"
+            if allow_missing:
+                warnings.append(msg)
+            else:
+                errors.append(
+                    msg + ". We heavily recommend providing it; pass "
+                    "--allow-missing to accept the episode anyway."
+                )
+        elif (err := required_metadata_error(name, meta[name])) is not None:
+            errors.append(err)
+    return errors, warnings
+
+
 def add_required_metadata_args(parser: argparse.ArgumentParser) -> None:
     """Add --operator/--lab/--scene/--objects/--missing-metadata to a converter CLI.
 

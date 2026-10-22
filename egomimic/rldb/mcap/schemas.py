@@ -225,7 +225,7 @@ MESSAGES = (
             Field(
                 "annotation_vendor",
                 "string",
-                doc="who wrote it; default the episode's vendor",
+                doc="who wrote it; default the episode's lab",
             ),
         ),
     ),

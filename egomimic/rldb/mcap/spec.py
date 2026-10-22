@@ -19,10 +19,10 @@ The profile's `step_clock` camera defines the Lance steps rows: one row per deco
 of it, every other stream aligned to those times during conversion. Other cameras stay
 separate videos and add no rows.
 
-Who and where, as in the Lance pilot: `lab` is the data source / capture family and the
-Lance partition (steps/<lab>.lance: aria, eva, mecka, scale), `site` the organization that
-collected the recording (rl2, microagi), `vendor` who delivered or processed it (acme).
-Hardware goes in rig-name / device-serial. All three are normalized slugs.
+Who, what and where: the episode info carries the same required fields as a zarr
+episode (task_name, operator, lab, scene, objects; CONTRIBUTING_DATA.md §6.3), named and
+checked exactly as in egomimic.rldb.zarr.required_metadata. `lab` is who the data came
+from (rl2, mecka, microagi). Hardware goes in rig-name / device-serial.
 
 IDs: Lance recording_id = recording_id(lab, vendor-recording-id) below, so
 vendor-recording-id must stay the same across every re-export or correction of the
@@ -33,6 +33,8 @@ import re
 import uuid
 from dataclasses import dataclass
 
+from egomimic.rldb.zarr.required_metadata import REQUIRED_METADATA_FIELDS
+
 SPEC_VERSION = "0.1"
 SUPPORTED_SPEC_VERSIONS = ("0.1",)
 
@@ -41,6 +43,7 @@ EPISODE_FILE = "episode.mcap"
 ANNOTATION_FILE = "annotation.mcap"
 # ABC's delivery format names its episode-info record this, with hyphenated keys.
 METADATA_RECORD = "session-metadata"
+MISSING_METADATA_KEY = "missing_metadata"
 
 CAMERA_SUFFIX = "-camera"
 CALIBRATION_SUFFIX = "-info"
@@ -79,9 +82,6 @@ EXTRA_HAND_JOINTS = ("palm_center",)
 HAND_JOINTS = MANO_JOINTS + EXTRA_HAND_JOINTS
 # Shutter: global, or rolling with its readout time.
 SHUTTER = re.compile(r"global|rolling:[0-9]+(\.[0-9]+)?ms")
-
-# Lowercase letters and digits, words joined by "_" or "-": safe in Lance paths and IDs.
-SLUG = re.compile(r"[a-z0-9]+(?:[_-][a-z0-9]+)*")
 
 # Copied from egomimic/rldb/lance/schema.py (PR #716) so the validator needs no Lance
 # install; a unit test checks the two agree once that module is on main.
@@ -161,14 +161,16 @@ class MovingLink:
 @dataclass(frozen=True)
 class MetaKey:
     """One episode-info key. MCAP metadata values are strings; `kind` is what the
-    string must parse as: "str", "slug" (SLUG), "int", "enum" (one of `values`),
-    "sha256" (64 lowercase hex digits), "shutter" (SHUTTER) or "hand_joints"
-    (comma-separated HAND_JOINTS names, each once, including wrist)."""
+    string must parse as: "str", "int", "enum" (one of `values`), "shutter"
+    (SHUTTER), "hand_joints" (comma-separated HAND_JOINTS names, each once,
+    including wrist) or "required_metadata" (one of REQUIRED_METADATA_FIELDS,
+    checked with the zarr rules; `objects` is comma-separated)."""
 
     name: str
     kind: str = "str"
     values: tuple[str, ...] = ()
     human_only: bool = False
+    optional: bool = False
 
 
 @dataclass(frozen=True)
@@ -191,7 +193,7 @@ _TF = Topic(
 _INSTRUCTION = Topic(
     "/instruction", "instruction", schema="egoverse.Instruction", fields=("data",)
 )
-# Optional in either profile. Without /task, the episode-info task / instruction / objects
+# Optional in either profile. Without /task, the episode-info task_name / task_description / objects
 # keys describe one task spanning the whole recording; with /task, the spans are
 # authoritative and those keys only summarize the session (no task row is made from them).
 _LABELS = (
@@ -317,21 +319,19 @@ ROBOT = Profile(
 )
 
 METADATA_KEYS = (
-    MetaKey("lab", "slug"),  # data source / Lance partition: aria, eva, mecka, scale
-    MetaKey("site", "slug"),  # organization that collected it: rl2, microagi
-    MetaKey("operator-id", "sha256"),  # SHA-256 of the operator, never a name
-    MetaKey("task"),
-    MetaKey("instruction"),
+    # The zarr required metadata (CONTRIBUTING_DATA.md §6.3), same names and rules.
+    *(MetaKey(f, "required_metadata") for f in REQUIRED_METADATA_FIELDS),
+    MetaKey("task_description", optional=True),  # full task text
+    # Comma-separated required fields the source truly does not have (MissingMetadata).
+    # Only if absolutely necessary; the episode then fails without --allow-missing.
+    MetaKey(MISSING_METADATA_KEY, optional=True),
     MetaKey("embodiment", "enum", EMBODIMENTS),
     MetaKey("rig-name"),
     MetaKey("device-serial"),
-    MetaKey("scene"),
-    MetaKey("objects"),  # comma-separated
     MetaKey("start-time-unix", "int"),  # ms
     MetaKey("end-time-unix", "int"),  # ms
     # The vendor's own ID for this recording; stable across re-exports and corrections.
     MetaKey("vendor-recording-id"),
-    MetaKey("vendor", "slug"),  # who delivered or processed it: acme
     MetaKey("spec-version", "enum", SUPPORTED_SPEC_VERSIONS),
     MetaKey("license"),  # e.g. "CC-BY-4.0"; the Lance recordings.license column
     # Where in the exposure frames are stamped.

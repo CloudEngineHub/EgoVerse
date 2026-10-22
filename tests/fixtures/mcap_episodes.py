@@ -68,20 +68,18 @@ def _sides(embodiment: str) -> tuple[str, ...]:
 
 def _metadata(embodiment: str, declared: str) -> dict[str, str]:
     info = {
-        "lab": "aria",
-        "site": "rl2",
-        "operator-id": "ab" * 32,
-        "task": "fold_clothes",
-        "instruction": "fold the shirt",
+        "task_name": "fold_clothes",
+        "operator": "op_7",
+        "lab": "rl2",
+        "scene": "kitchen_A",
+        "objects": "shirt,basket",
+        "task_description": "fold the shirt",
         "embodiment": declared,
         "rig-name": "test_rig",
         "device-serial": "SN0001",
-        "scene": "kitchen_A",
-        "objects": "shirt,basket",
         "start-time-unix": str(T0 // 10**6),
         "end-time-unix": str((T0 + DURATION_S * 10**9) // 10**6),
         "vendor-recording-id": "acme-rec-0001",
-        "vendor": "acme",
         "spec-version": spec.SPEC_VERSION,
         "license": "CC-BY-4.0",
     }
@@ -116,7 +114,6 @@ def write_mcap_episode(
     drop_topic: str | None = None,
     drop_metadata_key: str | None = None,
     declared_embodiment: str | None = None,
-    bad_site_slug: bool = False,
     metadata_override: dict[str, str] | None = None,
     unknown_hand_joint: bool = False,
     empty_arm_pose: bool = False,
@@ -174,7 +171,6 @@ def write_mcap_episode(
       drop_metadata_key     leave this episode-info key out
       declared_embodiment   write this as the "embodiment" key, while the topics
                             follow `embodiment`
-      bad_site_slug         "site" is "RL2 Lab" (not a lowercase slug)
       metadata_override     episode-info values to set as given
       unknown_hand_joint    "hand-joints" names "thumb_base", not in the vocabulary
       empty_arm_pose        robot: one arm's state `pose` left empty (as in ABC's
@@ -228,8 +224,6 @@ def write_mcap_episode(
     info = _metadata(embodiment, declared_embodiment or embodiment)
     if drop_metadata_key:
         info.pop(drop_metadata_key)
-    if bad_site_slug:
-        info["site"] = "RL2 Lab"
     info.update(metadata_override or {})
     if unknown_hand_joint:
         info["hand-joints"] = info["hand-joints"].replace("thumb_cmc", "thumb_base")
@@ -314,7 +308,11 @@ def write_mcap_episode(
                 )
 
         write("/tf_static", _tf(links, bad_tf_rotation), T0)
-        write("/instruction", schemas.Instruction(data=info["instruction"]), T0)
+        write(
+            "/instruction",
+            schemas.Instruction(data=info.get("task_description") or "fold the shirt"),
+            T0,
+        )
 
         if human:
             _write_human(

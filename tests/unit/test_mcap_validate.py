@@ -44,20 +44,22 @@ def test_valid_episode_passes(tmp_path, embodiment, kw):
     r = validate_episode(write_mcap_episode(tmp_path, embodiment, **kw))
     assert r.problems == []
     assert r.embodiment == embodiment
-    assert r.recording_id == spec.recording_id("aria", "acme-rec-0001")
+    assert r.recording_id == spec.recording_id("rl2", "acme-rec-0001")
 
 
 # (embodiment, breakage, [(group, topic, substring of the message), ...])
 BREAKAGES = [
     # 1. everything there
     ("human_bimanual", {"drop_topic": "/imu-info"}, [("present", "/imu-info", "missing required topic")]),
-    ("human_bimanual", {"drop_metadata_key": "vendor"}, [("present", None, "'vendor' missing")]),
-    ("human_bimanual", {"drop_metadata_key": "site"}, [("present", None, "'site' missing")]),
+    ("human_bimanual", {"drop_metadata_key": "operator"}, [("present", None, "Missing metadata field: operator")]),
+    ("human_bimanual", {"metadata_override": {"scene": "unknown"}}, [("present", None, "scene='unknown' is a placeholder")]),
+    ("human_bimanual", {"metadata_override": {"objects": "shirt,,basket"}}, [("present", None, "objects entries must be real names")]),
+    ("human_bimanual", {"metadata_override": {"missing_metadata": "operator"}}, [("present", None, "operator has a value")]),
+    ("human_bimanual", {"metadata_override": {"missing_metadata": "scen"}}, [("present", None, "names unknown fields ['scen']")]),
     ("human_bimanual", {"drop_metadata_key": "license"}, [("present", None, "'license' missing")]),
     ("human_bimanual", {"drop_metadata_key": "vendor-recording-id"}, [("present", None, "'vendor-recording-id' missing")]),
     ("human_bimanual", {"drop_metadata_key": "hand-joints"}, [("present", None, "'hand-joints' missing")]),
-    ("human_bimanual", {"bad_site_slug": True}, [("present", None, "not a lowercase slug")]),
-    ("human_bimanual", {"metadata_override": {"operator-id": "jane.doe@gatech.edu"}}, [("present", None, "not a SHA-256 hex digest")]),
+    ("human_bimanual", {"metadata_override": {"lab": "RL2 Lab"}}, [("present", None, "lab='RL2 Lab' must be a short, stable, lowercase identifier")]),
     ("human_bimanual", {"metadata_override": {"shutter": "rolling"}}, [("present", None, "expected 'global' or 'rolling:<readout>ms'")]),
     ("human_bimanual", {"metadata_override": {"camera-timestamp-ref": "middle"}}, [("present", None, "'camera-timestamp-ref' = 'middle'")]),
     ("human_bimanual", {"annotation_metadata": True}, [("present", None, "annotation.mcap carries metadata records")]),
@@ -135,7 +137,27 @@ def test_cli_pass_fail_and_summary(tmp_path, capsys):
     assert f"PASS {good}" in out
     assert f"FAIL {bad}" in out and "[imu] /imu: 100 Hz" in out
     assert "1/2 passed" in out
-    assert spec.recording_id("aria", "acme-rec-0001") in out
+    assert spec.recording_id("rl2", "acme-rec-0001") in out
+
+
+def test_waived_metadata_needs_allow_missing(tmp_path, capsys):
+    ep = write_mcap_episode(
+        tmp_path,
+        drop_metadata_key="scene",
+        metadata_override={"missing_metadata": "scene"},
+    )
+    strict = validate_episode(ep)
+    assert [p.message for p in strict.problems] == [
+        "scene: marked as not available (MissingMetadata). We heavily recommend "
+        "providing it; pass --allow-missing to accept the episode anyway."
+    ]
+    lenient = validate_episode(ep, allow_missing=True)
+    assert lenient.ok and lenient.warnings == [
+        "scene: marked as not available (MissingMetadata)"
+    ]
+    assert main([str(ep)]) == 1
+    assert main([str(ep), "--allow-missing"]) == 0
+    assert "warning: scene: marked as not available" in capsys.readouterr().out
 
 
 def test_missing_and_unreadable_episodes(tmp_path):

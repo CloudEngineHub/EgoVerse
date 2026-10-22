@@ -54,20 +54,24 @@ episode_<id>/
 
 One MCAP metadata record named **`session-metadata`**. All values are strings.
 
+The first five keys are the required metadata of every EgoVerse episode, with the same
+names and rules as a zarr episode ([CONTRIBUTING_DATA.md §6.3](../../../CONTRIBUTING_DATA.md)):
+real values only (empty strings and placeholders such as `unknown`, `n/a`, `tbd`, `test`
+are rejected).
+
 | Key | Example | Meaning |
 |---|---|---|
-| `lab` | `aria` | Data source / capture family; the Lance partition (`steps/<lab>.lance`). Slug. |
-| `site` | `rl2` | Organization that collected the recording. Slug. |
-| `vendor` | `acme` | Organization or pipeline that delivered / processed it. Slug. |
-| `vendor-recording-id` | `acme-rec-0001` | The vendor's own ID for this recording. **Stable across every re-export or correction** (new labels, fixed calibration, re-run poses). |
-| `operator-id` | `9f2c…e41a` | Who performed it, as a SHA-256 hash (64 lowercase hex digits). Never a name or email. |
-| `task` | `fold_clothes` | Task slug; reuse an existing one if it fits. |
-| `instruction` | `fold the 2T shirt on the blue table` | Full task text. |
-| `objects` | `baby_shirt_2t,basket` | Objects involved, comma-separated slugs. |
+| `task_name` | `fold_clothes` | Task name; reuse an existing one if it fits. |
+| `operator` | `op_07` | Stable ID of who performed it. |
+| `lab` | `rl2` | Who the data came from: short, stable, lowercase (`a-z`, `0-9`, `_`, `-`), e.g. `rl2`, `mecka`. Never changes once chosen. |
+| `scene` | `kitchen_a` | Where it was recorded. |
+| `objects` | `baby_shirt_2t,basket` | Objects involved, comma-separated; every entry a real name. |
+| `missing_metadata` | `scene` | *Optional.* Comma-separated required keys the source data truly does not have; leave those keys out. **Only if absolutely necessary**: such episodes are much harder to filter and train on, and fail validation without `--allow-missing`. |
+| `task_description` | `fold the 2T shirt on the blue table` | *Optional.* Full task text. |
+| `vendor-recording-id` | `acme-rec-0001` | Your own ID for this recording. **Stable across every re-export or correction** (new labels, fixed calibration, re-run poses). |
 | `embodiment` | `human_bimanual` | One of `human_{bimanual,left_arm,right_arm}`, `eva_{bimanual,left_arm,right_arm}`. Must match the topics in the file. |
 | `rig-name` | `aria_gen1` | Capture setup. |
 | `device-serial` | `1WM103600M1292` | Physical unit; ties the episode to its calibration. |
-| `scene` | `kitchen_a` | Where it was recorded. |
 | `start-time-unix`, `end-time-unix` | `1736651249664` | Recording bounds, Unix **ms**. |
 | `spec-version` | `0.1` | Version of this spec the file follows. |
 | `license` | `CC-BY-4.0` | License the data is under. |
@@ -75,17 +79,15 @@ One MCAP metadata record named **`session-metadata`**. All values are strings.
 | `shutter` | `rolling:5ms` | *Human only.* `global`, or `rolling:<readout>ms`. |
 | `hand-joints` | see §6 | *Human only.* Names of the hand joints, in the order `HandKeypoints.positions` lists them. |
 
-Slugs are lowercase letters and digits, words joined by `_` or `-`.
-
 **IDs.** Our recording ID is
 `egomimic.rldb.lance.schema.recording_id(lab, vendor-recording-id)` (UUIDv5 of
 `<lab>/<vendor-recording-id>`); the validator prints it. Task and annotation IDs are
 computed downstream from their content, so vendors send none.
 
-**Tasks.** Without `/task` topics, `task` / `instruction` / `objects` describe one task
+**Tasks.** Without `/task` topics, `task_name` / `task_description` / `objects` describe one task
 spanning the whole recording: [first steps frame, last steps frame + one frame), as
 every span is half-open. With `/task`, the spans are authoritative and these keys
-only summarize the session (e.g. `task=laundry` over iron / fold / pack spans); no extra
+only summarize the session (e.g. `task_name=laundry` over iron / fold / pack spans); no extra
 task is made from them.
 
 ## 4. Topics
@@ -139,7 +141,7 @@ T_base_ee as 16 numbers, a **row-major** 4×4. ABC-130k's own `RobotState` /
 | Topic | Type | Notes |
 |---|---|---|
 | `/task` | `egoverse.Task` | One message per task performed: `name` (slug), `description`, `objects`; starts at its log time, ends at `end_time_unix_ns` (after the start). |
-| `/subtask-annotation` | `egoverse.Annotation` | A language label `data` over [log time, `end_time_unix_ns`); `end_time_unix_ns = 0` is a point event (one frame wide). `annotation_type` is `language` (the default when empty); `annotation_vendor` defaults to `vendor`. |
+| `/subtask-annotation` | `egoverse.Annotation` | A language label `data` over [log time, `end_time_unix_ns`); `end_time_unix_ns = 0` is a point event (one frame wide). `annotation_type` is `language` (the default when empty); `annotation_vendor` defaults to the episode's `lab`. |
 
 Every label lies **inside one task**; without `/task`, inside the whole-recording task
 made from the episode info. All spans lie inside the recorded data. Labels added or corrected after delivery go through
@@ -230,7 +232,6 @@ ring_dip,pinky_mcp,pinky_pip,pinky_dip,palm_center
 - Trim streams to the camera's span; deliver every sample.
 - Write zeros when tracking is lost; set `valid = false`.
 - Remove gravity from, filter or fuse the IMU data.
-- Put real operator names or emails anywhere; hash them.
 - Ship calibration as a separate file.
 
 ## 9. How a delivery is checked
@@ -241,7 +242,7 @@ problem fails the episode.
 
 | Group | Checks |
 |---|---|
-| everything there | Required topics present with the exact type and encoding; required fields non-empty on every message; every episode-info key present, slugs / integers / enums valid; `embodiment` matches the topics; `annotation.mcap` holds only label topics. |
+| everything there | Required topics present with the exact type and encoding; required fields non-empty on every message; every episode-info key present, the required metadata real values (waivers in `missing_metadata` fail unless `--allow-missing`), integers / enums valid; `embodiment` matches the topics; `annotation.mcap` holds only label topics. |
 | video usable | Codec h264 / h265; first message a keyframe; one frame per message; frames decode; size matches the calibration; ≥ 30 fps. |
 | clocks | Unix ns (after 2015); never decreasing; no gap over 0.5 s; streams cover the recording to within 1 s; start / end times match the data to within 1 s; head pose and quality ≥ 30 Hz. |
 | calibration | Every camera has a valid `-info` with a known lens model and its coefficient count; `-info-extra` values valid; a camera's video and calibration name the same frame; every named frame reaches `world`; a head-worn rig's main camera has a `/tf_static` path to `head`; `/tf_static` rotations unit and translations finite. |
@@ -260,8 +261,7 @@ all of it and rejects an episode where any message is not exactly one frame.
 | Lance | MCAP |
 |---|---|
 | `recordings.recording_id` | `recording_id(lab, vendor-recording-id)` |
-| `recordings.vendor_recording_id`, `lab`, `site`, `embodiment`, `rig_name`, `scene`, `license` | episode info |
-| `recordings.operator` | `operator-id` |
+| `recordings.vendor_recording_id`, `lab`, `operator`, `embodiment`, `rig_name`, `scene`, `license` | episode info |
 | `recordings.captured_at` | `start-time-unix` |
 | `recordings.num_frames`, `fps` | Decoded steps-clock frames and their timestamps |
 | `recordings.video_path` | Assigned when each camera topic is extracted |

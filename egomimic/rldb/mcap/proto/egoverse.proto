@@ -128,7 +128,7 @@ message Annotation {
   string data = 1;  // English text
   int64 end_time_unix_ns = 2;  // end, absolute Unix ns; 0 = point event (one frame wide)
   string annotation_type = 3;  // default "language"
-  string annotation_vendor = 4;  // who wrote it; default the episode's vendor
+  string annotation_vendor = 4;  // who wrote it; default the episode's lab
 }
 
 // Task text for the episode, e.g. "fold the shirt and put it in the basket".

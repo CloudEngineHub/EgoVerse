@@ -21,7 +21,7 @@ import zarr
 
 from egomimic.rldb.zarr.required_metadata import (
     REQUIRED_METADATA_FIELDS,
-    required_metadata_error,
+    check_required_metadata,
 )
 
 _POSE_KEYS = (
@@ -73,26 +73,11 @@ def _required_arm_keys(embodiment: str) -> list[str]:
 
 
 def _check_required_metadata(meta: dict, report: ValidationReport, allow_missing: bool):
+    errors, warnings = check_required_metadata(meta, allow_missing=allow_missing)
+    report.errors += errors
+    report.warnings += warnings
     for name in REQUIRED_METADATA_FIELDS:
-        if name not in meta:
-            report.errors.append(
-                f"Missing metadata field: {name}. See CONTRIBUTING_DATA.md §6.3."
-            )
-            continue
-        if meta[name] is None:  # written as MissingMetadata()
-            msg = f"{name}: marked as not available (MissingMetadata)"
-            if allow_missing:
-                report.warnings.append(msg)
-            else:
-                report.errors.append(
-                    msg + ". We heavily recommend providing it; pass "
-                    "--allow-missing to accept the episode anyway."
-                )
-            continue
-        err = required_metadata_error(name, meta[name])
-        if err is not None:
-            report.errors.append(err)
-        else:
+        if meta.get(name) is not None and not any(e.startswith(name) for e in errors):
             report.successes.append(f"{name}={meta[name]!r}")
 
 

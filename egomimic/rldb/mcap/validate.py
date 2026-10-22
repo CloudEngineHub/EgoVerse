@@ -35,6 +35,10 @@ from pathlib import Path
 import numpy as np
 
 from egomimic.rldb.mcap import spec
+from egomimic.rldb.zarr.required_metadata import (
+    REQUIRED_METADATA_FIELDS,
+    check_required_metadata,
+)
 
 GROUPS = {
     "present": "everything there",
@@ -225,7 +229,49 @@ def _hand_joint_count(ep: _Episode) -> int:
     return len(spec.MANO_JOINTS)
 
 
-def check_present(ep: _Episode, embodiment: str) -> list[Problem]:
+def _required_metadata_problems(
+    info: dict[str, str], allow_missing: bool, warnings: list[str]
+) -> list[str]:
+    """The zarr required-metadata rules on the episode info (CONTRIBUTING_DATA.md §6.3).
+
+    Fields named in `missing_metadata` are waived (MissingMetadata); `objects` is a
+    comma-separated list. Appends waiver warnings to `warnings` when allowed.
+    """
+    raw = info.get(spec.MISSING_METADATA_KEY, "")
+    waived = {f.strip() for f in raw.split(",") if f.strip()}
+    out = []
+    unknown = waived - set(REQUIRED_METADATA_FIELDS)
+    if unknown:
+        out.append(
+            f"episode info {spec.MISSING_METADATA_KEY!r} names unknown fields "
+            f"{sorted(unknown)}; expected some of {list(REQUIRED_METADATA_FIELDS)}"
+        )
+    meta = {}
+    for name in REQUIRED_METADATA_FIELDS:
+        value = info.get(name)
+        if name in waived and value:
+            out.append(
+                f"{name} has a value ({value!r}) and is listed in "
+                f"{spec.MISSING_METADATA_KEY!r}; give one or the other"
+            )
+        if name in waived and not value:
+            meta[name] = None
+        elif value is not None:
+            meta[name] = (
+                [o.strip() for o in value.split(",")] if name == "objects" else value
+            )
+    errors, warns = check_required_metadata(meta, allow_missing=allow_missing)
+    warnings += warns
+    return out + errors
+
+
+def check_present(
+    ep: _Episode,
+    embodiment: str,
+    allow_missing: bool = False,
+    warnings: list[str] | None = None,
+) -> list[Problem]:
+    warnings = [] if warnings is None else warnings
     out = []
     expected = spec.topics_for(embodiment)
     for t in expected:
@@ -281,21 +327,17 @@ def check_present(ep: _Episode, embodiment: str) -> list[Problem]:
             )
         )
         return out
+    for message in _required_metadata_problems(ep.info, allow_missing, warnings):
+        out.append(Problem("present", None, message))
     for key in spec.METADATA_KEYS:
-        if key.human_only and not human:
+        if (key.human_only and not human) or key.kind == "required_metadata":
             continue
         value = ep.info.get(key.name)
         if value is None or value == "":
-            out.append(Problem("present", None, f"episode info {key.name!r} missing"))
-        elif key.kind == "sha256" and not re.fullmatch(r"[0-9a-f]{64}", value):
-            out.append(
-                Problem(
-                    "present",
-                    None,
-                    f"episode info {key.name!r} is not a SHA-256 hex digest "
-                    "(hash names and emails)",
+            if not key.optional:
+                out.append(
+                    Problem("present", None, f"episode info {key.name!r} missing")
                 )
-            )
         elif key.kind == "shutter" and not spec.SHUTTER.fullmatch(value):
             out.append(
                 Problem(
@@ -303,15 +345,6 @@ def check_present(ep: _Episode, embodiment: str) -> list[Problem]:
                     None,
                     f"episode info {key.name!r} = {value!r}, expected 'global' or "
                     "'rolling:<readout>ms'",
-                )
-            )
-        elif key.kind == "slug" and not spec.SLUG.fullmatch(value):
-            out.append(
-                Problem(
-                    "present",
-                    None,
-                    f"episode info {key.name!r} = {value!r} is not a lowercase slug "
-                    "(a-z, 0-9, words joined by _ or -)",
                 )
             )
         elif key.kind == "hand_joints" and (bad := _hand_joints_problem(value)):
@@ -1091,14 +1124,20 @@ class Result:
     embodiment: str  # declared, or guessed from the topics; "" if unreadable
     recording_id: str  # the Lance recording_id it will get; "" without lab / vendor id
     problems: list[Problem]
+    # Required metadata waived via missing_metadata, accepted with allow_missing.
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def ok(self) -> bool:
         return not self.problems
 
 
-def validate_episode(episode: Path) -> Result:
-    """Validate one episode directory (or its episode.mcap)."""
+def validate_episode(episode: Path, *, allow_missing: bool = False) -> Result:
+    """Validate one episode directory (or its episode.mcap).
+
+    Required metadata waived in `missing_metadata` is a problem unless
+    `allow_missing`, then a warning.
+    """
     episode = Path(episode)
     path = episode / spec.EPISODE_FILE if episode.is_dir() else episode
     if not path.exists():
@@ -1117,7 +1156,7 @@ def validate_episode(episode: Path) -> Result:
                 )
             ],
         )
-    problems = []
+    problems, warnings = [], []
     annotation = path.with_name(spec.ANNOTATION_FILE)
     if path.name == spec.EPISODE_FILE and annotation.exists():
         try:
@@ -1159,7 +1198,7 @@ def validate_episode(episode: Path) -> Result:
                 ep.streams[topic] = s
     embodiment = _embodiment(ep)
     for group, check, args in (
-        ("present", check_present, (ep, embodiment)),
+        ("present", check_present, (ep, embodiment, allow_missing, warnings)),
         ("video", check_video, (ep,)),
         ("clocks", check_clocks, (ep, embodiment)),
         ("calibration", check_calibration, (ep, embodiment)),
@@ -1179,7 +1218,7 @@ def validate_episode(episode: Path) -> Result:
             )
     lab, vid = ep.info.get("lab", ""), ep.info.get("vendor-recording-id", "")
     rid = spec.recording_id(lab, vid) if lab and vid else ""
-    return Result(embodiment, rid, problems)
+    return Result(embodiment, rid, problems, warnings)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1190,10 +1229,15 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         help="episode_<id>/ dirs or episode.mcap files",
     )
+    p.add_argument(
+        "--allow-missing",
+        action="store_true",
+        help="Accept required metadata listed in missing_metadata (warn instead of fail)",
+    )
     args = p.parse_args(argv)
     failed = 0
     for episode in args.episodes:
-        r = validate_episode(episode)
+        r = validate_episode(episode, allow_missing=args.allow_missing)
         label = (
             f"{episode} (spec {spec.SPEC_VERSION}, embodiment {r.embodiment or '?'}, "
             f"recording_id {r.recording_id or '?'})"
@@ -1205,6 +1249,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"  {problem}")
         else:
             print(f"PASS {label}")
+        for warning in r.warnings:
+            print(f"  warning: {warning}")
     if len(args.episodes) > 1:
         print(f"\n{len(args.episodes) - failed}/{len(args.episodes)} passed")
     return 1 if failed else 0
