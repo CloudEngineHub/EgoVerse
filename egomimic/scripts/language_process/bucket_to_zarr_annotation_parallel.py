@@ -2,7 +2,7 @@
 Ray-parallel: download per-episode annotation JSONs from a bucket and write into Zarr.
 
 Counterpart to scale_to_bucket_annotation_parallel.py. Each Ray task:
-  download s3://{bucket}/{prefix}/{episode_hash}_{annotation_key}.json -> ZarrWriter.
+  download s3://{bucket}/{prefix}/{episode_hash}_{annotation_key}.json -> zarr_writer.write_annotations.
 
 Episodes that already have ``annotation_key`` in their Zarr are skipped (unless --overwrite).
 
@@ -51,11 +51,10 @@ def process_episode(
     overwrite: bool = False,
 ) -> str:
     """Download annotation JSON from bucket and write into the episode's Zarr."""
-    from egomimic.rldb.zarr.zarr_writer import ZarrWriter
+    from egomimic.rldb.zarr.zarr_writer import key_exists, write_annotations
     from egomimic.utils.aws.aws_data_utils import get_boto3_s3_client
 
-    writer = ZarrWriter(episode_path=episode_path, verbose=True)
-    if not overwrite and writer.check_key_exists(episode_path, annotation_key):
+    if not overwrite and key_exists(episode_path, annotation_key):
         print(f"[SKIP] {episode_hash} -> {annotation_key} already in zarr")
         return episode_hash
 
@@ -76,8 +75,8 @@ def process_episode(
         for entry in payload
     ]
 
-    writer.append_annotations(
-        annotation_key=annotation_key, annotations=annotations, mode="w"
+    write_annotations(
+        episode_path, annotations, annotation_key=annotation_key, mode="w"
     )
     print(f"[OK] {episode_hash} -> {episode_path} ({len(annotations)} entries)")
     return episode_hash

@@ -656,13 +656,15 @@ ZarrWriter.create_and_write(
 )
 ```
 
-To append annotations to an **existing** Zarr store:
+To write annotations into an **existing** Zarr store (keeps `features` in sync):
 ```python
-writer = ZarrWriter(episode_path="path/to/<episode_hash>.zarr")
-writer.append_annotations(
+from egomimic.rldb.zarr.zarr_writer import write_annotations
+
+write_annotations(
+    "path/to/<episode_hash>.zarr",
+    annotations,
     annotation_key="annotations",
-    annotations=annotations,
-    mode="w",   # "w" = overwrite existing, "a" = append
+    mode="w",   # "w" = replace an existing key, "a" = add a new key only
 )
 ```
 

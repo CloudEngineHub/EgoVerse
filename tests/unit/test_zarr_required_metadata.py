@@ -1,5 +1,5 @@
 """Required metadata (operator/lab/scene/objects/task_name) in
-ZarrWriter.create_and_write and the episode validator."""
+ZarrWriter.write and the episode validator."""
 
 import argparse
 
@@ -15,7 +15,12 @@ from egomimic.rldb.zarr.required_metadata import (
     build_required_metadata,
     required_metadata_from_args,
 )
-from egomimic.rldb.zarr.zarr_writer import ZarrWriter
+from egomimic.rldb.zarr.zarr_writer import (
+    ZarrWriter,
+    key_exists,
+    remove_key,
+    write_annotations,
+)
 
 T = 8
 K = np.array([[100.0, 0, 32, 0], [0, 100.0, 32, 0], [0, 0, 1.0, 0]])
@@ -28,15 +33,17 @@ GOOD = {
 }
 
 
-def _write(path, **overrides):
+def _write(path, metadata_override=None, **overrides):
     kwargs = {**GOOD, **overrides}
     kwargs = {k: v for k, v in kwargs.items() if v is not _DROP}
-    return ZarrWriter.create_and_write(
+    return ZarrWriter(
         path,
-        numeric_data={"actions": np.zeros((T, 3), np.float32)},
         embodiment="human_bimanual",
         intrinsics={"front_1": K},
         **kwargs,
+    ).write(
+        numeric_data={"actions": np.zeros((T, 3), np.float32)},
+        metadata_override=metadata_override,
     )
 
 
@@ -51,6 +58,67 @@ def _attrs(path):
 def test_omitting_a_field_is_a_type_error(tmp_path, field):
     with pytest.raises(TypeError, match=field):
         _write(tmp_path / "ep.zarr", **{field: _DROP})
+    assert not (tmp_path / "ep.zarr").exists()
+
+
+def test_create_and_write_wraps_write(tmp_path):
+    ep = ZarrWriter.create_and_write(
+        tmp_path / "ep.zarr",
+        numeric_data={"actions": np.zeros((T, 3), np.float32)},
+        embodiment="human_bimanual",
+        intrinsics={"front_1": K},
+        **GOOD,
+    )
+    assert _attrs(ep)["operator"] == GOOD["operator"]
+    with pytest.raises(ValueError, match="operator"):
+        ZarrWriter.create_and_write(
+            tmp_path / "bad.zarr",
+            numeric_data={"actions": np.zeros((T, 3), np.float32)},
+            embodiment="human_bimanual",
+            intrinsics={"front_1": K},
+            **{**GOOD, "operator": "unknown"},
+        )
+    assert not (tmp_path / "bad.zarr").exists()
+
+
+@pytest.mark.parametrize(
+    "kwargs, match",
+    [
+        ({"embodiment": "mecka_bimanual"}, "embodiment"),
+        ({"intrinsics": None}, "intrinsics"),
+        ({"intrinsics": {"front_1": np.eye(3)}}, "3x4"),
+        ({"extrinsics": {}}, "extrinsics"),
+        ({"extrinsics": {"left": np.eye(3)}}, "4x4"),
+    ],
+)
+def test_write_validates_camera_and_embodiment(tmp_path, kwargs, match):
+    base = {"embodiment": "human_bimanual", "intrinsics": {"front_1": K}, **GOOD}
+    writer = ZarrWriter(tmp_path / "ep.zarr", **{**base, **kwargs})
+    with pytest.raises(ValueError, match=match):
+        writer.write(numeric_data={"actions": np.zeros((T, 3), np.float32)})
+    assert not (tmp_path / "ep.zarr").exists()
+
+
+def test_bare_writer_is_a_type_error(tmp_path):
+    with pytest.raises(TypeError):
+        ZarrWriter(tmp_path / "ep.zarr")
+
+
+def test_store_edits_keep_features_in_sync(tmp_path):
+    ep = write_episode(tmp_path, "aria", T=16, H=32, W=32)
+    write_annotations(ep, [("pick", 0, 3)], "annotations", mode="w")
+    write_annotations(ep, [("place", 4, 9)], "annotations_v2")
+    assert key_exists(ep, "annotations_v2")
+    assert _attrs(ep)["features"]["annotations_v2"]["shape"] == [1]
+    assert validate.validate_episode(ep).ok
+
+    with pytest.raises(ValueError, match="already exists"):
+        write_annotations(ep, [("x", 0, 1)], "annotations_v2", mode="a")
+
+    remove_key(ep, "annotations_v2")
+    assert not key_exists(ep, "annotations_v2")
+    assert "annotations_v2" not in _attrs(ep)["features"]
+    assert validate.validate_episode(ep).ok
 
 
 @pytest.mark.parametrize("field", list(GOOD))
@@ -114,7 +182,7 @@ def test_build_required_metadata_rejects_value_and_waiver_together():
         build_required_metadata({}, {"opertor": "a long enough reason"})
 
 
-def test_cli_args_feed_create_and_write(tmp_path):
+def test_cli_args_feed_writer(tmp_path):
     parser = argparse.ArgumentParser()
     parser.add_argument("--task-name")
     add_required_metadata_args(parser)

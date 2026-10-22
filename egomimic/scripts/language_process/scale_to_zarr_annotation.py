@@ -17,7 +17,7 @@ import hydra
 from omegaconf import OmegaConf
 from scaleapi import ScaleClient
 
-from egomimic.rldb.zarr.zarr_writer import ZarrWriter
+from egomimic.rldb.zarr.zarr_writer import write_annotations
 from egomimic.scripts.language_process.converter import (
     HardCodedConverter,
     PickPlaceLLMConverter,
@@ -119,12 +119,8 @@ if __name__ == "__main__":
             if tid is None:
                 continue
             annotation = converter.convert(tid)
-            writer = ZarrWriter(
-                episode_path=zarr_dataset.episode_path,
-                verbose=True,
-            )
-            writer.append_annotations(
-                annotation_key="annotations", annotations=annotation, mode="w"
+            write_annotations(
+                zarr_dataset.episode_path, annotation, "annotations", mode="w"
             )
 
     for dataset_name in valid_datasets:
@@ -133,10 +129,6 @@ if __name__ == "__main__":
             if tid is None:
                 continue
             annotation = converter.convert(tid)
-            writer = ZarrWriter(
-                episode_path=zarr_dataset.episode_path,
-                verbose=True,
-            )
-            writer.append_annotations(
-                annotation_key="annotations", annotations=annotation, mode="w"
+            write_annotations(
+                zarr_dataset.episode_path, annotation, "annotations", mode="w"
             )

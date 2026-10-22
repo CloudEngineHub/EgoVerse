@@ -90,10 +90,9 @@ def process_episode(
     Self-contained Ray task: download, convert, and write one episode's annotations.
     Returns the episode_hash on success.
     """
-    from egomimic.rldb.zarr.zarr_writer import ZarrWriter
+    from egomimic.rldb.zarr.zarr_writer import key_exists, write_annotations
 
-    writer = ZarrWriter(episode_path=episode_path, verbose=True)
-    if not overwrite and writer.check_key_exists(episode_path, annotation_key):
+    if not overwrite and key_exists(episode_path, annotation_key):
         print(f"[SKIP] {episode_hash} -> {annotation_key} already exists")
         return episode_hash
 
@@ -107,9 +106,7 @@ def process_episode(
     )
     annotation = converter.convert(tid)
 
-    writer.append_annotations(
-        annotation_key=annotation_key, annotations=annotation, mode="w"
-    )
+    write_annotations(episode_path, annotation, annotation_key=annotation_key, mode="w")
     print(f"[OK] {episode_hash} -> {episode_path}")
     return episode_hash
 

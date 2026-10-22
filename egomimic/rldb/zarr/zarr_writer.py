@@ -51,56 +51,72 @@ class ZarrWriter:
     def __init__(
         self,
         episode_path: str | Path,
-        embodiment: str = "",
+        *,
+        embodiment: str,
+        intrinsics: dict,
+        task_name: "str | MissingMetadata",
+        operator: "str | MissingMetadata",
+        lab: "str | MissingMetadata",
+        scene: "str | MissingMetadata",
+        objects: "str | list[str] | MissingMetadata",
         fps: int = 30,
-        task_name: str = "debug",
         task_description: str = "",
         annotations: list[tuple[str, int, int]] | None = None,
         chunk_timesteps: int = 100,
-        intrinsics: dict | None = None,
         extrinsics: dict | None = None,
-        verbose: bool = False,
-        required_metadata: dict[str, Any] | None = None,
     ):
         """
         Initialize ZarrWriter.
 
+        The camera and metadata arguments are keyword-only with no default, so
+        forgetting one is a TypeError at the call site; their values are
+        checked by write() before anything touches disk. To edit an existing
+        episode (annotations, removing a key) use the module-level
+        write_annotations / remove_key / key_exists instead.
+
         Args:
             episode_path: Path to episode .zarr directory.
-            embodiment: Robot type identifier (e.g., "eva_bimanual").
+            embodiment: Embodiment identifier (e.g. "human_bimanual"); must be
+                a valid EMBODIMENT name (CONTRIBUTING_DATA.md §9).
             fps: Frames per second for playback (default: 30).
-            task_name: Task name.
             task_description: Task description.
             annotations: List of (text, start_idx, end_idx) tuples describing language annotations.
             chunk_timesteps: Number of timesteps per chunk for numeric arrays (default: 100).
-            intrinsics: Camera intrinsics as a {camera_key: 3x4 K matrix} dict
+            intrinsics: REQUIRED: {camera_key: 3x4 K matrix} dict
                 (single-camera = one entry, e.g. {"front_1": K}). Stored under the
-                "intrinsics" key in zarr.json metadata. Optional in this low-level
-                constructor; create_and_write requires it.
+                "intrinsics" key in zarr.json metadata.
             extrinsics: Optional camera extrinsics. None (egocentric human data) or
-                a dict mapping a key to its transform matrix; robots key per-arm
+                a non-empty dict of 4x4 transforms; robots key per-arm
                 (e.g. {"left": world<-cam, "right": world<-cam}). Stored under the
-                "extrinsics" key in zarr.json metadata. create_and_write enforces
-                the None-or-non-empty-dict contract.
-            required_metadata: Optional {field: value} for REQUIRED_METADATA_FIELDS other than
-                task_name (operator, lab, scene, objects). A MissingMetadata value
-                is stored as None with its reason under "missing_metadata".
-                Optional in this low-level constructor; create_and_write
-                requires and validates every field.
+                "extrinsics" key in zarr.json metadata.
+            task_name: REQUIRED: high-level task (must match the DB
+                row's task).
+            operator: REQUIRED: per-episode ID of the collector.
+            lab: REQUIRED: short, stable, lowercase source id.
+            scene: REQUIRED: scene / location label.
+            objects: REQUIRED: objects manipulated (str or list[str]).
+                write() rejects an empty string or a placeholder
+                such as "unknown" for any of these five. If the source data
+                genuinely has no value, pass MissingMetadata("<why>"); it is
+                stored as None with the reason under "missing_metadata".
         """
         self.episode_path = Path(episode_path)
 
         # Store parameters
         self.fps = fps
         self.embodiment = embodiment
-        self.task_name = task_name
         self.task_description = task_description
         self.annotations = annotations if annotations is not None else []
         self.chunk_timesteps = chunk_timesteps
         self.intrinsics = intrinsics
         self.extrinsics = extrinsics
-        self.verbose = verbose
-        self.required_metadata = dict(required_metadata) if required_metadata else {}
+        self.required_metadata = {
+            "task_name": task_name,
+            "operator": operator,
+            "lab": lab,
+            "scene": scene,
+            "objects": objects,
+        }
         # Track image shapes for metadata
         self._features: dict[str, dict[str, Any]] = {}
 
@@ -110,9 +126,9 @@ class ZarrWriter:
         image_data: dict[str, np.ndarray] | None = None,
         pre_encoded_image_data: dict[str, tuple[np.ndarray, list[int]]] | None = None,
         metadata_override: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> Path:
         """
-        Write episode data to Zarr store.
+        Validate the episode configuration, then write it to the Zarr store.
 
         Args:
             numeric_data: Dictionary of numeric arrays (state, actions, etc.).
@@ -122,12 +138,22 @@ class ZarrWriter:
             pre_encoded_image_data: Dictionary mapping key to (encoded_array, image_shape).
                 encoded_array is np.ndarray(dtype=object) of JPEG bytes.
                 image_shape is [H, W, 3]. Skips internal JPEG encoding.
-            metadata_override: Optional metadata overrides to apply after building metadata.
+            metadata_override: Optional metadata overrides to apply after
+                building metadata. Cannot overwrite intrinsics/extrinsics or the
+                required metadata fields.
+
+        Returns:
+            Path to the written episode.
 
         Raises:
-            ValueError: If arrays have inconsistent frame counts.
-            ValueError: If total_frames was not set and cannot be inferred.
+            ValueError: If no data is provided or arrays have inconsistent frame
+                counts, if embodiment is not a valid identifier (§9), if
+                intrinsics is not a non-empty {camera_key: 3x4 K matrix} dict,
+                if extrinsics is neither None nor a non-empty {key: 4x4} dict, or
+                if a required metadata field (task_name/operator/lab/scene/
+                objects) is missing, empty, a placeholder, or malformed.
         """
+        self._validate()
         numeric_data = numeric_data or {}
         image_data = image_data or {}
         pre_encoded_image_data = pre_encoded_image_data or {}
@@ -182,11 +208,79 @@ class ZarrWriter:
 
         # Write language annotations if provided
         if self.annotations is not None:
-            self._write_annotations(store, self.annotations)
+            self._features["annotations"] = _write_annotation_array(
+                store, self.annotations, "annotations"
+            )
 
         # Build and attach metadata
         metadata = self._build_metadata(metadata_override)
         store.attrs.update(metadata)
+        return self.episode_path
+
+    def _validate(self) -> None:
+        """Check embodiment, camera metadata and required metadata (see write)."""
+        # Validate the embodiment up front (it is guaranteed to be consumed by
+        # the reader via get_embodiment_id) so a bad/empty/typo'd value fails
+        # here with an actionable message instead of an opaque KeyError at load.
+        from egomimic.rldb.embodiment.embodiment import EMBODIMENT
+
+        embodiment = self.embodiment
+        if not embodiment or embodiment.upper() not in EMBODIMENT.__members__:
+            raise ValueError(
+                "embodiment must be one of "
+                f"{[m.name.lower() for m in EMBODIMENT]}, got {embodiment!r}. "
+                "See CONTRIBUTING_DATA.md §9."
+            )
+        intrinsics = self.intrinsics
+        if not isinstance(intrinsics, dict) or not intrinsics:
+            raise ValueError(
+                "Camera intrinsics must be a non-empty {camera_key: 3x4 K matrix} "
+                'dict for a contributed zarr episode, e.g. {"front_1": K}. '
+                "See CONTRIBUTING_DATA.md §6.4."
+            )
+        for cam_key, K in intrinsics.items():
+            try:
+                K_arr = np.asarray(K, dtype=np.float64)
+            except (TypeError, ValueError):
+                K_arr = None
+            if K_arr is None or K_arr.shape != (3, 4):
+                raise ValueError(
+                    f"intrinsics[{cam_key!r}] must be a 3x4 K matrix (the 3x3 "
+                    "pinhole K with a zero last column; pad a bare 3x3 with "
+                    "np.hstack([K, np.zeros((3, 1))])), got "
+                    f"{getattr(K_arr, 'shape', type(K).__name__)}. "
+                    "See CONTRIBUTING_DATA.md §6.4."
+                )
+        extrinsics = self.extrinsics
+        if extrinsics is not None and (
+            not isinstance(extrinsics, dict) or not extrinsics
+        ):
+            raise ValueError(
+                "Camera extrinsics must be None or a non-empty dict mapping a key "
+                'to its transform matrix (robots key per-arm, e.g. {"left": T, '
+                '"right": T}). See CONTRIBUTING_DATA.md §6.3.'
+            )
+        if extrinsics is not None:
+            for ext_key, T in extrinsics.items():
+                try:
+                    T_arr = np.asarray(T, dtype=np.float64)
+                except (TypeError, ValueError):
+                    T_arr = None
+                if T_arr is None or T_arr.shape != (4, 4):
+                    raise ValueError(
+                        f"extrinsics[{ext_key!r}] must be a 4x4 transform matrix, "
+                        f"got {getattr(T_arr, 'shape', type(T).__name__)}. "
+                        "See CONTRIBUTING_DATA.md §6.3."
+                    )
+        for field, value in self.required_metadata.items():
+            if isinstance(value, MissingMetadata):
+                logger.warning(
+                    "Writing %s without %s: %s", self.episode_path, field, value.reason
+                )
+                continue
+            err = required_metadata_error(field, value)
+            if err is not None:
+                raise ValueError(err)
 
     def _write_numeric_array(
         self, store: zarr.Group, key: str, arr: np.ndarray, padded_frames: int
@@ -336,91 +430,6 @@ class ZarrWriter:
             "names": ["height", "width", "channel"],
         }
 
-    def check_key_exists(self, episode_path: str, key: str) -> bool:
-        return key in zarr.open(str(episode_path), mode="r", zarr_format=3)
-
-    def remove_key(self, episode_path: str, key: str):
-        store = zarr.open(str(episode_path), mode="a", zarr_format=3)
-        del store[key]
-
-    def append_annotations(
-        self,
-        annotation_key: str,
-        annotations: list[tuple[str, int, int]],
-        mode: Literal["w", "a"] = "a",
-    ) -> None:
-        """
-        Write language annotations to the Zarr store.
-
-        Args:
-            annotation_key: Key to write annotations to.
-            annotations: List of (text, start_idx, end_idx) tuples.
-        """
-        annotation_exists = self.check_key_exists(self.episode_path, annotation_key)
-        if annotation_exists:
-            if mode == "w":
-                if self.verbose:
-                    episode_name = self.episode_path.stem
-                    print(f"({episode_name}) Removing key: {annotation_key}")
-                self.remove_key(self.episode_path, annotation_key)
-        store = zarr.open(str(self.episode_path), mode="a", zarr_format=3)
-        self._write_annotations(store, annotations, annotation_key)
-
-    def _write_annotations(
-        self,
-        store: zarr.Group,
-        annotations: list[tuple[str, int, int]],
-        annotation_key: str = "annotations",
-    ) -> None:
-        """
-        Write language annotations as JSON-encoded bytes.
-
-        Args:
-            store: Zarr group to write to.
-            annotations: List of (text, start_idx, end_idx) tuples.
-        """
-        encoded = np.array(
-            [
-                json.dumps(
-                    {
-                        "text": text,
-                        "start_idx": int(start_idx),
-                        "end_idx": int(end_idx),
-                    },
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                ).encode("utf-8")
-                for text, start_idx, end_idx in annotations
-            ],
-            dtype=object,
-        )
-
-        n_annotations = len(annotations)
-        # Both the chunk and the SHARD edge must be >= 1 even when there are no
-        # annotations: zarr v3 rejects a zero-length chunk grid, so an episode
-        # written with shards=(0,) cannot be enumerated (group.keys() raises
-        # "integer chunk edge length must be >= 1") even though the array itself
-        # reads back fine. shape=(0,) with a >=1 edge is the correct encoding of
-        # "empty" -- no chunk objects are written either way.
-        chunk_shape = (max(1, n_annotations),)
-        store.create_array(
-            annotation_key,
-            shape=encoded.shape,
-            chunks=chunk_shape,
-            shards=(max(1, n_annotations),),
-            dtype=VariableLengthBytes(),
-        )
-        if n_annotations > 0:
-            store[annotation_key][:] = encoded
-
-        # Track in features
-        self._features[annotation_key] = {
-            "dtype": "json",
-            "shape": [n_annotations],
-            "names": ["json"],
-            "format": "annotation_v1",
-        }
-
     def _build_metadata(
         self, metadata_override: dict[str, Any] | None = None
     ) -> dict[str, Any]:
@@ -437,7 +446,6 @@ class ZarrWriter:
             "embodiment": self.embodiment,
             "total_frames": self.total_frames,
             "fps": self.fps,
-            "task_name": self.task_name,
             "task_description": self.task_description,
             "features": self._features,
         }
@@ -450,13 +458,7 @@ class ZarrWriter:
 
         missing: dict[str, str] = {}
         for field in REQUIRED_METADATA_FIELDS:
-            value = (
-                self.task_name
-                if field == "task_name"
-                else self.required_metadata.get(field)
-            )
-            if field != "task_name" and field not in self.required_metadata:
-                continue
+            value = self.required_metadata[field]
             if isinstance(value, MissingMetadata):
                 missing[field] = value.reason
                 value = None
@@ -467,7 +469,7 @@ class ZarrWriter:
             metadata["missing_metadata"] = missing
 
         # Apply overrides — but NEVER let them clobber the validated camera
-        # metadata. intrinsics/extrinsics are validated in create_and_write; a
+        # metadata. intrinsics/extrinsics are validated in _validate; a
         # converter's metadata_override that happens to carry a stale or empty
         # "intrinsics"/"extrinsics" key must not silently overwrite the validated
         # values (this was the Mecka clobber bug → empty intrinsics in zarr.json).
@@ -488,148 +490,142 @@ class ZarrWriter:
         numeric_data: dict[str, np.ndarray] | None = None,
         image_data: dict[str, np.ndarray] | None = None,
         pre_encoded_image_data: dict[str, tuple[np.ndarray, list[int]]] | None = None,
-        embodiment: str = "",
-        fps: int = 30,
-        task_description: str = "",
-        annotations: list[tuple[str, int, int]] | None = None,
-        chunk_timesteps: int = 100,
         *,
+        embodiment: str,
         intrinsics: dict,
         task_name: "str | MissingMetadata",
         operator: "str | MissingMetadata",
         lab: "str | MissingMetadata",
         scene: "str | MissingMetadata",
         objects: "str | list[str] | MissingMetadata",
+        fps: int = 30,
+        task_description: str = "",
+        annotations: list[tuple[str, int, int]] | None = None,
+        chunk_timesteps: int = 100,
         extrinsics: dict | None = None,
         metadata_override: dict[str, Any] | None = None,
     ) -> Path:
+        """Build a ZarrWriter and write the episode in one call.
+
+        Arguments are as in ZarrWriter.__init__ and ZarrWriter.write; all
+        validation happens in write(). Returns the episode path.
         """
-        Convenience method: create writer and write in one call.
-
-        Args:
-            episode_path: Path to episode .zarr directory.
-            numeric_data: Dictionary of numeric arrays (state, actions, etc.).
-            image_data: Dictionary of image arrays with shape (T, H, W, 3).
-            pre_encoded_image_data: Dict mapping key to (encoded_array, image_shape).
-                Skips internal JPEG encoding for these keys.
-            embodiment: Robot type identifier.
-            fps: Frames per second (default: 30).
-            task_description: Task description.
-            annotations: List of (text, start_idx, end_idx) tuples describing language annotations.
-            chunk_timesteps: Number of timesteps per chunk for numeric arrays (default: 100).
-            intrinsics: REQUIRED {camera_key: 3x4 K matrix} dict (single-camera =
-                one entry, e.g. {"front_1": K}). Stored in zarr.json metadata.
-            extrinsics: Optional camera extrinsics. Either None (e.g. egocentric
-                human data) or a non-empty dict mapping a key to its transform
-                matrix (robots key per-arm, e.g. {"left": T, "right": T}). Stored
-                in zarr.json metadata.
-            task_name: REQUIRED high-level task (must match the DB row's task).
-            operator: REQUIRED per-episode ID of the person who collected it.
-            lab: REQUIRED short, stable, lowercase source identifier (e.g. "mecka").
-            scene: REQUIRED scene / location label.
-            objects: REQUIRED objects manipulated (str or list[str]).
-                Each of these five has no default and rejects empty strings and
-                placeholders such as "unknown". If the source data genuinely has
-                no value, pass MissingMetadata("<why>") for that field.
-            metadata_override: Optional metadata overrides. Cannot overwrite
-                intrinsics/extrinsics or the required metadata fields above.
-
-        Returns:
-            Path to created episode.
-
-        Raises:
-            ValueError: If no data is provided, if embodiment is not a valid
-                identifier (see §9), if intrinsics is not a non-empty
-                {camera_key: 3x4 K matrix} dict, or if extrinsics is neither None
-                nor a non-empty {key: 4x4 transform} dict, or if a required metadata
-                field (task_name/operator/lab/scene/objects) is empty, a
-                placeholder, or malformed.
-        """
-        # Validate the embodiment up front (it is guaranteed to be consumed by
-        # the reader via get_embodiment_id) so a bad/empty/typo'd value fails
-        # here with an actionable message instead of an opaque KeyError at load.
-        from egomimic.rldb.embodiment.embodiment import EMBODIMENT
-
-        if not embodiment or embodiment.upper() not in EMBODIMENT.__members__:
-            raise ValueError(
-                "embodiment must be one of "
-                f"{[m.name.lower() for m in EMBODIMENT]}, got {embodiment!r}. "
-                "See CONTRIBUTING_DATA.md §9."
-            )
-        if not isinstance(intrinsics, dict) or not intrinsics:
-            raise ValueError(
-                "Camera intrinsics must be a non-empty {camera_key: 3x4 K matrix} "
-                'dict for a contributed zarr episode, e.g. {"front_1": K}. '
-                "See CONTRIBUTING_DATA.md §6.4."
-            )
-        for cam_key, K in intrinsics.items():
-            try:
-                K_arr = np.asarray(K, dtype=np.float64)
-            except (TypeError, ValueError):
-                K_arr = None
-            if K_arr is None or K_arr.shape != (3, 4):
-                raise ValueError(
-                    f"intrinsics[{cam_key!r}] must be a 3x4 K matrix (the 3x3 "
-                    "pinhole K with a zero last column; pad a bare 3x3 with "
-                    "np.hstack([K, np.zeros((3, 1))])), got "
-                    f"{getattr(K_arr, 'shape', type(K).__name__)}. "
-                    "See CONTRIBUTING_DATA.md §6.4."
-                )
-        if extrinsics is not None and (
-            not isinstance(extrinsics, dict) or not extrinsics
-        ):
-            raise ValueError(
-                "Camera extrinsics must be None or a non-empty dict mapping a key "
-                'to its transform matrix (robots key per-arm, e.g. {"left": T, '
-                '"right": T}). See CONTRIBUTING_DATA.md §6.3.'
-            )
-        if extrinsics is not None:
-            for ext_key, T in extrinsics.items():
-                try:
-                    T_arr = np.asarray(T, dtype=np.float64)
-                except (TypeError, ValueError):
-                    T_arr = None
-                if T_arr is None or T_arr.shape != (4, 4):
-                    raise ValueError(
-                        f"extrinsics[{ext_key!r}] must be a 4x4 transform matrix, "
-                        f"got {getattr(T_arr, 'shape', type(T).__name__)}. "
-                        "See CONTRIBUTING_DATA.md §6.3."
-                    )
-        required_metadata = {
-            "task_name": task_name,
-            "operator": operator,
-            "lab": lab,
-            "scene": scene,
-            "objects": objects,
-        }
-        for field, value in required_metadata.items():
-            if isinstance(value, MissingMetadata):
-                logger.warning(
-                    "Writing %s without %s: %s", episode_path, field, value.reason
-                )
-                continue
-            err = required_metadata_error(field, value)
-            if err is not None:
-                raise ValueError(err)
-        del required_metadata["task_name"]
-        writer = ZarrWriter(
-            episode_path=episode_path,
+        return ZarrWriter(
+            episode_path,
             embodiment=embodiment,
-            fps=fps,
+            intrinsics=intrinsics,
             task_name=task_name,
+            operator=operator,
+            lab=lab,
+            scene=scene,
+            objects=objects,
+            fps=fps,
             task_description=task_description,
             annotations=annotations,
             chunk_timesteps=chunk_timesteps,
-            intrinsics=intrinsics,
             extrinsics=extrinsics,
-            required_metadata=required_metadata,
-        )
-
-        writer.write(
+        ).write(
             numeric_data=numeric_data,
             image_data=image_data,
             pre_encoded_image_data=pre_encoded_image_data,
             metadata_override=metadata_override,
         )
 
-        return writer.episode_path
+
+def _write_annotation_array(
+    store: zarr.Group,
+    annotations: list[tuple[str, int, int]],
+    annotation_key: str,
+) -> dict[str, Any]:
+    """Write (text, start_idx, end_idx) annotations as JSON-encoded bytes.
+
+    Returns the array's ``features`` entry.
+    """
+    encoded = np.array(
+        [
+            json.dumps(
+                {
+                    "text": text,
+                    "start_idx": int(start_idx),
+                    "end_idx": int(end_idx),
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            ).encode("utf-8")
+            for text, start_idx, end_idx in annotations
+        ],
+        dtype=object,
+    )
+
+    n_annotations = len(annotations)
+    # Both the chunk and the SHARD edge must be >= 1 even when there are no
+    # annotations: zarr v3 rejects a zero-length chunk grid, so an episode
+    # written with shards=(0,) cannot be enumerated (group.keys() raises
+    # "integer chunk edge length must be >= 1") even though the array itself
+    # reads back fine. shape=(0,) with a >=1 edge is the correct encoding of
+    # "empty" -- no chunk objects are written either way.
+    store.create_array(
+        annotation_key,
+        shape=encoded.shape,
+        chunks=(max(1, n_annotations),),
+        shards=(max(1, n_annotations),),
+        dtype=VariableLengthBytes(),
+    )
+    if n_annotations > 0:
+        store[annotation_key][:] = encoded
+
+    return {
+        "dtype": "json",
+        "shape": [n_annotations],
+        "names": ["json"],
+        "format": "annotation_v1",
+    }
+
+
+# ── Editing an existing episode ─────────────────────────────────────────────
+# These work on an episode that is already written, so they need none of the
+# metadata a ZarrWriter requires. Each keeps zarr.attrs["features"] in sync
+# with the arrays (the episode validator checks that).
+
+
+def key_exists(episode_path: str | Path, key: str) -> bool:
+    """Whether ``key`` is an array/group in the episode store."""
+    return key in zarr.open(str(episode_path), mode="r", zarr_format=3)
+
+
+def remove_key(episode_path: str | Path, key: str) -> None:
+    """Delete ``key`` from the episode store and from its features."""
+    store = zarr.open_group(str(episode_path), mode="a", zarr_format=3)
+    del store[key]
+    features = dict(store.attrs.get("features", {}))
+    if features.pop(key, None) is not None:
+        store.attrs["features"] = features
+
+
+def write_annotations(
+    episode_path: str | Path,
+    annotations: list[tuple[str, int, int]],
+    annotation_key: str = "annotations",
+    mode: Literal["w", "a"] = "a",
+) -> None:
+    """Write language annotations into an existing episode.
+
+    Args:
+        episode_path: Path to the episode .zarr directory.
+        annotations: List of (text, start_idx, end_idx) tuples.
+        annotation_key: Array key to write (default "annotations").
+        mode: "w" replaces an existing ``annotation_key``; "a" only adds a new
+            key and raises if it already exists.
+    """
+    if key_exists(episode_path, annotation_key):
+        if mode != "w":
+            raise ValueError(
+                f"{annotation_key!r} already exists in {episode_path}; "
+                'pass mode="w" to replace it'
+            )
+        remove_key(episode_path, annotation_key)
+    store = zarr.open_group(str(episode_path), mode="a", zarr_format=3)
+    feature = _write_annotation_array(store, annotations, annotation_key)
+    features = dict(store.attrs.get("features", {}))
+    features[annotation_key] = feature
+    store.attrs["features"] = features
