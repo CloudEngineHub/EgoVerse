@@ -5,8 +5,11 @@ This module provides a reusable writer for creating Zarr v3 episode stores
 compatible with the ZarrEpisode reader.
 """
 
+import glob
 import json
 import logging
+import os
+import shutil
 from pathlib import Path
 from typing import Any, Literal
 
@@ -15,27 +18,34 @@ import simplejpeg
 import zarr
 from zarr.core.dtype import VariableLengthBytes
 
+from egomimic.rldb.zarr.episode_rules import (
+    camera_errors,
+    embodiment_error,
+    fps_error,
+    matrices_to_jsonable,
+)
 from egomimic.rldb.zarr.required_metadata import (
     REQUIRED_METADATA_FIELDS,
     MissingMetadata,
-    required_metadata_error,
+    check_writer_metadata,
+    objects_list,
 )
 
 logger = logging.getLogger(__name__)
 
-
-def _intrinsics_to_jsonable(
-    intrinsics: np.ndarray | list | dict,
-) -> list | dict:
-    """Coerce intrinsics into a JSON-serializable form for zarr.json attrs."""
-    if isinstance(intrinsics, np.ndarray):
-        return intrinsics.tolist()
-    if isinstance(intrinsics, dict):
-        return {
-            k: (v.tolist() if isinstance(v, np.ndarray) else v)
-            for k, v in intrinsics.items()
-        }
-    return intrinsics
+# attrs the writer derives itself; metadata_override may not name them.
+_WRITER_OWNED_ATTRS = frozenset(
+    {
+        "embodiment",
+        "total_frames",
+        "fps",
+        "task_description",
+        "features",
+        "intrinsics",
+        "extrinsics",
+        *REQUIRED_METADATA_FIELDS,
+    }
+)
 
 
 class ZarrWriter:
@@ -89,20 +99,13 @@ class ZarrWriter:
                 a non-empty dict of 4x4 transforms; robots key per-arm
                 (e.g. {"left": world<-cam, "right": world<-cam}). Stored under the
                 "extrinsics" key in zarr.json metadata.
-            task_name: REQUIRED: high-level task (must match the DB
-                row's task).
-            operator: REQUIRED: per-episode ID of the collector.
-            lab: REQUIRED: short, stable, lowercase source id.
-            scene: REQUIRED: scene / location label.
-            objects: REQUIRED: objects manipulated (str or list[str]).
-                write() rejects an empty string or a placeholder
-                such as "unknown" for any of these five. If the source data
-                genuinely has no value, pass MissingMetadata(); it is stored
-                as null.
+            task_name, operator, lab, scene, objects: REQUIRED episode
+                metadata; rules in CONTRIBUTING_DATA.md §6.3. objects may be a
+                list or a comma-separated str and is stored as a list. Pass
+                MissingMetadata() only if the source data has no value; it is
+                stored as null.
         """
         self.episode_path = Path(episode_path)
-
-        # Store parameters
         self.fps = fps
         self.embodiment = embodiment
         self.task_description = task_description
@@ -117,7 +120,6 @@ class ZarrWriter:
             "scene": scene,
             "objects": objects,
         }
-        # Track image shapes for metadata
         self._features: dict[str, dict[str, Any]] = {}
 
     def write(
@@ -138,31 +140,33 @@ class ZarrWriter:
             pre_encoded_image_data: Dictionary mapping key to (encoded_array, image_shape).
                 encoded_array is np.ndarray(dtype=object) of JPEG bytes.
                 image_shape is [H, W, 3]. Skips internal JPEG encoding.
-            metadata_override: Optional metadata overrides to apply after
-                building metadata. Cannot overwrite intrinsics/extrinsics or the
-                required metadata fields.
+            metadata_override: Extra keys to add to zarr.attrs. Must not name
+                a key the writer sets itself (embodiment, fps, intrinsics, the
+                required metadata fields, ...); pass those as ZarrWriter
+                arguments instead.
 
         Returns:
             Path to the written episode.
 
         Raises:
-            ValueError: If no data is provided or arrays have inconsistent frame
-                counts, if embodiment is not a valid identifier (§9), if
-                intrinsics is not a non-empty {camera_key: 3x4 K matrix} dict,
-                if extrinsics is neither None nor a non-empty {key: 4x4} dict, or
-                if a required metadata field (task_name/operator/lab/scene/
-                objects) is missing, empty, a placeholder, or malformed.
+            ValueError: If the data, cameras, embodiment, fps, required
+                metadata (§6.3) or metadata_override are invalid. Nothing is
+                written, and an existing episode at episode_path is left as it
+                was, when write() raises.
         """
+        _remove_stale_siblings(self.episode_path)
         self._validate()
         numeric_data = numeric_data or {}
         image_data = image_data or {}
         pre_encoded_image_data = pre_encoded_image_data or {}
+        self._features = {}
 
         if not numeric_data and not image_data and not pre_encoded_image_data:
             raise ValueError(
                 "Must provide at least one of numeric_data, image_data, "
                 "or pre_encoded_image_data"
             )
+        self._validate_inputs(image_data, pre_encoded_image_data, metadata_override)
 
         # Infer total_frames from data
         all_lengths: list[int] = []
@@ -176,109 +180,95 @@ class ZarrWriter:
         if len(set(all_lengths)) > 1:
             raise ValueError(f"Inconsistent frame counts across arrays: {all_lengths}")
 
-        self.total_frames = all_lengths[0]
+        total_frames = all_lengths[0]
+        if total_frames == 0:
+            raise ValueError("Episode has zero frames")
 
-        # Calculate padded frame count for sharding alignment
-        padded_frames = self.total_frames
-        if self.total_frames % self.chunk_timesteps != 0:
-            padded_frames = (
-                (self.total_frames + self.chunk_timesteps - 1) // self.chunk_timesteps
-            ) * self.chunk_timesteps
+        # Padded to a whole number of chunks for sharding alignment.
+        padded_frames = -(-total_frames // self.chunk_timesteps) * self.chunk_timesteps
 
-        # Create parent directory
         self.episode_path.parent.mkdir(parents=True, exist_ok=True)
 
-        # Open Zarr v3 store
-        mode = "w" if self.episode_path.exists() else "w"
-        store = zarr.open(str(self.episode_path), mode=mode, zarr_format=3)
+        # Build in a sibling temp dir and swap it in at the end, so a failure
+        # never leaves a half-written episode or wipes an existing one.
+        tmp_path = _sibling(self.episode_path, "tmp")
+        try:
+            store = zarr.open(str(tmp_path), mode="w", zarr_format=3)
 
-        # Write numeric arrays
-        for key, arr in numeric_data.items():
-            self._write_numeric_array(store, key, arr, padded_frames)
+            for key, arr in numeric_data.items():
+                self._write_numeric_array(store, key, arr, padded_frames)
 
-        # Write image arrays (with internal JPEG encoding)
-        for key, arr in image_data.items():
-            self._write_image_array(store, key, arr, padded_frames)
+            for key, arr in image_data.items():
+                self._write_image_array(store, key, arr, padded_frames)
 
-        # Write pre-encoded image arrays (skip JPEG encoding)
-        for key, (enc_arr, img_shape) in pre_encoded_image_data.items():
-            self._write_pre_encoded_image_array(
-                store, key, enc_arr, img_shape, padded_frames
-            )
+            for key, (enc_arr, img_shape) in pre_encoded_image_data.items():
+                self._write_pre_encoded_image_array(
+                    store, key, enc_arr, img_shape, padded_frames
+                )
 
-        # Write language annotations if provided
-        if self.annotations is not None:
             self._features["annotations"] = _write_annotation_array(
                 store, self.annotations, "annotations"
             )
 
-        # Build and attach metadata
-        metadata = self._build_metadata(metadata_override)
-        store.attrs.update(metadata)
+            store.attrs.update(self._build_metadata(total_frames, metadata_override))
+            _swap_in(tmp_path, self.episode_path)
+        except BaseException:
+            shutil.rmtree(tmp_path, ignore_errors=True)
+            raise
         return self.episode_path
 
-    def _validate(self) -> None:
-        """Check embodiment, camera metadata and required metadata (see write)."""
-        # Validate the embodiment up front (it is guaranteed to be consumed by
-        # the reader via get_embodiment_id) so a bad/empty/typo'd value fails
-        # here with an actionable message instead of an opaque KeyError at load.
-        from egomimic.rldb.embodiment.embodiment import EMBODIMENT
-
-        embodiment = self.embodiment
-        if not embodiment or embodiment.upper() not in EMBODIMENT.__members__:
-            raise ValueError(
-                "embodiment must be one of "
-                f"{[m.name.lower() for m in EMBODIMENT]}, got {embodiment!r}. "
-                "See CONTRIBUTING_DATA.md §9."
-            )
-        intrinsics = self.intrinsics
-        if not isinstance(intrinsics, dict) or not intrinsics:
-            raise ValueError(
-                "Camera intrinsics must be a non-empty {camera_key: 3x4 K matrix} "
-                'dict for a contributed zarr episode, e.g. {"front_1": K}. '
-                "See CONTRIBUTING_DATA.md §6.4."
-            )
-        for cam_key, K in intrinsics.items():
-            try:
-                K_arr = np.asarray(K, dtype=np.float64)
-            except (TypeError, ValueError):
-                K_arr = None
-            if K_arr is None or K_arr.shape != (3, 4):
+    @staticmethod
+    def _validate_inputs(
+        image_data: dict[str, np.ndarray],
+        pre_encoded_image_data: dict[str, tuple[np.ndarray, list[int]]],
+        metadata_override: dict[str, Any] | None,
+    ) -> None:
+        """Checks that need the data, run before anything touches disk."""
+        for key, arr in image_data.items():
+            if arr.ndim != 4 or arr.shape[-1] != 3 or arr.dtype != np.uint8:
                 raise ValueError(
-                    f"intrinsics[{cam_key!r}] must be a 3x4 K matrix (the 3x3 "
-                    "pinhole K with a zero last column; pad a bare 3x3 with "
-                    "np.hstack([K, np.zeros((3, 1))])), got "
-                    f"{getattr(K_arr, 'shape', type(K).__name__)}. "
-                    "See CONTRIBUTING_DATA.md §6.4."
+                    f"Image array '{key}' must be uint8 with shape (T, H, W, 3), "
+                    f"got {arr.dtype} {arr.shape}"
                 )
-        extrinsics = self.extrinsics
-        if extrinsics is not None and (
-            not isinstance(extrinsics, dict) or not extrinsics
-        ):
+        for key, (_enc, img_shape) in pre_encoded_image_data.items():
+            if len(img_shape) != 3 or img_shape[-1] != 3:
+                raise ValueError(
+                    f"Pre-encoded image '{key}' shape must be [H, W, 3], "
+                    f"got {img_shape}"
+                )
+        if metadata_override:
+            owned = sorted(_WRITER_OWNED_ATTRS & metadata_override.keys())
+            if owned:
+                raise ValueError(
+                    f"metadata_override must not set {owned}: the writer sets "
+                    "these itself. Pass them as ZarrWriter arguments (total_frames "
+                    "and features come from the data)."
+                )
+            try:
+                json.dumps(metadata_override)
+            except TypeError as e:
+                raise ValueError(
+                    f"metadata_override is not JSON-serializable: {e}"
+                ) from e
+
+    def _validate(self) -> None:
+        """Check embodiment, fps, cameras, required metadata and the target path."""
+        errors = [
+            e
+            for e in (embodiment_error(self.embodiment), fps_error(self.fps))
+            if e is not None
+        ]
+        errors += camera_errors(self.intrinsics, self.extrinsics)
+        if errors:
+            raise ValueError("; ".join(errors))
+        if self.episode_path.is_symlink() or self.episode_path.is_file():
             raise ValueError(
-                "Camera extrinsics must be None or a non-empty dict mapping a key "
-                'to its transform matrix (robots key per-arm, e.g. {"left": T, '
-                '"right": T}). See CONTRIBUTING_DATA.md §6.3.'
+                f"{self.episode_path} exists and is not an episode directory"
             )
-        if extrinsics is not None:
-            for ext_key, T in extrinsics.items():
-                try:
-                    T_arr = np.asarray(T, dtype=np.float64)
-                except (TypeError, ValueError):
-                    T_arr = None
-                if T_arr is None or T_arr.shape != (4, 4):
-                    raise ValueError(
-                        f"extrinsics[{ext_key!r}] must be a 4x4 transform matrix, "
-                        f"got {getattr(T_arr, 'shape', type(T).__name__)}. "
-                        "See CONTRIBUTING_DATA.md §6.3."
-                    )
+        check_writer_metadata(self.required_metadata)
         for field, value in self.required_metadata.items():
             if isinstance(value, MissingMetadata):
                 logger.warning("Writing %s without %s", self.episode_path, field)
-                continue
-            err = required_metadata_error(field, value)
-            if err is not None:
-                raise ValueError(err)
 
     def _write_numeric_array(
         self, store: zarr.Group, key: str, arr: np.ndarray, padded_frames: int
@@ -341,12 +331,6 @@ class ZarrWriter:
             image_arr: Image array with shape (T, H, W, 3).
             padded_frames: Target frame count after padding (for sharding alignment).
         """
-        # Validate shape
-        if image_arr.ndim != 4 or image_arr.shape[-1] != 3:
-            raise ValueError(
-                f"Image array '{key}' must have shape (T, H, W, 3), got {image_arr.shape}"
-            )
-
         # Encode each frame as JPEG
         num_frames = len(image_arr)
 
@@ -429,7 +413,7 @@ class ZarrWriter:
         }
 
     def _build_metadata(
-        self, metadata_override: dict[str, Any] | None = None
+        self, total_frames: int, metadata_override: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """
         Build episode metadata dictionary.
@@ -442,39 +426,27 @@ class ZarrWriter:
         """
         metadata = {
             "embodiment": self.embodiment,
-            "total_frames": self.total_frames,
+            "total_frames": total_frames,
             "fps": self.fps,
             "task_description": self.task_description,
             "features": self._features,
         }
 
-        if self.intrinsics is not None:
-            metadata["intrinsics"] = _intrinsics_to_jsonable(self.intrinsics)
-
+        metadata["intrinsics"] = matrices_to_jsonable(self.intrinsics)
         if self.extrinsics is not None:
-            metadata["extrinsics"] = _intrinsics_to_jsonable(self.extrinsics)
+            metadata["extrinsics"] = matrices_to_jsonable(self.extrinsics)
 
         for field in REQUIRED_METADATA_FIELDS:
             value = self.required_metadata[field]
             if isinstance(value, MissingMetadata):
                 value = None
-            elif isinstance(value, tuple):
-                value = list(value)
+            elif field == "objects":
+                value = objects_list(value)
             metadata[field] = value
 
-        # Apply overrides — but NEVER let them clobber the validated camera
-        # metadata. intrinsics/extrinsics are validated in _validate; a
-        # converter's metadata_override that happens to carry a stale or empty
-        # "intrinsics"/"extrinsics" key must not silently overwrite the validated
-        # values (this was the Mecka clobber bug → empty intrinsics in zarr.json).
-        # The same goes for the validated required metadata fields.
+        # write() has already rejected overrides that name a writer-owned key.
         if metadata_override:
-            protected = {"intrinsics", "extrinsics"}
-            protected.update(REQUIRED_METADATA_FIELDS)
-            override = {
-                k: v for k, v in metadata_override.items() if k not in protected
-            }
-            metadata.update(override)
+            metadata.update(metadata_override)
 
         return metadata
 
@@ -524,6 +496,50 @@ class ZarrWriter:
             pre_encoded_image_data=pre_encoded_image_data,
             metadata_override=metadata_override,
         )
+
+
+def _sibling(episode_path: Path, kind: str) -> Path:
+    return episode_path.with_name(f"{episode_path.name}.{kind}-{os.getpid()}")
+
+
+def _remove_stale_siblings(episode_path: Path) -> None:
+    """Drop temp/old dirs left by a writer that was killed mid-write (OOM,
+    SIGKILL), whose own cleanup never ran. Assumes one writer per episode."""
+    name = glob.escape(episode_path.name)
+    for stale in episode_path.parent.glob(f"{name}.tmp-*"):
+        _remove(stale)
+    olds = sorted(
+        episode_path.parent.glob(f"{name}.old-*"),
+        key=lambda p: p.stat().st_mtime,
+    )
+    # Killed between the two renames in _swap_in: the .old copy is the episode.
+    if olds and not episode_path.exists():
+        os.replace(olds.pop(), episode_path)
+    for stale in olds:
+        _remove(stale)
+
+
+def _remove(path: Path) -> None:
+    if path.is_dir() and not path.is_symlink():
+        shutil.rmtree(path, ignore_errors=True)
+    else:
+        path.unlink(missing_ok=True)
+
+
+def _swap_in(new: Path, target: Path) -> None:
+    """Replace ``target`` with ``new``; the old episode stays on disk until the
+    new one is in place."""
+    if not target.exists():
+        os.replace(new, target)
+        return
+    old = _sibling(target, "old")
+    os.replace(target, old)
+    try:
+        os.replace(new, target)
+    except BaseException:
+        os.replace(old, target)
+        raise
+    shutil.rmtree(old, ignore_errors=True)
 
 
 def _write_annotation_array(
@@ -588,8 +604,17 @@ def key_exists(episode_path: str | Path, key: str) -> bool:
 
 
 def remove_key(episode_path: str | Path, key: str) -> None:
-    """Delete ``key`` from the episode store and from its features."""
+    """Delete ``key`` from the episode store and from its features.
+
+    Raises KeyError if the episode has no such key.
+    """
     store = zarr.open_group(str(episode_path), mode="a", zarr_format=3)
+    _remove_key(store, key)
+
+
+def _remove_key(store: zarr.Group, key: str) -> None:
+    if key not in store:
+        raise KeyError(f"{key!r} is not in {store.store}")
     del store[key]
     features = dict(store.attrs.get("features", {}))
     if features.pop(key, None) is not None:
@@ -611,14 +636,14 @@ def write_annotations(
         mode: "w" replaces an existing ``annotation_key``; "a" only adds a new
             key and raises if it already exists.
     """
-    if key_exists(episode_path, annotation_key):
+    store = zarr.open_group(str(episode_path), mode="a", zarr_format=3)
+    if annotation_key in store:
         if mode != "w":
             raise ValueError(
                 f"{annotation_key!r} already exists in {episode_path}; "
                 'pass mode="w" to replace it'
             )
-        remove_key(episode_path, annotation_key)
-    store = zarr.open_group(str(episode_path), mode="a", zarr_format=3)
+        _remove_key(store, annotation_key)
     feature = _write_annotation_array(store, annotations, annotation_key)
     features = dict(store.attrs.get("features", {}))
     features[annotation_key] = feature

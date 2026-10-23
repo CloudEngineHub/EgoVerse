@@ -54,21 +54,26 @@ BREAKAGES = [
     ("human_bimanual", {"drop_metadata_key": "operator"}, [("present", None, "Missing metadata field: operator")]),
     ("human_bimanual", {"metadata_override": {"scene": "unknown"}}, [("present", None, "scene='unknown' is a placeholder")]),
     ("human_bimanual", {"metadata_override": {"objects": "shirt,,basket"}}, [("present", None, "objects entries must be real names")]),
-    ("human_bimanual", {"metadata_override": {"missing_metadata": "operator"}}, [("present", None, "operator has a value")]),
+    ("human_bimanual", {"metadata_override": {"objects": " shirt, basket"}}, [("present", None, "objects=' shirt, basket' has leading/trailing whitespace")]),
+    ("human_bimanual", {"metadata_override": {"missing_metadata": "operator"}}, [("present", None, "operator has both a value")]),
     ("human_bimanual", {"metadata_override": {"missing_metadata": "scen"}}, [("present", None, "names unknown fields ['scen']")]),
     ("human_bimanual", {"drop_metadata_key": "license"}, [("present", None, "'license' missing")]),
-    ("human_bimanual", {"drop_metadata_key": "vendor-recording-id"}, [("present", None, "'vendor-recording-id' missing")]),
-    ("human_bimanual", {"drop_metadata_key": "hand-joints"}, [("present", None, "'hand-joints' missing")]),
+    ("human_bimanual", {"drop_metadata_key": "source_recording_id"}, [("present", None, "'source_recording_id' missing")]),
+    ("human_bimanual", {"drop_metadata_key": "hand_joints"}, [("present", None, "'hand_joints' missing")]),
+    ("human_bimanual", {"metadata_override": {"missing_metadata": "lab"}}, [("present", None, "lab cannot be listed in 'missing_metadata'"), ("present", None, "lab has both a value")]),
+    ("human_bimanual", {"metadata_override": {"site": "rl2"}}, [("present", None, "unknown episode info key 'site'")]),
+    ("human_bimanual", {"metadata_override": {"rig-name": "test_rig"}}, [("present", None, "unknown episode info key 'rig-name'; did you mean 'rig_name'?")]),
+    ("human_bimanual", {"metadata_override": {"license": "tbd"}}, [("present", None, "'license' = 'tbd' is a placeholder")]),
     ("human_bimanual", {"metadata_override": {"lab": "RL2 Lab"}}, [("present", None, "lab='RL2 Lab' must be a short, stable, lowercase identifier")]),
     ("human_bimanual", {"metadata_override": {"shutter": "rolling"}}, [("present", None, "expected 'global' or 'rolling:<readout>ms'")]),
-    ("human_bimanual", {"metadata_override": {"camera-timestamp-ref": "middle"}}, [("present", None, "'camera-timestamp-ref' = 'middle'")]),
+    ("human_bimanual", {"metadata_override": {"camera_timestamp_ref": "middle"}}, [("present", None, "'camera_timestamp_ref' = 'middle'")]),
     ("human_bimanual", {"annotation_metadata": True}, [("present", None, "annotation.mcap carries metadata records")]),
-    ("human_bimanual", {"metadata_override": {"start-time-unix": "--1760000000000"}}, [("present", None, "is not an integer")]),
-    ("human_bimanual", {"metadata_override": {"end-time-unix": "1760000002000²"}}, [("present", None, "is not an integer")]),
+    ("human_bimanual", {"metadata_override": {"start_time_unix": "--1760000000000"}}, [("present", None, "is not an integer")]),
+    ("human_bimanual", {"metadata_override": {"end_time_unix": "1760000002000²"}}, [("present", None, "is not an integer")]),
     ("human_bimanual", {"unknown_hand_joint": True}, [("present", None, "unknown joints ['thumb_base']")]),
     ("human_bimanual", {"declared_embodiment": "robot_dog"}, [("present", None, "'embodiment' = 'robot_dog'")]),
     ("human_bimanual", {"declared_embodiment": "human_right_arm"}, [("present", "/left-hand-keypoints", "does not fit embodiment")]),
-    ("human_bimanual", {"stray_annotation_topic": True}, [("present", "/instruction", "belong in annotation.mcap")]),
+    ("human_bimanual", {"stray_annotation_topic": True}, [("present", "/imu", "belong in annotation.mcap")]),
     ("eva_bimanual", {"empty_arm_pose": True}, [
         ("present", "/right-arm-state", "'ee_pose' empty on 61/61"),
         ("poses", "/right-arm-state", "not a finite rigid 4x4"),
@@ -187,8 +192,9 @@ def test_proto_file_matches_schemas():
 
 def test_embodiments_match_enum():
     from egomimic.rldb.embodiment.embodiment import EMBODIMENT
+    from egomimic.rldb.zarr import episode_rules
 
-    assert set(spec.EMBODIMENTS) == {e.name.lower() for e in EMBODIMENT}
+    assert set(episode_rules.EMBODIMENTS) == {e.name.lower() for e in EMBODIMENT}
 
 
 def test_mano_joints_match_human_finger_edges():
@@ -285,22 +291,178 @@ def test_calibration_naming_another_frame_than_the_video_is_caught(tmp_path):
 
     found = problems(tmp_path, tamper=calib_in_world)
     assert ("calibration", "/main-camera") == found[0][:2]
-    assert any("video frames name ['main_cam']" in m or "video frames name" in m
-               for *_, m in found), found  # fmt: skip
+    assert any("video frames name ['main-camera']" in m for *_, m in found), found
     assert any("no fixed path to 'head'" in m for *_, m in found), found
 
 
 def test_wrong_message_type_is_reported_not_raised(tmp_path):
     from egomimic.rldb.mcap import schemas
 
-    def imu_as_instruction(topic, msg, t):
+    def imu_as_task(topic, msg, t):
         if topic == "/imu":
-            return schemas.Instruction(data="not an imu"), t
+            return schemas.Task(name="not an imu"), t
 
-    found = problems(tmp_path, tamper=imu_as_instruction)
+    found = problems(tmp_path, tamper=imu_as_task)
     assert (
         "present",
         "/imu",
-        "type is 'egoverse.Instruction', expected 'egoverse.Imu'",
+        "type is 'egoverse.Task', expected 'egoverse.Imu'",
     ) in found
     assert any(g == "imu" and "could not check" in m for g, _, m in found), found
+
+
+def _rewrite(path: Path, extra=None) -> None:
+    """Rewrite an MCAP record by record, uncompressed (so a chunk's CRC is its only
+    guard). extra(writer, messages, channel_ids, schema_ids) adds records at the end."""
+    from mcap.reader import make_reader
+    from mcap.writer import CompressionType, Writer
+
+    with open(path, "rb") as f:
+        reader = make_reader(f)
+        records = [(r.name, dict(r.metadata)) for r in reader.iter_metadata()]
+        messages = list(reader.iter_messages(log_time_order=False))
+    schema_ids, channel_ids = {}, {}
+    with open(path, "wb") as f:
+        w = Writer(f, compression=CompressionType.NONE)
+        w.start()
+        for name, data in records:
+            w.add_metadata(name, data)
+        for schema, channel, message in messages:
+            if schema.id not in schema_ids:
+                schema_ids[schema.id] = w.register_schema(
+                    schema.name, schema.encoding, schema.data
+                )
+            if channel.id not in channel_ids:
+                channel_ids[channel.id] = w.register_channel(
+                    channel.topic, channel.message_encoding, schema_ids[schema.id]
+                )
+            w.add_message(
+                channel_ids[channel.id],
+                message.log_time,
+                message.data,
+                message.publish_time,
+            )
+        if extra:
+            extra(w, messages, channel_ids, schema_ids)
+        w.finish()
+
+
+def test_corrupt_chunk_fails_crc(tmp_path):
+    from fixtures.mcap_episodes import h264_packets
+
+    ep = write_mcap_episode(tmp_path)
+    path = ep / spec.EPISODE_FILE
+    _rewrite(path)
+    data = bytearray(path.read_bytes())
+    i = data.find(h264_packets(60)[5][-16:])
+    assert i > 0
+    data[i] ^= 0x01
+    path.write_bytes(bytes(data))
+    (p,) = validate_episode(ep).problems
+    assert p.message.startswith("cannot read episode.mcap") and "CRC" in p.message
+
+
+def _after_sample(change):
+    """Tamper every /main-camera message past the decoded sample."""
+    seen = {"n": 0}
+
+    def tamper(topic, msg, t):
+        if topic == "/main-camera":
+            seen["n"] += 1
+            if seen["n"] > spec.VIDEO_SAMPLE_FRAMES:
+                change(msg)
+                return msg, t
+
+    return tamper
+
+
+def _empty_data(msg):
+    msg.data = b""
+
+
+def _no_picture(msg):
+    msg.data = b"\x00\x00\x01\x06garbage"  # an SEI NAL only
+
+
+def _other_frame(msg):
+    msg.frame_id = "other"
+
+
+def _other_format(msg):
+    msg.format = "h265"
+
+
+@pytest.mark.parametrize(
+    "change, expected",
+    [
+        (_empty_data, ("present", "/main-camera", "'data' empty on 60/120 messages")),
+        (_no_picture, ("video", "/main-camera", "60/120 messages hold no h264 picture")),
+        (_other_frame, ("calibration", "/main-camera", "video frames name ['main-camera', 'other']")),
+        (_other_format, ("video", "/main-camera", "format changes within the stream")),
+    ],
+)  # fmt: skip
+def test_video_is_checked_past_the_decoded_sample(tmp_path, change, expected):
+    found = problems(tmp_path, video_fps=60, tamper=_after_sample(change))
+    assert any(f[:2] == expected[:2] and expected[2] in f[2] for f in found), found
+
+
+def test_video_format_is_case_sensitive(tmp_path):
+    found = problems(tmp_path, video_format="H264")
+    assert ("video", "/main-camera") in [f[:2] for f in found], found
+    assert any("format 'H264'" in m for *_, m in found), found
+
+
+def test_duplicate_records_channels_and_once_topics(tmp_path):
+    ep = write_mcap_episode(tmp_path)
+
+    def duplicates(w, messages, channel_ids, schema_ids):
+        info = {"lab": "rl2"}
+        w.add_metadata(spec.METADATA_RECORD, info)
+        for schema, channel, m in messages:
+            if channel.topic == "/tf_static":
+                w.add_message(
+                    channel_ids[channel.id], m.log_time + 1, m.data, m.log_time
+                )
+            if channel.topic == "/imu-info":
+                second = w.register_channel(
+                    "/imu-info", "protobuf", schema_ids[schema.id]
+                )
+                w.add_message(second, m.log_time, m.data, m.log_time)
+
+    _rewrite(ep / spec.EPISODE_FILE, extra=duplicates)
+    found = [(p.group, p.topic, p.message) for p in validate_episode(ep).problems]
+    assert any("2 'session-metadata' records" in m for *_, m in found), found
+    assert ("present", "/tf_static", "published 2 times, expected once") in found
+    assert any(
+        t == "/imu-info" and "published on 2 channels" in m for _, t, m in found
+    ), found
+
+
+def test_wrong_typed_optional_calibration_does_not_hide_other_faults(tmp_path):
+    def slam_info_as_task(topic, msg, t):
+        if topic == "/main-camera-info":
+            return schemas.Task(name="not a calibration"), t
+
+    found = problems(tmp_path, unlink_main_camera=True, tamper=slam_info_as_task)
+    assert any(
+        g == "calibration"
+        and t == "/main-camera"
+        and "not foxglove.CameraCalibration" in m
+        for g, t, m in found
+    ), found
+    assert not any("could not check" in m for *_, m in found), found
+
+
+def test_corrupt_slice_inside_the_sample_fails_decoding(tmp_path):
+    seen = {"n": 0}
+
+    def corrupt_frame_10(topic, msg, t):
+        if topic == "/main-camera":
+            seen["n"] += 1
+            if seen["n"] == 11:
+                msg.data = b"\x00\x00\x01\x41\x9a\x00" + b"\x5a" * 200
+                return msg, t
+
+    found = problems(tmp_path, tamper=corrupt_frame_10)
+    assert [f[:2] for f in found] == [("video", "/main-camera")], found
+    assert "decode error" in found[0][2]

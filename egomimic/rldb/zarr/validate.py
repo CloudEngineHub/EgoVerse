@@ -19,10 +19,13 @@ import numpy as np
 import simplejpeg
 import zarr
 
-from egomimic.rldb.zarr.required_metadata import (
-    REQUIRED_METADATA_FIELDS,
-    check_required_metadata,
+from egomimic.rldb.zarr.episode_rules import (
+    arm_sides,
+    camera_errors,
+    embodiment_error,
+    fps_error,
 )
+from egomimic.rldb.zarr.required_metadata import check_stored_metadata
 
 _POSE_KEYS = (
     "left.obs_ee_pose",
@@ -63,115 +66,88 @@ def _unwrap_bytes(raw):
     return raw
 
 
-def _required_arm_keys(embodiment: str) -> list[str]:
-    emb = (embodiment or "").lower()
-    if emb.endswith("_left_arm"):
-        return ["left.obs_ee_pose"]
-    if emb.endswith("_right_arm"):
-        return ["right.obs_ee_pose"]
-    return ["left.obs_ee_pose", "right.obs_ee_pose"]
-
-
-def _check_required_metadata(meta: dict, report: ValidationReport, allow_missing: bool):
-    errors, warnings = check_required_metadata(meta, allow_missing=allow_missing)
-    report.errors += errors
-    report.warnings += warnings
-    for name in REQUIRED_METADATA_FIELDS:
-        if meta.get(name) is not None and not any(e.startswith(name) for e in errors):
-            report.successes.append(f"{name}={meta[name]!r}")
-
-
 def validate_episode(
     zarr_path: str | Path, *, allow_missing: bool = False
 ) -> ValidationReport:
     """Check a finished .zarr episode. Empty ``report.errors`` = pass."""
     report = ValidationReport(path=Path(zarr_path))
-    errors, successes = report.errors, report.successes
     try:
         store = zarr.open_group(str(zarr_path), mode="r", zarr_format=3)
     except Exception as e:
-        errors.append(f"cannot open as a zarr v3 group: {e}")
+        report.errors.append(f"cannot open as a zarr v3 group: {e}")
         return report
-    meta = dict(store.attrs)
-
-    # ── Metadata ────────────────────────────────────────────────────────────
-    for name in ("embodiment", "total_frames", "fps", "features"):
-        if name not in meta:
-            errors.append(f"Missing metadata field: {name}")
-    if "total_frames" not in meta:
-        return report
-    T = int(meta["total_frames"])
-
-    if meta.get("fps", 0) not in (30, 60):
-        errors.append(f"Unexpected fps={meta.get('fps')}. Expected 30 or 60.")
-    else:
-        successes.append(f"fps={meta['fps']}")
-
-    _check_required_metadata(meta, report, allow_missing)
-
-    # ── Embodiment identifier (must resolve to a valid id; see §9) ──────────
-    from egomimic.rldb.embodiment.embodiment import get_embodiment_id
-
     try:
-        get_embodiment_id(meta.get("embodiment", ""))
-        successes.append(f"embodiment={meta.get('embodiment')}")
-    except (KeyError, AttributeError):
-        errors.append(
-            f"embodiment={meta.get('embodiment')!r} is not a valid identifier (see §9)"
-        )
+        _validate_store(store, report, allow_missing)
+    except Exception as e:  # malformed attrs the checks below assume are well-formed
+        report.errors.append(f"could not finish validating: {type(e).__name__}: {e}")
+    return report
 
-    # ── Camera intrinsics (MANDATORY; {camera_key: 3x4 K matrix} dict) ──────
-    intr = meta.get("intrinsics")
-    if not isinstance(intr, dict) or not intr:
-        errors.append("intrinsics: missing or not a non-empty {camera_key: 3x4} dict")
-    else:
-        if not any("front" in str(k).lower() for k in intr):
-            errors.append(f"intrinsics: no front-camera entry (keys: {list(intr)})")
-        for cam, K in intr.items():
-            shape = np.asarray(K, dtype=float).shape
-            if shape != (3, 4):
-                errors.append(f"intrinsics[{cam!r}]: expected 3x4 K, got {shape}")
-            else:
-                successes.append(f"intrinsics[{cam!r}]: 3x4")
 
-    # ── Camera extrinsics (OPTIONAL; None, or a non-empty dict of 4x4) ──────
-    extr = meta.get("extrinsics")
-    if extr is not None:
-        if not isinstance(extr, dict) or not extr:
-            errors.append("extrinsics: present but not a non-empty dict")
+def _validate_store(
+    store: zarr.Group, report: ValidationReport, allow_missing: bool
+) -> None:
+    meta = dict(store.attrs)
+    _check_attrs(meta, report, allow_missing)
+    if "features" not in meta:
+        report.errors.append("Missing metadata field: features")
+    T = meta.get("total_frames")
+    if type(T) is not int or T <= 0:
+        report.errors.append(f"total_frames must be a positive int, got {T!r}")
+        return
+    features = meta.get("features") or {}
+    _check_arrays(store, features, meta.get("embodiment"), T, report.errors)
+    _check_annotations(store, features, T, report.errors)
+    _check_images(store, features, report.errors)
+
+
+def _check_attrs(meta: dict, report: ValidationReport, allow_missing: bool) -> None:
+    for name, err in (
+        ("fps", fps_error(meta.get("fps"))),
+        ("embodiment", embodiment_error(meta.get("embodiment"))),
+    ):
+        if err is None:
+            report.successes.append(f"{name}={meta[name]!r}")
         else:
-            for k, T_ext in extr.items():
-                shape = np.asarray(T_ext, dtype=float).shape
-                if shape != (4, 4):
-                    errors.append(f"extrinsics[{k!r}]: expected 4x4, got {shape}")
+            report.errors.append(err)
+    report.errors += camera_errors(meta.get("intrinsics"), meta.get("extrinsics"))
+    errors, warnings, passed = check_stored_metadata(meta, allow_missing=allow_missing)
+    report.errors += errors
+    report.warnings += warnings
+    report.successes += [f"{name}={meta[name]!r}" for name in passed]
 
-    # ── Features ↔ arrays, frame counts ─────────────────────────────────────
-    features = meta.get("features", {}) or {}
-    array_keys = [k for k in store.array_keys()]
+
+def _check_arrays(
+    store: zarr.Group, features: dict, embodiment, T: int, errors: list[str]
+) -> None:
+    array_keys = list(store.array_keys())
     for key in array_keys:
         if key not in features:
             errors.append(f"{key}: array has no entry in features")
         if features.get(key, {}).get("dtype") == "json":
             continue
-        arr_len = store[key].shape[0]
-        if arr_len < T:
+        if not store[key].shape:
+            errors.append(f"{key}: array is 0-dimensional, expected a time axis")
+            continue
+        if (arr_len := store[key].shape[0]) < T:
             errors.append(f"{key}: array length {arr_len} < total_frames {T}")
     for key in features:
         if key not in array_keys:
             errors.append(f"features[{key!r}] has no matching array")
 
-    # ── Required keys ───────────────────────────────────────────────────────
-    for key in ["images.front_1"] + _required_arm_keys(meta.get("embodiment", "")):
+    arm_keys = [f"{side}.obs_ee_pose" for side in arm_sides(str(embodiment or ""))]
+    for key in ["images.front_1", *arm_keys]:
         if key not in store:
             errors.append(f"Missing required key: {key}")
 
-    # ── Pose shapes and quaternion norms ────────────────────────────────────
     for key in _POSE_KEYS:
         if key not in store:
             continue
         arr = store[key][:T]
         if arr.ndim != 2 or arr.shape[-1] != 7:
             errors.append(f"{key}: expected shape (T, 7), got {arr.shape}")
+            continue
+        if not np.isfinite(arr).all():
+            errors.append(f"{key}: contains NaN or inf")
             continue
         norms = np.linalg.norm(arr[:, 3:7], axis=1)
         bad = np.where(np.abs(norms - 1.0) > 1e-4)[0]
@@ -186,49 +162,57 @@ def validate_episode(
             shape = store[key].shape
             if len(shape) != 2 or shape[-1] != 1:
                 errors.append(f"{key}: expected shape (T, 1), got {shape}")
-
     for key in _KEYPOINT_KEYS:
         if key in store and store[key].shape[-1] != 63:
             errors.append(
                 f"{key}: expected last dim 63 (21x3), got {store[key].shape[-1]}"
             )
+    for key in _GRIPPER_KEYS + _KEYPOINT_KEYS:
+        if key in store and not np.isfinite(store[key][:T]).all():
+            errors.append(f"{key}: contains NaN or inf")
 
-    # ── Annotation format (JSON-encoded records) ────────────────────────────
+
+def _annotation_error(raw, T: int) -> str | None:
+    try:
+        rec = json.loads(
+            raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
+        )
+    except (TypeError, ValueError) as e:
+        return str(e)
+    if not isinstance(rec, dict):
+        return f"record is {type(rec).__name__}, expected dict"
+    for name, expected in (("text", str), ("start_idx", int), ("end_idx", int)):
+        if not isinstance(rec.get(name), expected):
+            return f"field {name!r} missing or not {expected}"
+    if not (0 <= rec["start_idx"] <= rec["end_idx"] <= T):
+        return (
+            f"index range invalid: start={rec['start_idx']}, "
+            f"end={rec['end_idx']}, T={T}"
+        )
+    return None
+
+
+def _check_annotations(
+    store: zarr.Group, features: dict, T: int, errors: list[str]
+) -> None:
     for key, feat in features.items():
         if feat.get("dtype") != "json" or key not in store:
             continue
         node = store[key]
-        bad, first_err = 0, None
-        for i in range(node.shape[0]):
-            raw = _unwrap_bytes(node[i])
-            try:
-                rec = json.loads(
-                    raw.decode("utf-8") if isinstance(raw, (bytes, bytearray)) else raw
-                )
-                if not isinstance(rec, dict):
-                    raise ValueError(f"record is {type(rec).__name__}, expected dict")
-                for name, expected in (
-                    ("text", str),
-                    ("start_idx", int),
-                    ("end_idx", int),
-                ):
-                    if not isinstance(rec.get(name), expected):
-                        raise ValueError(f"field {name!r} missing or not {expected}")
-                if not (0 <= rec["start_idx"] <= rec["end_idx"] <= T):
-                    raise ValueError(
-                        f"index range invalid: start={rec['start_idx']}, "
-                        f"end={rec['end_idx']}, T={T}"
-                    )
-            except Exception as e:
-                bad += 1
-                first_err = first_err or (i, str(e))
-        if bad:
+        found = [
+            (i, err)
+            for i in range(node.shape[0])
+            if (err := _annotation_error(_unwrap_bytes(node[i]), T)) is not None
+        ]
+        if found:
             errors.append(
-                f"{key}: {bad}/{node.shape[0]} annotations malformed "
-                f"(e.g. index {first_err[0]}: {first_err[1]})"
+                f"{key}: {len(found)}/{node.shape[0]} annotations malformed "
+                f"(e.g. index {found[0][0]}: {found[0][1]})"
             )
 
-    # ── Image decodability (spot-check frame 0 of each JPEG key) ────────────
+
+def _check_images(store: zarr.Group, features: dict, errors: list[str]) -> None:
+    """Spot-check that frame 0 of each JPEG key decodes to RGB."""
     for key, feat in features.items():
         if feat.get("dtype") != "jpeg" or key not in store:
             continue
@@ -236,12 +220,11 @@ def validate_episode(
             frame = simplejpeg.decode_jpeg(
                 bytes(_unwrap_bytes(store[key][0])), colorspace="RGB"
             )
-            if frame.ndim != 3 or frame.shape[2] != 3:
-                errors.append(f"{key}: decoded frame has shape {frame.shape}")
         except Exception as e:
             errors.append(f"{key}: failed to decode frame 0: {e}")
-
-    return report
+            continue
+        if frame.ndim != 3 or frame.shape[2] != 3:
+            errors.append(f"{key}: decoded frame has shape {frame.shape}")
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -151,8 +151,8 @@ def test_episode_fingerprint_changes_when_episode_is_rewritten(tmp_path) -> None
 
 
 def test_episode_fingerprint_changes_when_annotations_are_rewritten(tmp_path) -> None:
-    """Re-annotating in place (scale_to_zarr_annotation.py) and adding a key
-    (zarr_key_transform.py) touch only a child array, not the root zarr.json."""
+    """Re-annotating in place and adding an annotation key, as
+    scale_to_zarr_annotation.py does through write_annotations."""
     write_episode(tmp_path, "aria", seed=0)
     ep = tmp_path / "aria_00.zarr"
     seen = [norm_cache.episode_fingerprint(ep)]
@@ -166,6 +166,18 @@ def test_episode_fingerprint_changes_when_annotations_are_rewritten(tmp_path) ->
         write_annotations(ep, annotations, key, mode=mode)
         seen.append(norm_cache.episode_fingerprint(ep))
     assert len(set(seen)) == len(seen)
+
+
+def test_episode_fingerprint_sees_a_child_only_rewrite(tmp_path) -> None:
+    """A change that rewrites only a child array's zarr.json, not the root's."""
+    write_episode(tmp_path, "aria", seed=0)
+    ep = tmp_path / "aria_00.zarr"
+    root_meta = (ep / "zarr.json").stat()
+    before = norm_cache.episode_fingerprint(ep)
+    time.sleep(0.02)  # past the filesystem's mtime granularity
+    zarr.open_array(str(ep / "obs_head_pose"), mode="r+").attrs["note"] = "x"
+    assert (ep / "zarr.json").stat().st_mtime_ns == root_meta.st_mtime_ns
+    assert norm_cache.episode_fingerprint(ep) != before
 
 
 def test_write_then_find_roundtrip(tmp_path) -> None:

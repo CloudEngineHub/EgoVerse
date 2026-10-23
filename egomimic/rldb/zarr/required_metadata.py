@@ -13,10 +13,6 @@ import re
 from collections.abc import Iterable
 from typing import Any
 
-# Metadata every contributed episode must carry in zarr.attrs (see
-# CONTRIBUTING_DATA.md §6.3). ZarrWriter requires each one as a keyword
-# argument with no default; the only way to leave one out is an explicit
-# MissingMetadata().
 REQUIRED_METADATA_FIELDS = ("task_name", "operator", "lab", "scene", "objects")
 
 # Values that mean "I didn't fill this in". Rejected so a placeholder can't
@@ -39,10 +35,10 @@ _PLACEHOLDER_VALUES = frozenset(
     }
 )
 
-_LAB_RE = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+_LAB_RE = re.compile(r"[a-z0-9][a-z0-9_-]*")
 
 
-def _is_placeholder(value: str) -> bool:
+def is_placeholder(value: str) -> bool:
     return value.strip().lower() in _PLACEHOLDER_VALUES
 
 
@@ -62,6 +58,13 @@ class MissingMetadata:
         return "MissingMetadata()"
 
 
+def objects_list(value: str | list[str] | tuple[str, ...]) -> list[str]:
+    """``objects`` as a list: a str is a comma-separated list of names."""
+    if isinstance(value, str):
+        return [o.strip() for o in value.split(",")]
+    return list(value)
+
+
 def required_metadata_error(field: str, value: Any) -> str | None:
     """Return why ``value`` is not acceptable for required metadata ``field``, or None.
 
@@ -69,12 +72,20 @@ def required_metadata_error(field: str, value: Any) -> str | None:
     apply the same rules. ``value`` is a concrete value, not MissingMetadata.
     """
     hint = "See CONTRIBUTING_DATA.md §6.3."
-    if field == "objects" and isinstance(value, (list, tuple)):
-        if not value:
-            return f"objects must not be an empty list. {hint}"
-        for obj in value:
-            if not isinstance(obj, str) or _is_placeholder(obj):
+    if field == "objects" and isinstance(value, (list, tuple, str)):
+        if isinstance(value, str) and value != value.strip():
+            return f"objects={value!r} has leading/trailing whitespace. {hint}"
+        names = objects_list(value)
+        if not names or names == [""]:
+            return (
+                f"objects must name at least one object. If the source data has "
+                f"no objects, pass objects=MissingMetadata(). {hint}"
+            )
+        for obj in names:
+            if not isinstance(obj, str) or is_placeholder(obj):
                 return f"objects entries must be real names, got {obj!r}. {hint}"
+            if obj != obj.strip():
+                return f"objects entry {obj!r} has leading/trailing whitespace. {hint}"
         return None
     if not isinstance(value, str):
         extra = " or list[str]" if field == "objects" else ""
@@ -83,12 +94,14 @@ def required_metadata_error(field: str, value: Any) -> str | None:
             f"If the source data has no {field}, pass "
             f"{field}=MissingMetadata(). {hint}"
         )
-    if _is_placeholder(value):
+    if is_placeholder(value):
         return (
             f"{field}={value!r} is a placeholder, not a value. If the source data "
             f"has no {field}, pass {field}=MissingMetadata(). {hint}"
         )
-    if field == "lab" and not _LAB_RE.match(value):
+    if value != value.strip():
+        return f"{field}={value!r} has leading/trailing whitespace. {hint}"
+    if field == "lab" and not _LAB_RE.fullmatch(value):
         return (
             f"lab={value!r} must be a short, stable, lowercase identifier "
             f"(letters, digits, '_' or '-'), e.g. 'mecka'. {hint}"
@@ -96,16 +109,16 @@ def required_metadata_error(field: str, value: Any) -> str | None:
     return None
 
 
-def check_required_metadata(
+def check_stored_metadata(
     meta: dict[str, Any], *, allow_missing: bool = False
-) -> tuple[list[str], list[str]]:
-    """(errors, warnings) for the required fields of a finished episode's metadata.
+) -> tuple[list[str], list[str], list[str]]:
+    """(errors, warnings, passed field names) for a finished episode's metadata.
 
     Shared by the zarr and MCAP validators. An absent key is always an error; a
     ``None`` value is an explicit waiver (MissingMetadata), an error unless
     ``allow_missing``. Concrete values go through ``required_metadata_error``.
     """
-    errors, warnings = [], []
+    errors, warnings, passed = [], [], []
     for name in REQUIRED_METADATA_FIELDS:
         if name not in meta:
             errors.append(
@@ -122,7 +135,9 @@ def check_required_metadata(
                 )
         elif (err := required_metadata_error(name, meta[name])) is not None:
             errors.append(err)
-    return errors, warnings
+        else:
+            passed.append(name)
+    return errors, warnings, passed
 
 
 def add_required_metadata_args(parser: argparse.ArgumentParser) -> None:
@@ -151,7 +166,7 @@ def add_required_metadata_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
-def build_required_metadata(
+def _build_required_metadata(
     values: dict[str, Any], missing: Iterable[str] = ()
 ) -> dict[str, Any]:
     """Merge plain values and the names of waived fields into ZarrWriter kwargs.
@@ -160,26 +175,48 @@ def build_required_metadata(
     A field named in ``missing`` becomes MissingMetadata(); giving a field both
     a value and a waiver is an error.
     """
+    if errors := waiver_errors(values, missing):
+        raise ValueError(errors[0])
     missing = set(missing)
+    return {
+        field: MissingMetadata() if field in missing else values.get(field)
+        for field in REQUIRED_METADATA_FIELDS
+    }
+
+
+def waiver_errors(values: dict[str, Any], missing: Iterable[str]) -> list[str]:
+    """Unknown waived field names, and fields with both a value and a waiver."""
+    missing = set(missing)
+    errors = []
     unknown = missing - set(REQUIRED_METADATA_FIELDS)
     if unknown:
-        raise ValueError(
+        errors.append(
             f"missing_metadata names unknown fields {sorted(unknown)}; "
             f"expected a subset of {list(REQUIRED_METADATA_FIELDS)}"
         )
-    out = {}
     for field in REQUIRED_METADATA_FIELDS:
         value = values.get(field)
-        if field in missing:
-            if value not in (None, ""):
-                raise ValueError(
-                    f"{field} has both a value ({value!r}) and is marked missing; "
-                    "pass one or the other"
-                )
-            out[field] = MissingMetadata()
-        else:
-            out[field] = value
-    return out
+        empty = value is None or (hasattr(value, "__len__") and len(value) == 0)
+        if field in missing and not empty:
+            errors.append(
+                f"{field} has both a value ({value!r}) and is marked missing; "
+                "pass one or the other"
+            )
+    return errors
+
+
+def check_writer_metadata(kwargs: dict[str, Any]) -> None:
+    """Raise ValueError on the first unacceptable value in ZarrWriter metadata kwargs.
+
+    The same check ZarrWriter.write runs; call it before an expensive extraction
+    so a bad value fails fast.
+    """
+    for field in REQUIRED_METADATA_FIELDS:
+        value = kwargs.get(field)
+        if isinstance(value, MissingMetadata):
+            continue
+        if (err := required_metadata_error(field, value)) is not None:
+            raise ValueError(err)
 
 
 def required_metadata_from_args(args: Any) -> dict[str, Any]:
@@ -190,4 +227,4 @@ def required_metadata_from_args(args: Any) -> dict[str, Any]:
     """
     missing = getattr(args, "missing_metadata", None) or ()
     values = {f: getattr(args, f, None) for f in REQUIRED_METADATA_FIELDS}
-    return build_required_metadata(values, missing)
+    return _build_required_metadata(values, missing)

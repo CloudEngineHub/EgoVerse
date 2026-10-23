@@ -46,7 +46,7 @@ episode_<id>/
   with their device-to-UTC offset before writing.
 - Within a topic, log times never decrease; each camera's strictly increase (every
   frame has its own time).
-- `start-time-unix` / `end-time-unix` in the episode info are **milliseconds** and must
+- `start_time_unix` / `end_time_unix` in the episode info are **milliseconds** and must
   match the recorded data within 1 s.
 - **Steps clock.** The main camera (`/main-camera`, human) or top camera (`/top-camera`,
   robot) defines the Lance `steps` rows: one row per decoded frame. Every other stream is
@@ -60,7 +60,8 @@ One MCAP metadata record named **`session-metadata`**. All values are strings.
 The first five keys are the required metadata of every EgoVerse episode, with the same
 names and rules as a zarr episode ([CONTRIBUTING_DATA.md §6.3](../../../CONTRIBUTING_DATA.md)):
 real values only (empty strings and placeholders such as `unknown`, `n/a`, `tbd`, `test`
-are rejected).
+are rejected). Keys are snake_case; a key not in this table fails validation, and
+placeholders are rejected in every text key.
 
 | Key | Example | Meaning |
 |---|---|---|
@@ -71,20 +72,20 @@ are rejected).
 | `objects` | `baby_shirt_2t,basket` | Objects involved, comma-separated; every entry a real name. |
 | `missing_metadata` | `scene` | *Optional.* Comma-separated required keys the source data truly does not have; leave those keys out. **Only if absolutely necessary**: such episodes are much harder to filter and train on, and fail validation without `--allow-missing`. |
 | `task_description` | `fold the 2T shirt on the blue table` | *Optional.* Full task text. |
-| `vendor-recording-id` | `acme-rec-0001` | Your own ID for this recording. **Stable across every re-export or correction** (new labels, fixed calibration, re-run poses). |
+| `source_recording_id` | `acme-rec-0001` | Your own ID for this recording. **Stable across every re-export or correction** (new labels, fixed calibration, re-run poses). Zarr episodes trimmed from it name it in their `source_recording_id` attr. |
 | `embodiment` | `human_bimanual` | One of `human_{bimanual,left_arm,right_arm}`, `eva_{bimanual,left_arm,right_arm}`. Must match the topics in the file. |
-| `rig-name` | `aria_gen1` | Capture setup. |
-| `device-serial` | `1WM103600M1292` | Physical unit; ties the episode to its calibration. |
-| `start-time-unix`, `end-time-unix` | `1736651249664` | Recording bounds, Unix **ms**. |
-| `spec-version` | `0.1` | Version of this spec the file follows. |
+| `rig_name` | `aria_gen1` | Capture setup. |
+| `device_serial` | `1WM103600M1292` | Physical unit; ties the episode to its calibration. |
+| `start_time_unix`, `end_time_unix` | `1736651249664` | Recording bounds, Unix **ms**. |
+| `spec_version` | `0.1` | Version of this spec the file follows. |
 | `license` | `CC-BY-4.0` | License the data is under. |
-| `camera-timestamp-ref` | `mid` | *Human only.* Where in the exposure each frame is stamped: `start`, `mid` or `end`. |
+| `camera_timestamp_ref` | `mid` | *Human only.* Where in the exposure each frame is stamped: `start`, `mid` or `end`. |
 | `shutter` | `rolling:5ms` | *Human only.* `global`, or `rolling:<readout>ms`. |
-| `hand-joints` | see §6 | *Human only.* Names of the hand joints, in the order `HandKeypoints.positions` lists them. |
+| `hand_joints` | see §6 | *Human only.* Names of the hand joints, in the order `HandKeypoints.positions` lists them. |
 
 **IDs.** Our recording ID is
-`egomimic.rldb.lance.schema.recording_id(lab, vendor-recording-id)` (UUIDv5 of
-`<lab>/<vendor-recording-id>`); the validator prints it. Task and annotation IDs are
+`egomimic.rldb.lance.schema.recording_id(lab, source_recording_id)` (UUIDv5 of
+`<lab>/<source_recording_id>`); the validator prints it. Task and annotation IDs are
 computed downstream from their content, so vendors send none.
 
 **Tasks.** Without `/task` topics, `task_name` / `task_description` / `objects` describe one task
@@ -114,7 +115,6 @@ are checked exactly.
 | `/{left,right}-hand-keypoints` | `egoverse.HandKeypoints` | MUST per arm in use | tracker rate | See §6. |
 | `/eye-gaze` | `egoverse.EyeGaze` | optional | tracker rate | Yaw / pitch / depth in a frame between the eyes (+x left, +y up, +z forward). |
 | `/tf_static` | `foxglove.FrameTransforms` | MUST | once | See §5. |
-| `/instruction` | `egoverse.Instruction` | MUST | once | Task text. |
 
 No arm, gripper or action topics: actions are derived from future hand and head poses.
 
@@ -131,7 +131,6 @@ No arm, gripper or action topics: actions are derived from future hand and head 
 | `/{side}-ee-state` | `egoverse.GripperState` | MUST | Measured opening, 0 = closed, 1 = fully open. |
 | `/{side}-ee-action` | `egoverse.GripperState` | MUST | Commanded opening, same range. |
 | `/tf_static` | `foxglove.FrameTransforms` | MUST | See §5. |
-| `/instruction` | `egoverse.Instruction` | MUST | Task text. |
 
 `ArmState` / `ArmAction`: `frame_id` is the arm-base frame (`left_arm_base`,
 `right_arm_base`); every joint array has one entry per `joint_names` entry, in that
@@ -144,7 +143,7 @@ T_base_ee as 16 numbers, a **row-major** 4×4. ABC-130k's own `RobotState` /
 | Topic | Type | Notes |
 |---|---|---|
 | `/task` | `egoverse.Task` | One message per task performed: `name` (slug), `description`, `objects`; starts at its log time, ends at `end_time_unix_ns` (after the start). |
-| `/subtask-annotation` | `egoverse.Annotation` | A language label `data` over [log time, `end_time_unix_ns`); `end_time_unix_ns = 0` is a point event (one frame wide). `annotation_type` is `language` (the default when empty); `annotation_vendor` defaults to the episode's `lab`. |
+| `/subtask-annotation` | `egoverse.Annotation` | A language label `data` over [log time, `end_time_unix_ns`); `end_time_unix_ns = 0` is a point event (one frame wide). `annotation_type` is `language` (the default when empty); `annotation_source` defaults to the episode's `lab`. |
 
 Every label lies **inside one task**; without `/task`, inside the whole-recording task
 made from the episode info. All spans lie inside the recorded data. Labels added or corrected after delivery go through
@@ -175,13 +174,13 @@ the Lance annotation review (`egomimic/rldb/lance/annotations.py`), not a re-exp
 | Field | |
 |---|---|
 | `frame_id` | Frame `positions` and `wrist_pose` are in (linked to `world`). |
-| `positions` | `(x, y, z)` in m per `hand-joints` entry, flattened; or empty for devices without keypoints. |
+| `positions` | `(x, y, z)` in m per `hand_joints` entry, flattened; or empty for devices without keypoints. |
 | `confidence` | Whole-hand tracking confidence in [0, 1]. |
 | `joint_confidence` | Optional: one value in [0, 1] per joint. |
 | `wrist_pose` | Optional: T_frame_wrist. Required when `positions` is empty. |
 | `valid` | `false` when the hand is not tracked. **Never write zeros instead.** |
 
-**`hand-joints`** names the joints the device tracks, in its own order, from this
+**`hand_joints`** names the joints the device tracks, in its own order, from this
 vocabulary: the 21 MANO joints `wrist`, `{thumb}_{cmc,mcp,ip,tip}`,
 `{index,middle,ring,pinky}_{mcp,pip,dip,tip}`, plus `palm_center`. Each name at most
 once; `wrist` is required. Joints with MANO names are what our MANO fit matches; extras
@@ -248,35 +247,37 @@ problem fails the episode.
 
 | Group | Checks |
 |---|---|
-| everything there | Required topics present with the exact type and encoding; required fields non-empty on every message; every episode-info key present, the required metadata real values (waivers in `missing_metadata` fail unless `--allow-missing`), integers / enums valid; `embodiment` matches the topics; `annotation.mcap` holds only label topics. |
-| video usable | Codec h264 / h265; first message a keyframe; one frame per message; frames decode; size matches the calibration; ≥ 30 fps. |
+| everything there | Chunk CRCs valid; required topics present with the exact type and encoding, one channel each; once-topics published once; required fields non-empty on every message; exactly one `session-metadata` record; every episode-info key known and present, values not placeholders, the required metadata real values (waivers in `missing_metadata` fail unless `--allow-missing`; `lab` cannot be waived), integers / enums valid; `embodiment` matches the topics; `annotation.mcap` holds only label topics. |
+| video usable | Codec exactly `h264` / `h265`, the same on every message; every message holds a coded picture; first message a keyframe; one frame per message; frames decode without bitstream errors; size matches the calibration; ≥ 30 fps. |
 | clocks | Unix ns (after 2015); never decreasing; no gap over 0.5 s; streams cover the recording to within 1 s; start / end times match the data to within 1 s; head pose and quality ≥ 30 Hz. |
 | calibration | Every camera has a valid `-info` with a known lens model and its coefficient count; `-info-extra` values valid; a camera's video and calibration name the same frame; every named frame reaches `world`; a head-worn rig's main camera has a `/tf_static` path to `head`; `/tf_static` rotations unit and translations finite. |
 | imu | ≥ 200 Hz; mean \|accel\| in the stillest 1 s within 0.5 m/s² of 9.81 (gravity not removed); noise values > 0. |
-| poses | No NaN / Inf, unit rotations (head, wrist, `/tf_static`); hand positions match `hand-joints`; confidences in [0, 1]; no all-zero hands marked valid; gaze finite when valid; `ee_pose` a rigid 4×4; joint arrays match `joint_names`; grippers in [0, 1]. |
+| poses | No NaN / Inf, unit rotations (head, wrist, `/tf_static`); hand positions match `hand_joints`; confidences in [0, 1]; no all-zero hands marked valid; gaze finite when valid; `ee_pose` a rigid 4×4; joint arrays match `joint_names`; grippers in [0, 1]. |
 | tasks & labels | Spans end after they start (labels may be points); inside the recorded data; each label inside one task; `annotation_type` known. |
 
-Thresholds stated by the plan (30 fps, 200 Hz, 30 Hz, 9.81 m/s²) are fixed. The others
+The 30 fps, 200 Hz, 30 Hz and 9.81 m/s² thresholds are fixed. The others
 (5 % rate tolerance, 0.5 s gap, 1 s span tolerance, 0.5 m/s² gravity tolerance, 1e-3
 unit tolerance) are **provisional, to be tuned on real deliveries**; all live in
-`spec.py`. Video is decoded for the first 60 messages of each camera; the converter then decodes
-all of it and rejects an episode where any message is not exactly one frame.
+`spec.py`. Structural video checks (non-empty, frame_id, format, holds a picture) run on
+every message; full decoding runs on the first 60 messages of each camera. The converter
+then decodes all of it and rejects an episode where any message is not exactly one frame.
 
 ## 10. Where each Lance field comes from
 
 | Lance | MCAP |
 |---|---|
-| `recordings.recording_id` | `recording_id(lab, vendor-recording-id)` |
-| `recordings.vendor_recording_id`, `lab`, `operator`, `embodiment`, `rig_name`, `scene`, `license` | episode info |
-| `recordings.captured_at` | `start-time-unix` |
+| `recordings.recording_id` | `recording_id(lab, source_recording_id)` |
+| `recordings.vendor_recording_id` | `source_recording_id` |
+| `recordings.lab`, `operator`, `embodiment`, `rig_name`, `scene`, `license` | episode info |
+| `recordings.captured_at` | `start_time_unix` |
 | `recordings.num_frames`, `fps` | Decoded steps-clock frames and their timestamps |
 | `recordings.video_path` | Assigned when each camera topic is extracted |
 | `recordings.intrinsics` / `extrinsics` | Each camera's `-info` (+ `-info-extra`) / `/tf_static` and the moving links |
 | `tasks.*` | `/task` messages, or the episode-info task keys over the whole recording |
-| `annotations.*` | `/subtask-annotation` (type, text, vendor, span) |
+| `annotations.*` | `/subtask-annotation` (type, text, source, span) |
 | `steps.timestamp_ns` | Steps-clock frame times |
 | `steps.head_pose`, `head_pose_valid` | `/head-pose` (× the camera's link), `/head-pose-quality`, timing gaps |
-| `steps.{side}.keypoints`, `ee_pose` | `HandKeypoints.positions`, through the MANO fit when `hand-joints` is not canonical MANO |
+| `steps.{side}.keypoints`, `ee_pose` | `HandKeypoints.positions`, through the MANO fit when `hand_joints` is not canonical MANO |
 | `steps.{side}.wrist_pose`, `confidence`, `{side}_valid` | `HandKeypoints.wrist_pose`, `confidence`, `valid` |
 | `steps.eye_gaze` | `/eye-gaze` yaw, pitch, depth |
 | Eva steps `obs_*` / `cmd_*` | `/{side}-arm-state` / `-arm-action` (`position`, `ee_pose`), `/{side}-ee-state` / `-ee-action` |

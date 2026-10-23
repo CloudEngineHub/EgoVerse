@@ -1,4 +1,4 @@
-"""Tiny synthetic vendor MCAP episodes (spec 0.1), valid unless a breakage is asked for.
+"""Tiny synthetic raw MCAP episodes (spec 0.1), valid unless a breakage is asked for.
 
 `write_mcap_episode` writes `episode_<id>/episode.mcap` with every topic the spec
 requires for the embodiment: ~2 s of 64x48 H.264 video, 200 Hz IMU, 30 Hz poses, etc.
@@ -33,7 +33,7 @@ VIDEO_FPS = 30
 
 
 @lru_cache(maxsize=None)
-def _h264_packets(n_frames: int) -> tuple[bytes, ...]:
+def h264_packets(n_frames: int) -> tuple[bytes, ...]:
     """Annex B H.264, one frame per packet, keyframe every 2 frames, SPS/PPS repeated."""
     import av
 
@@ -62,10 +62,6 @@ def _times(hz: float) -> list[int]:
     return [T0 + round(i * 1e9 / hz) for i in range(int(DURATION_S * hz) + 1)]
 
 
-def _sides(embodiment: str) -> tuple[str, ...]:
-    return spec.arm_sides(embodiment)
-
-
 def _metadata(embodiment: str, declared: str) -> dict[str, str]:
     info = {
         "task_name": "fold_clothes",
@@ -75,17 +71,17 @@ def _metadata(embodiment: str, declared: str) -> dict[str, str]:
         "objects": "shirt,basket",
         "task_description": "fold the shirt",
         "embodiment": declared,
-        "rig-name": "test_rig",
-        "device-serial": "SN0001",
-        "start-time-unix": str(T0 // 10**6),
-        "end-time-unix": str((T0 + DURATION_S * 10**9) // 10**6),
-        "vendor-recording-id": "acme-rec-0001",
-        "spec-version": spec.SPEC_VERSION,
+        "rig_name": "test_rig",
+        "device_serial": "SN0001",
+        "start_time_unix": str(T0 // 10**6),
+        "end_time_unix": str((T0 + DURATION_S * 10**9) // 10**6),
+        "source_recording_id": "acme-rec-0001",
+        "spec_version": spec.SPEC_VERSION,
         "license": "CC-BY-4.0",
     }
     if spec.profile_for(embodiment) is spec.HUMAN:
-        info["camera-timestamp-ref"] = "mid"
-        info["hand-joints"] = ",".join(spec.MANO_JOINTS)
+        info["camera_timestamp_ref"] = "mid"
+        info["hand_joints"] = ",".join(spec.MANO_JOINTS)
         info["shutter"] = "rolling:16ms"
     return info
 
@@ -172,7 +168,7 @@ def write_mcap_episode(
       declared_embodiment   write this as the "embodiment" key, while the topics
                             follow `embodiment`
       metadata_override     episode-info values to set as given
-      unknown_hand_joint    "hand-joints" names "thumb_base", not in the vocabulary
+      unknown_hand_joint    "hand_joints" names "thumb_base", not in the vocabulary
       empty_arm_pose        robot: one arm's state `pose` left empty (as in ABC's
                             release)
       video_format          CompressedVideo.format on every camera
@@ -202,7 +198,7 @@ def write_mcap_episode(
       task_past_end         the second /task ends 3 s after the recorded data
       label_outside_tasks   only the first /task is written, so the second label is
                             in no task
-      stray_annotation_topic annotation.mcap also carries /instruction
+      stray_annotation_topic annotation.mcap also carries /imu
       label_crosses_tasks   the first label runs on into the second task
       labels_without_tasks  valid: labels but no /task (the episode info is the task)
       label_past_video      the point label sits after the last video frame
@@ -217,7 +213,7 @@ def write_mcap_episode(
       bad_annotation_type   the labels are typed "summary" (only "language" is known)
     """
     human = spec.profile_for(embodiment) is spec.HUMAN
-    sides = _sides(embodiment)
+    sides = spec.arm_sides(embodiment)
     out = Path(root) / f"episode_{episode_id}"
     out.mkdir(parents=True, exist_ok=True)
 
@@ -226,13 +222,13 @@ def write_mcap_episode(
         info.pop(drop_metadata_key)
     info.update(metadata_override or {})
     if unknown_hand_joint:
-        info["hand-joints"] = info["hand-joints"].replace("thumb_cmc", "thumb_base")
+        info["hand_joints"] = info["hand_joints"].replace("thumb_cmc", "thumb_base")
 
     def keep(topic: str) -> bool:
         return topic != drop_topic
 
     n_frames = DURATION_S * video_fps
-    packets = _h264_packets(n_frames)
+    packets = h264_packets(n_frames)
     if skip_first_keyframe:
         packets = packets[1:]
     video_times = [
@@ -308,11 +304,6 @@ def write_mcap_episode(
                 )
 
         write("/tf_static", _tf(links, bad_tf_rotation), T0)
-        write(
-            "/instruction",
-            schemas.Instruction(data=info.get("task_description") or "fold the shirt"),
-            T0,
-        )
 
         if human:
             _write_human(
@@ -372,7 +363,7 @@ def write_mcap_episode(
             if annotation_metadata:
                 w._writer.add_metadata(spec.METADATA_RECORD, {"lab": "other"})
             if stray_annotation_topic:
-                write_label("/instruction", schemas.Instruction(data="fold"), T0)
+                write_label("/imu", schemas.Imu(frame_id="imu"), T0)
     return out
 
 
@@ -415,7 +406,7 @@ def _write_labels(
             data="pick up the shirt",
             end_time_unix_ns=first_end,
             annotation_type=kind,
-            annotation_vendor="acme",
+            annotation_source="acme",
         ),
         T0 + half // 5,
     )

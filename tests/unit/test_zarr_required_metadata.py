@@ -12,7 +12,6 @@ from egomimic.rldb.zarr import validate
 from egomimic.rldb.zarr.required_metadata import (
     MissingMetadata,
     add_required_metadata_args,
-    build_required_metadata,
     required_metadata_from_args,
 )
 from egomimic.rldb.zarr.zarr_writer import (
@@ -33,6 +32,9 @@ GOOD = {
 }
 
 
+_DROP = object()
+
+
 def _write(path, metadata_override=None, **overrides):
     kwargs = {**GOOD, **overrides}
     kwargs = {k: v for k, v in kwargs.items() if v is not _DROP}
@@ -45,9 +47,6 @@ def _write(path, metadata_override=None, **overrides):
         numeric_data={"actions": np.zeros((T, 3), np.float32)},
         metadata_override=metadata_override,
     )
-
-
-_DROP = object()
 
 
 def _attrs(path):
@@ -89,6 +88,10 @@ def test_create_and_write_wraps_write(tmp_path):
         ({"intrinsics": {"front_1": np.eye(3)}}, "3x4"),
         ({"extrinsics": {}}, "extrinsics"),
         ({"extrinsics": {"left": np.eye(3)}}, "4x4"),
+        ({"intrinsics": {"cam0": K}}, "front-camera"),
+        ({"fps": 25}, "fps"),
+        ({"fps": np.int64(30)}, "fps"),
+        ({"fps": 30.0}, "fps"),
     ],
 )
 def test_write_validates_camera_and_embodiment(tmp_path, kwargs, match):
@@ -129,7 +132,7 @@ def test_placeholders_are_rejected(tmp_path, field, bad):
     assert not (tmp_path / "ep.zarr").exists()
 
 
-@pytest.mark.parametrize("bad", ["RL2", "rl 2", "_rl2"])
+@pytest.mark.parametrize("bad", ["RL2", "rl 2", "_rl2", "rl2\n", "rl2 "])
 def test_lab_must_be_lowercase_identifier(tmp_path, bad):
     with pytest.raises(ValueError, match="lab"):
         _write(tmp_path / "ep.zarr", lab=bad)
@@ -154,21 +157,59 @@ def test_missing_metadata_is_stored_as_null(tmp_path):
     assert "missing_metadata" not in attrs
 
 
-def test_metadata_override_cannot_clobber_required_metadata(tmp_path):
-    path = _write(
-        tmp_path / "ep.zarr",
-        metadata_override={"operator": "", "lab": "x"},
+@pytest.mark.parametrize("key", ["operator", "intrinsics", "embodiment", "features"])
+def test_metadata_override_rejects_writer_owned_keys(tmp_path, key):
+    with pytest.raises(ValueError, match=f"must not set \\['{key}'\\]"):
+        _write(tmp_path / "ep.zarr", metadata_override={key: "x"})
+    assert not (tmp_path / "ep.zarr").exists()
+
+
+def test_metadata_override_adds_extra_keys(tmp_path):
+    attrs = _attrs(
+        _write(tmp_path / "ep.zarr", metadata_override={"hand_used": "left"})
     )
-    attrs = _attrs(path)
-    assert attrs["operator"] == GOOD["operator"]
-    assert attrs["lab"] == GOOD["lab"]
+    assert attrs["hand_used"] == "left"
 
 
-def test_build_required_metadata_rejects_value_and_waiver_together():
+def test_failed_rewrite_keeps_existing_episode(tmp_path):
+    path = _write(tmp_path / "ep.zarr")
+    before = _attrs(path)
+    writer = ZarrWriter(
+        path, embodiment="human_bimanual", intrinsics={"front_1": K}, **GOOD
+    )
+    with pytest.raises(ValueError, match="images.front_1"):
+        writer.write(
+            numeric_data={"actions": np.zeros((T, 3), np.float32)},
+            image_data={"images.front_1": np.zeros((T, 4, 4), np.uint8)},
+        )
+    with pytest.raises(ValueError, match="JSON-serializable"):
+        writer.write(
+            numeric_data={"actions": np.zeros((T, 3), np.float32)},
+            metadata_override={"x": object()},
+        )
+    assert _attrs(path) == before
+    assert [p.name for p in tmp_path.iterdir()] == ["ep.zarr"]
+
+
+def test_rewrite_does_not_keep_stale_features(tmp_path):
+    writer = ZarrWriter(
+        tmp_path / "ep.zarr",
+        embodiment="human_bimanual",
+        intrinsics={"front_1": K},
+        **GOOD,
+    )
+    writer.write(numeric_data={"a": np.zeros((T, 3), np.float32)})
+    path = writer.write(numeric_data={"b": np.zeros((T, 3), np.float32)})
+    assert set(_attrs(path)["features"]) == {"b", "annotations"}
+
+
+def test_waiver_rejects_value_and_unknown_fields():
     with pytest.raises(ValueError, match="both"):
-        build_required_metadata({"operator": "op"}, ["operator"])
+        required_metadata_from_args(
+            argparse.Namespace(operator="op", missing_metadata=["operator"])
+        )
     with pytest.raises(ValueError, match="unknown fields"):
-        build_required_metadata({}, ["opertor"])
+        required_metadata_from_args(argparse.Namespace(missing_metadata=["opertor"]))
 
 
 def test_cli_args_feed_writer(tmp_path):
@@ -229,3 +270,79 @@ def test_validator_accepts_waiver_with_allow_missing(tmp_path):
     group.attrs["operator"] = None
     assert validate.main([str(ep)]) == 1
     assert validate.main([str(ep), "--allow-missing"]) == 0
+
+
+@pytest.mark.parametrize("field", ["task_name", "operator", "scene"])
+def test_surrounding_whitespace_is_rejected(tmp_path, field):
+    with pytest.raises(ValueError, match="whitespace"):
+        _write(tmp_path / "ep.zarr", **{field: f" {GOOD[field]}\n"})
+
+
+def test_objects_string_is_split_and_stored_as_list(tmp_path):
+    attrs = _attrs(_write(tmp_path / "ep.zarr", objects="shirt, basket"))
+    assert attrs["objects"] == ["shirt", "basket"]
+    for bad in ("shirt, n/a", "shirt,,basket", ",", " shirt"):
+        with pytest.raises(ValueError, match="objects"):
+            _write(tmp_path / "bad.zarr", objects=bad)
+
+
+def _corrupt(ep, **attrs):
+    zarr.open_group(str(ep), mode="a").attrs.update(attrs)
+    return validate.validate_episode(ep)
+
+
+@pytest.mark.parametrize(
+    "attrs, match",
+    [
+        ({"total_frames": None}, "total_frames"),
+        ({"intrinsics": {"front_1": [[1, 2], [3]]}}, "must be a 3x4 K matrix"),
+        ({"features": {"images.front_1": "jpeg"}}, "could not finish"),
+    ],
+)
+def test_validator_reports_malformed_attrs(tmp_path, attrs, match):
+    report = _corrupt(write_episode(tmp_path, "aria", T=16, H=32, W=32), **attrs)
+    assert not report.ok
+    assert any(match in e for e in report.errors)
+
+
+def test_validator_rejects_nan_poses(tmp_path):
+    ep = write_episode(tmp_path, "aria", T=16, H=32, W=32)
+    store = zarr.open_group(str(ep), mode="a")
+    pose = store["obs_head_pose"][:]
+    pose[3] = np.nan
+    store["obs_head_pose"][:] = pose
+    report = validate.validate_episode(ep)
+    assert any("obs_head_pose: contains NaN" in e for e in report.errors)
+
+
+def test_float32_intrinsics_lists_are_stored(tmp_path):
+    K32 = [[np.float32(v) for v in row] for row in K]
+    path = ZarrWriter(
+        tmp_path / "ep.zarr",
+        embodiment="human_bimanual",
+        intrinsics={"front_1": K32},
+        **GOOD,
+    ).write(numeric_data={"actions": np.zeros((T, 3), np.float32)})
+    assert _attrs(path)["intrinsics"]["front_1"] == K.tolist()
+
+
+def test_stale_temp_dirs_are_swept_and_non_dirs_rejected(tmp_path):
+    (tmp_path / "ep.zarr.tmp-1").mkdir()
+    (tmp_path / "ep.zarr.tmp-2").write_text("x")
+    (tmp_path / "ep.zarr.old-3").mkdir()
+    _write(tmp_path / "ep.zarr")
+    assert [p.name for p in tmp_path.iterdir()] == ["ep.zarr"]
+
+    (tmp_path / "file.zarr").write_text("x")
+    (tmp_path / "link.zarr").symlink_to(tmp_path / "ep.zarr")
+    for name in ("file.zarr", "link.zarr"):
+        with pytest.raises(ValueError, match="not an episode directory"):
+            _write(tmp_path / name)
+
+
+def test_orphaned_old_copy_is_restored_not_swept(tmp_path):
+    good = _write(tmp_path / "ep.zarr")
+    good.rename(tmp_path / "ep.zarr.old-99")  # killed between the two renames
+    with pytest.raises(ValueError):
+        _write(tmp_path / "ep.zarr", operator="unknown")
+    assert _attrs(tmp_path / "ep.zarr")["operator"] == GOOD["operator"]

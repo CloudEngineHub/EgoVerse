@@ -22,17 +22,20 @@ separate videos and add no rows.
 Who, what and where: the episode info carries the same required fields as a zarr
 episode (task_name, operator, lab, scene, objects; CONTRIBUTING_DATA.md §6.3), named and
 checked exactly as in egomimic.rldb.zarr.required_metadata. `lab` is who the data came
-from (rl2, mecka, microagi). Hardware goes in rig-name / device-serial.
+from (rl2, mecka, microagi). Hardware goes in rig_name / device_serial. Task text is
+task_name, task_description and the annotations; there is no separate instruction.
 
-IDs: Lance recording_id = recording_id(lab, vendor-recording-id) below, so
-vendor-recording-id must stay the same across every re-export or correction of the
-recording. Task and annotation IDs are computed downstream from their content.
+IDs: Lance recording_id = recording_id(lab, source_recording_id) below, so
+source_recording_id must stay the same across every re-export or correction of the
+recording. A zarr episode trimmed from it names it in its source_recording_id attr. Task
+and annotation IDs are computed downstream from their content.
 """
 
 import re
 import uuid
 from dataclasses import dataclass
 
+from egomimic.rldb.zarr.episode_rules import EMBODIMENTS, arm_sides
 from egomimic.rldb.zarr.required_metadata import REQUIRED_METADATA_FIELDS
 
 SPEC_VERSION = "0.1"
@@ -41,7 +44,7 @@ SUPPORTED_SPEC_VERSIONS = ("0.1",)
 EPISODE_FILE = "episode.mcap"
 # Its topics may instead be inline in episode.mcap, as ABC-130k does.
 ANNOTATION_FILE = "annotation.mcap"
-# ABC's delivery format names its episode-info record this, with hyphenated keys.
+# ABC's delivery format names its episode-info record this; keys are snake_case.
 METADATA_RECORD = "session-metadata"
 MISSING_METADATA_KEY = "missing_metadata"
 
@@ -60,7 +63,7 @@ DISTORTION_MODELS = {
 }
 
 # Hand joint vocabulary. Vendors list the joints their device tracks, in the order they
-# write them, in the "hand-joints" key. Names that are MANO joints are what the MANO fit
+# write them, in the "hand_joints" key. Names that are MANO joints are what the MANO fit
 # (egomimic/scripts/aria_process/aria_utils.py) matches; extras are kept but not fitted.
 # Canonical MANO order, as Human.FINGER_EDGES uses it: a vendor sending this exactly
 # needs no fit.
@@ -88,9 +91,9 @@ SHUTTER = re.compile(r"global|rolling:[0-9]+(\.[0-9]+)?ms")
 RECORDING_NAMESPACE = uuid.UUID("6f1d4c3e-2b1a-5e7f-9c8d-0a1b2c3d4e5f")
 
 
-def recording_id(lab: str, vendor_recording_id: str) -> str:
+def recording_id(lab: str, source_recording_id: str) -> str:
     """The Lance recordings.recording_id this episode will get."""
-    return str(uuid.uuid5(RECORDING_NAMESPACE, f"{lab}/{vendor_recording_id}"))
+    return str(uuid.uuid5(RECORDING_NAMESPACE, f"{lab}/{source_recording_id}"))
 
 
 # Frames every vendor uses by these names in /tf_static and in poses.
@@ -106,28 +109,17 @@ VIDEO_CODECS = ("h264", "h265")
 GRIPPER_RANGE = (0.0, 1.0)  # 0 = closed, 1 = open
 
 # ---- PROVISIONAL thresholds (not in the plan) ----
-RATE_TOL = (
-    0.05  # a measured rate may fall this fraction below its minimum (29.97 fps passes)
-)
+# A measured rate may fall this fraction below its minimum (29.97 fps passes).
+RATE_TOL = 0.05
 GRAVITY_TOL = 0.5  # m/s^2 allowed around GRAVITY in the stillest window
 STILL_WINDOW_S = 1.0  # window used to find the IMU at rest
 MAX_GAP_S = 0.5  # largest allowed gap between consecutive messages of one stream
 SPAN_TOL_S = 1.0  # how far a stream may start late / end early vs. the episode
-METADATA_TIME_TOL_S = 1.0  # start/end-time-unix vs. the data's actual span
+METADATA_TIME_TOL_S = 1.0  # start/end_time_unix vs. the data's actual span
 UNIT_TOL = 1e-3  # |quaternion| - 1, and R^T R - I for rotation matrices
-VIDEO_SAMPLE_FRAMES = 60  # frames decoded per camera to check the stream
+# Frames fully decoded per camera; structural checks run on every message.
+VIDEO_SAMPLE_FRAMES = 60
 MIN_UNIX_NS = 1_420_070_400 * 10**9  # 2015-01-01: anything earlier is not Unix time
-
-# Must match egomimic.rldb.embodiment.embodiment.EMBODIMENT (lowercased); a unit test
-# checks. Listed here so the validator does not import torch.
-EMBODIMENTS = (
-    "human_right_arm",
-    "human_left_arm",
-    "human_bimanual",
-    "eva_right_arm",
-    "eva_left_arm",
-    "eva_bimanual",
-)
 
 
 @dataclass(frozen=True)
@@ -163,8 +155,9 @@ class MetaKey:
     """One episode-info key. MCAP metadata values are strings; `kind` is what the
     string must parse as: "str", "int", "enum" (one of `values`), "shutter"
     (SHUTTER), "hand_joints" (comma-separated HAND_JOINTS names, each once,
-    including wrist) or "required_metadata" (one of REQUIRED_METADATA_FIELDS,
-    checked with the zarr rules; `objects` is comma-separated)."""
+    including wrist), "required_metadata" (one of REQUIRED_METADATA_FIELDS,
+    checked with the zarr rules; `objects` is comma-separated) or "waiver"
+    (comma-separated REQUIRED_METADATA_FIELDS names the source does not have)."""
 
     name: str
     kind: str = "str"
@@ -189,9 +182,6 @@ _VIDEO = dict(
 )
 _TF = Topic(
     "/tf_static", "tf_static", schema="foxglove.FrameTransforms", fields=("transforms",)
-)
-_INSTRUCTION = Topic(
-    "/instruction", "instruction", schema="egoverse.Instruction", fields=("data",)
 )
 # Optional in either profile. Without /task, the episode-info task_name / task_description / objects
 # keys describe one task spanning the whole recording; with /task, the spans are
@@ -260,7 +250,6 @@ HUMAN = Profile(
             fields=("frame_id",),
         ),
         _TF,
-        _INSTRUCTION,
         *_LABELS,
     ),
     moving_links=(MovingLink(WORLD_FRAME, HEAD_FRAME, "/head-pose"),),
@@ -308,7 +297,6 @@ ROBOT = Profile(
             )
         ),
         _TF,
-        _INSTRUCTION,
         *_LABELS,
     ),
     # The end effector moves relative to its arm base; the wrist camera hangs off it.
@@ -324,35 +312,45 @@ METADATA_KEYS = (
     MetaKey("task_description", optional=True),  # full task text
     # Comma-separated required fields the source truly does not have (MissingMetadata).
     # Only if absolutely necessary; the episode then fails without --allow-missing.
-    MetaKey(MISSING_METADATA_KEY, optional=True),
+    MetaKey(MISSING_METADATA_KEY, "waiver", optional=True),
     MetaKey("embodiment", "enum", EMBODIMENTS),
-    MetaKey("rig-name"),
-    MetaKey("device-serial"),
-    MetaKey("start-time-unix", "int"),  # ms
-    MetaKey("end-time-unix", "int"),  # ms
-    # The vendor's own ID for this recording; stable across re-exports and corrections.
-    MetaKey("vendor-recording-id"),
-    MetaKey("spec-version", "enum", SUPPORTED_SPEC_VERSIONS),
+    MetaKey("rig_name"),
+    MetaKey("device_serial"),
+    MetaKey("start_time_unix", "int"),  # ms
+    MetaKey("end_time_unix", "int"),  # ms
+    # The source's own ID for this recording; stable across re-exports and corrections.
+    MetaKey("source_recording_id"),
+    MetaKey("spec_version", "enum", SUPPORTED_SPEC_VERSIONS),
     MetaKey("license"),  # e.g. "CC-BY-4.0"; the Lance recordings.license column
     # Where in the exposure frames are stamped.
-    MetaKey("camera-timestamp-ref", "enum", ("start", "mid", "end"), human_only=True),
+    MetaKey("camera_timestamp_ref", "enum", ("start", "mid", "end"), human_only=True),
     MetaKey("shutter", "shutter", human_only=True),  # "global" or "rolling:16ms"
     # HandKeypoints.positions order, chosen by the vendor, e.g. ",".join(MANO_JOINTS)
-    MetaKey("hand-joints", "hand_joints", human_only=True),
+    MetaKey("hand_joints", "hand_joints", human_only=True),
 )
+# Lab feeds recording_id, so it cannot be waived in missing_metadata.
+UNWAIVABLE_FIELDS = ("lab",)
+# Topics published exactly once per episode.
+ONCE_TOPICS = ("/tf_static", "/imu-info")
+# Topic kinds whose messages form a time series; the rest are published once or rarely.
+STREAM_KINDS = frozenset(
+    {
+        "video",
+        "imu",
+        "pose",
+        "tracking_quality",
+        "hand_keypoints",
+        "arm",
+        "gripper",
+        "eye_gaze",
+    }
+)
+# Topics allowed in annotation.mcap.
+LABEL_TOPICS = frozenset({"/task", "/subtask-annotation"})
 
 
 def profile_for(embodiment: str) -> Profile:
     return HUMAN if embodiment.startswith("human_") else ROBOT
-
-
-def arm_sides(embodiment: str) -> tuple[str, ...]:
-    """Sides the embodiment uses: ("left", "right") for *_bimanual."""
-    if embodiment.endswith("_left_arm"):
-        return ("left",)
-    if embodiment.endswith("_right_arm"):
-        return ("right",)
-    return ("left", "right")
 
 
 def topics_for(embodiment: str) -> tuple[Topic, ...]:
