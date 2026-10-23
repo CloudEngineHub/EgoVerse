@@ -524,6 +524,10 @@ def convert_task_to_zarr(
 
     Returns a dict with keys: episodes, folder, task_desc, total_frames, output_dir.
     """
+    raise NotImplementedError(
+        "sfs_to_egoverse_zarr is disabled until it passes the required episode "
+        "metadata and intrinsics to ZarrWriter; see INTERNAL_DATA.md §4.3."
+    )
     t_start = time.perf_counter()
     if img_workers is None:
         img_workers = min(os.cpu_count() or 4, 8)

@@ -706,6 +706,14 @@ class MeckaExtractor:
         return np.asarray(adjusted_head_poses)
 
 
+# The pose helpers above are still used by training (left_wrist_convention);
+# only the zarr conversion path is disabled.
+_CONVERTER_DISABLED = (
+    "mecka_to_zarr is disabled until it passes the required episode metadata "
+    "and intrinsics to ZarrWriter; see INTERNAL_DATA.md §4.3."
+)
+
+
 class MeckaDatasetConverter:
     """Convert Mecka episodes to Zarr dataset format using ZarrWriter."""
 
@@ -734,6 +742,7 @@ class MeckaDatasetConverter:
             local_data_dir: Optional path to pre-downloaded episode files; skips download.
             task_description: Optional task label for annotations.
         """
+        raise NotImplementedError(_CONVERTER_DISABLED)
         self.episode_json_path = episode_json_path
         self.repo_id = repo_id
         self.arm = arm
