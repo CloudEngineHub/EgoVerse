@@ -166,4 +166,4 @@ python egomimic/trainHydra.py --config-name=train_zarr_cartesian
 For full instructions on training see [``training.md``](./training.md)
 
 ### Converting your own data
-Start from the reference converter [``template_to_zarr.py``](./egomimic/scripts/convert_template/template_to_zarr.py): copy it and fill in ``load_episode`` for your raw data. It writes, validates and previews every episode. The format and required metadata are specified in [``CONTRIBUTING_DATA.md``](./CONTRIBUTING_DATA.md) §6.
+Start from the reference converter [``template_to_zarr.py``](./egomimic/scripts/convert_template/template_to_zarr.py): copy it and fill in ``find_raw_episodes`` and ``load_episode`` for your raw data. It writes, validates and previews every episode. The format, required metadata, uploads and raw-data delivery are specified in [``CONTRIBUTING_DATA.md``](./CONTRIBUTING_DATA.md) (vendor guide); RL2 ingest and internal conversion are in [``INTERNAL_DATA.md``](./INTERNAL_DATA.md).
