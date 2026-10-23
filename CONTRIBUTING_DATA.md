@@ -378,7 +378,7 @@ The root group's `.attrs` dictionary is the **episode metadata**. It is written 
     "lab":               str,   # who the data came from: short lowercase id, e.g. "mecka"
     "scene":             str,   # scene / location label
     "objects":     list[str],   # objects manipulated
-    "source_recording_id": str, # optional: raw recording this episode was cut from (§6.6)
+    "source_recording_id": str, # REQUIRED: raw recording this episode was cut from (§6.6)
     "intrinsics":        dict,  # MANDATORY: {camera_key: 3x4 K matrix} dict (single-camera =
                                 #   one entry, e.g. {"front_1": K}; 3x4 = the 3x3 pinhole K
                                 #   with a zero last column). Projection uses the "front" entry.
@@ -404,7 +404,7 @@ The root group's `.attrs` dictionary is the **episode metadata**. It is written 
 - `total_frames` must equal `len(store["images.front_1"])` and every other non-padded array.
 - `fps` must be the actual capture rate of `images.front_1`, and must be 30 or 60. Do not set it to a target rate if the actual rate differs.
 - `features` must have one entry per array key present in the store.
-- `source_recording_id` is optional but recommended: it is how we find the raw recording again (§6.6). Pass it through `metadata_override={"source_recording_id": ...}`; the reference converter does this from `RawEpisode.source_recording_id`.
+- `source_recording_id` is **required**: it is how we find the raw recording again (§6.6), and with `lab` it gives the recording's ID downstream. Pass it as `ZarrWriter.create_and_write(..., source_recording_id=...)`; the reference converter does this from `RawEpisode.source_recording_id`. It must be a single path component (no `/`), with no placeholder or surrounding whitespace.
 - `intrinsics` is **mandatory** and is always a `{camera_key: 3×4 K matrix}` dict in `zarr.attrs` (single-camera = one entry, e.g. `{"front_1": K}`). `ZarrWriter.create_and_write` raises if it is not a non-empty dict.
 - `extrinsics` is **either `None` or a non-empty `dict`** of 4×4 world↔cam transforms (robots key per-arm, e.g. `{"left": T, "right": T}`); egocentric human contributors omit it (`None`). `ZarrWriter.create_and_write` raises if it is anything other than `None` or a non-empty dict.
 
@@ -504,7 +504,7 @@ resolution, different processing) without coming back to you.
   ID for the session; keep it the same across re-exports and corrections.
 - **Link each zarr episode to its session** with the `source_recording_id` attribute
   (§6.3). One session can be trimmed into several zarr episodes (§2.4); each of them
-  carries the same `source_recording_id`. This link is recommended, not validated.
+  carries the same `source_recording_id`. This link is required and validated (§11.1).
 - **If you use MCAP**, follow SPEC.md exactly (its episode info uses the same
   `source_recording_id` key) and check every episode with
   `python -m egomimic.rldb.mcap.validate episode_<id>/ [...]`; `scene` / `objects` waived in
@@ -727,11 +727,12 @@ python -m egomimic.rldb.zarr.validate /local/out/*.zarr
 
 Pass the `.zarr` directories themselves, not the folder that contains them. It prints `PASS`/`FAIL` per episode with every problem found, and exits nonzero if any episode fails. Add `-v` to also list the checks that passed. It checks:
 
-- metadata (§6.3): `embodiment`, `total_frames`, `fps` (30 or 60), `features`, and the required metadata fields `task_name`/`operator`/`lab`/`scene`/`objects`, with the same rules as `create_and_write`
+- metadata (§6.3): `embodiment`, `total_frames`, `fps` (30 or 60), `features`, and the required metadata fields `task_name`/`operator`/`lab`/`scene`/`objects` and `source_recording_id`, with the same rules as `create_and_write`
 - `embodiment` is a valid identifier (§9)
+- the `<episode_hash>.zarr` name decodes to a recording start between 2015 and now (§4); a start time in seconds or nanoseconds instead of milliseconds fails
 - `intrinsics` is a non-empty `{camera_key: 3x4}` dict with a front camera; `extrinsics` is `None` or a dict of 4x4 matrices
 - every array has a `features` entry (and vice versa) and at least `total_frames` rows
-- required keys: `images.front_1` plus `left`/`right.obs_ee_pose` for the arms in the embodiment
+- required keys: `images.front_1`, `obs_head_pose` (human embodiments), plus `left`/`right.obs_ee_pose` for the arms in the embodiment
 - pose arrays are `(T, 7)` with unit quaternions; grippers `(T, 1)`; keypoints last dim 63; no NaN or inf in any of them
 - annotations are well-formed `annotation_v1` records within `[0, T]`
 - frame 0 of every JPEG key decodes to an RGB image
@@ -749,11 +750,8 @@ from egomimic.rldb.filters import DatasetFilter
 from egomimic.rldb.embodiment.human import Human
 import torch
 
-# cartesian mode re-expresses every pose relative to obs_head_pose, so the
-# cartesian transform REQUIRES a head pose. Every current vendor export (Aria,
-# Mecka, Scale) writes obs_head_pose. Only a contributor without one should set
-# has_head_pose=False, and then transform_list must be None (validate the raw
-# episode with the §11.1 checks instead).
+# cartesian mode re-expresses every pose relative to obs_head_pose, which every
+# human episode must have (§6.2, checked by §11.1).
 HAS_HEAD_POSE = True
 key_map = Human.get_keymap(keymap_mode="cartesian", has_head_pose=HAS_HEAD_POSE)
 transform_list = (

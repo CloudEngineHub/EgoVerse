@@ -27,9 +27,14 @@ from egomimic.rldb.zarr.episode_rules import (
     arm_sides,
     camera_errors,
     embodiment_error,
+    episode_hash_start_ms,
     fps_error,
+    start_time_error,
 )
-from egomimic.rldb.zarr.required_metadata import check_stored_metadata
+from egomimic.rldb.zarr.required_metadata import (
+    check_stored_metadata,
+    source_recording_id_error,
+)
 
 _POSE_KEYS = (
     "left.obs_ee_pose",
@@ -92,6 +97,7 @@ def _validate_store(
 ) -> None:
     meta = dict(store.attrs)
     _check_attrs(meta, report, allow_missing)
+    _check_episode_hash(report)
     if "features" not in meta:
         report.errors.append("Missing metadata field: features")
     T = meta.get("total_frames")
@@ -115,6 +121,10 @@ def _check_attrs(meta: dict, report: ValidationReport, allow_missing: bool) -> N
             report.errors.append(err)
     report.errors += camera_errors(meta.get("intrinsics"), meta.get("extrinsics"))
     errors, warnings, passed = check_stored_metadata(meta, allow_missing=allow_missing)
+    if (err := source_recording_id_error(meta.get("source_recording_id"))) is None:
+        passed.append("source_recording_id")
+    else:
+        errors.append(err)
     version = meta.get("schema_version")
     if version is None:
         warnings = [
@@ -136,6 +146,20 @@ def _check_attrs(meta: dict, report: ValidationReport, allow_missing: bool) -> N
     report.successes += [f"{name}={meta[name]!r}" for name in passed]
 
 
+def _check_episode_hash(report: ValidationReport) -> None:
+    name = report.path.name.removesuffix(".zarr")
+    start_ms = episode_hash_start_ms(name)
+    if start_ms is None:
+        report.warnings.append(
+            f"{report.path.name} is not named <episode_hash>.zarr. "
+            "See CONTRIBUTING_DATA.md §4."
+        )
+    elif (err := start_time_error(start_ms)) is not None:
+        report.errors.append(f"episode hash {name}: {err}")
+    else:
+        report.successes.append(f"episode hash {name}")
+
+
 def _check_arrays(
     store: zarr.Group, features: dict, embodiment, T: int, errors: list[str]
 ) -> None:
@@ -154,8 +178,12 @@ def _check_arrays(
         if key not in array_keys:
             errors.append(f"features[{key!r}] has no matching array")
 
-    arm_keys = [f"{side}.obs_ee_pose" for side in arm_sides(str(embodiment or ""))]
-    for key in ["images.front_1", *arm_keys]:
+    embodiment = str(embodiment or "")
+    required = ["images.front_1"]
+    if embodiment.lower().startswith("human_"):
+        required.append("obs_head_pose")  # training re-expresses poses relative to it
+    required += [f"{side}.obs_ee_pose" for side in arm_sides(embodiment)]
+    for key in required:
         if key not in store:
             errors.append(f"Missing required key: {key}")
 

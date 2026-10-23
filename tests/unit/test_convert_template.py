@@ -134,3 +134,19 @@ def test_failed_preview_keeps_the_episode(tmp_path, monkeypatch):
     written, failed = tmpl.convert_all(raw, tmp_path / "out")
     assert not failed
     assert [p.name for p in (tmp_path / "out").iterdir()] == [written[0].name]
+
+
+@pytest.mark.parametrize("scale", [1e-3, 1e6])  # seconds, nanoseconds
+def test_start_time_in_wrong_unit_is_rejected(tmp_path, monkeypatch, scale):
+    good_load = tmpl.load_episode
+
+    def load(raw_path):
+        ep = good_load(raw_path)
+        ep.start_time_ms = int(ep.start_time_ms * scale)
+        return ep
+
+    monkeypatch.setattr(tmpl, "load_episode", load)
+    raw = _raw_paths(tmp_path, 1)
+    written, failed = tmpl.convert_all(raw, tmp_path / "out", save_mp4=False)
+    assert not written
+    assert "epoch milliseconds" in failed[raw[0]]

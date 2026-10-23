@@ -30,6 +30,7 @@ GOOD = {
     "lab": "rl2",
     "scene": "kitchen_a",
     "objects": ["shirt"],
+    "source_recording_id": "session_0412",
 }
 
 
@@ -414,3 +415,38 @@ def test_orphaned_old_copy_is_restored_not_swept(tmp_path):
     with pytest.raises(ValueError):
         _write(tmp_path / "ep.zarr", operator="unknown")
     assert _attrs(tmp_path / "ep.zarr")["operator"] == GOOD["operator"]
+
+
+@pytest.mark.parametrize("value", ["", "unknown", "a/b", " s1", None])
+def test_source_recording_id_is_required(tmp_path, value):
+    with pytest.raises(ValueError, match="source_recording_id"):
+        _write(tmp_path / "ep.zarr", source_recording_id=value)
+    assert not (tmp_path / "ep.zarr").exists()
+
+
+def test_validator_requires_source_recording_id_and_head_pose(tmp_path):
+    ep = write_episode(tmp_path, "aria", T=16, H=32, W=32)
+    group = zarr.open_group(str(ep), mode="r+")
+    attrs = dict(group.attrs)
+    del attrs["source_recording_id"]
+    group.attrs.clear()
+    group.attrs.update(attrs)
+    del group["obs_head_pose"]
+    errors = validate.validate_episode(ep).errors
+    assert any("source_recording_id" in e for e in errors)
+    assert any("Missing required key: obs_head_pose" in e for e in errors)
+
+
+def test_robot_episode_needs_no_head_pose(tmp_path):
+    report = validate.validate_episode(write_episode(tmp_path, "eva", T=16, H=32, W=32))
+    assert report.ok, report.errors
+
+
+def test_validator_checks_episode_hash_name(tmp_path):
+    ep = write_episode(tmp_path, "aria", T=16, H=32, W=32)
+    assert any("episode_hash" in w for w in validate.validate_episode(ep).warnings)
+    good = ep.rename(tmp_path / "2026-01-12-03-47-29-664000.zarr")
+    assert validate.validate_episode(good).ok
+    old = good.rename(tmp_path / "1970-01-21-07-03-09-664000.zarr")
+    report = validate.validate_episode(old)
+    assert any("epoch milliseconds" in e for e in report.errors)

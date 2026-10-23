@@ -4,11 +4,18 @@ two apply the same attr rules (CONTRIBUTING_DATA.md §6). The validator also
 checks arrays (required keys, poses), which the writer does not.
 """
 
+import time
+from datetime import datetime, timezone
 from typing import Any
 
 import numpy as np
 
 SUPPORTED_FPS = (30, 60)
+
+# Earliest plausible recording start; earlier values are usually seconds or ns
+# passed where epoch milliseconds were expected (§4).
+MIN_START_TIME_MS = 1_420_070_400_000  # 2015-01-01 UTC
+_EPISODE_HASH_FORMAT = "%Y-%m-%d-%H-%M-%S-%f"
 
 # Max |‖q‖ - 1| for pose quaternions; the MCAP validator uses the same value.
 QUAT_UNIT_TOL = 1e-3
@@ -56,6 +63,27 @@ def fps_error(fps: Any) -> str | None:
     if type(fps) is int and fps in SUPPORTED_FPS:
         return None
     return f"fps must be an int in {SUPPORTED_FPS}, got {fps!r}. See CONTRIBUTING_DATA.md §6.3."
+
+
+def start_time_error(start_time_ms: Any) -> str | None:
+    """Why ``start_time_ms`` is not a plausible UTC epoch-ms recording start, or None."""
+    now_ms = int(time.time() * 1000)
+    if type(start_time_ms) is int and MIN_START_TIME_MS <= start_time_ms <= now_ms:
+        return None
+    return (
+        f"recording start time {start_time_ms!r} is not UTC epoch milliseconds "
+        "between 2015-01-01 and now (seconds or nanoseconds passed by mistake?). "
+        "See CONTRIBUTING_DATA.md §4."
+    )
+
+
+def episode_hash_start_ms(name: str) -> int | None:
+    """Epoch ms encoded in an episode hash like 2026-01-12-03-47-29-664000, or None."""
+    try:
+        dt = datetime.strptime(name, _EPISODE_HASH_FORMAT)
+    except ValueError:
+        return None
+    return int(dt.replace(tzinfo=timezone.utc).timestamp() * 1000)
 
 
 def _matrix_shape(value: Any) -> tuple[int, ...] | None:

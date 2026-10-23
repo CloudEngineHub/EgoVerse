@@ -45,6 +45,7 @@ from typing import Any
 
 import numpy as np
 
+from egomimic.rldb.zarr.episode_rules import start_time_error
 from egomimic.rldb.zarr.required_metadata import (
     MissingMetadata,  # noqa: F401 (see load_episode)
 )
@@ -71,14 +72,14 @@ class RawEpisode:
     intrinsics: np.ndarray  # 3x3 or 3x4 pinhole K at the (H, W) of `images`
     head_pose: np.ndarray  # (T, 7) world <- camera (§6.2)
     metadata: dict[str, Any]  # task_name, operator, lab, scene, objects (§6.3)
+    # Your ID for the raw recording this episode was cut from, so it can be
+    # re-converted from the raw upload later (§6.6).
+    source_recording_id: str
     left_ee_pose: np.ndarray | None = None  # (T, 7)
     right_ee_pose: np.ndarray | None = None  # (T, 7)
     left_keypoints: np.ndarray | None = None  # (T, 63) = 21 MANO kps x xyz
     right_keypoints: np.ndarray | None = None  # (T, 63)
     task_description: str = ""
-    # Your ID for the raw recording this episode was cut from, so it can be
-    # re-converted from the raw upload later (§6.6).
-    source_recording_id: str | None = None
     # Language spans: (text, start_frame, end_frame), end exclusive (§8.1)
     annotations: list[tuple[str, int, int]] = field(default_factory=list)
 
@@ -149,6 +150,8 @@ def convert_episode(
     Raises (and leaves nothing behind) if the episode fails validation.
     """
     ep = load_episode(Path(raw_path))
+    if (err := start_time_error(ep.start_time_ms)) is not None:
+        raise ValueError(f"{raw_path}: {err}")
     output_dir = Path(output_dir)
     episode_hash = timestamp_ms_to_episode_hash(ep.start_time_ms)
     zarr_path = output_dir / f"{episode_hash}.zarr"
@@ -226,11 +229,7 @@ def _write_and_validate(
             task_description=ep.task_description,
             annotations=ep.annotations or None,
             intrinsics={"front_1": K},
-            metadata_override=(
-                {"source_recording_id": ep.source_recording_id}
-                if ep.source_recording_id
-                else None
-            ),
+            source_recording_id=ep.source_recording_id,
             **ep.metadata,
         )
         report = validate_episode(zarr_path, allow_missing=allow_missing)

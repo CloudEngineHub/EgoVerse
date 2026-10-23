@@ -30,6 +30,7 @@ from egomimic.rldb.zarr.required_metadata import (
     MissingMetadata,
     check_writer_metadata,
     objects_list,
+    source_recording_id_error,
 )
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,7 @@ _WRITER_OWNED_ATTRS = frozenset(
         "intrinsics",
         "extrinsics",
         "schema_version",
+        "source_recording_id",
         *REQUIRED_METADATA_FIELDS,
     }
 )
@@ -71,6 +73,7 @@ class ZarrWriter:
         lab: "str | MissingMetadata",
         scene: "str | MissingMetadata",
         objects: "str | list[str] | MissingMetadata",
+        source_recording_id: str,
         fps: int = 30,
         task_description: str = "",
         annotations: list[tuple[str, int, int]] | None = None,
@@ -107,8 +110,11 @@ class ZarrWriter:
                 task_name, operator and lab are always required. scene and
                 objects may be MissingMetadata() only if the source data has no
                 value; it is stored as null.
+            source_recording_id: REQUIRED: your ID for the raw recording this
+                episode was cut from (CONTRIBUTING_DATA.md §6.6).
         """
         self.episode_path = Path(episode_path)
+        self.source_recording_id = source_recording_id
         self.fps = fps
         self.embodiment = embodiment
         self.task_description = task_description
@@ -262,6 +268,8 @@ class ZarrWriter:
             if e is not None
         ]
         errors += camera_errors(self.intrinsics, self.extrinsics)
+        if (err := source_recording_id_error(self.source_recording_id)) is not None:
+            errors.append(err)
         if errors:
             raise ValueError("; ".join(errors))
         if self.episode_path.is_symlink() or self.episode_path.is_file():
@@ -433,6 +441,7 @@ class ZarrWriter:
             "total_frames": total_frames,
             "fps": self.fps,
             "task_description": self.task_description,
+            "source_recording_id": self.source_recording_id,
             "features": self._features,
         }
 
@@ -468,6 +477,7 @@ class ZarrWriter:
         lab: "str | MissingMetadata",
         scene: "str | MissingMetadata",
         objects: "str | list[str] | MissingMetadata",
+        source_recording_id: str,
         fps: int = 30,
         task_description: str = "",
         annotations: list[tuple[str, int, int]] | None = None,
@@ -489,6 +499,7 @@ class ZarrWriter:
             lab=lab,
             scene=scene,
             objects=objects,
+            source_recording_id=source_recording_id,
             fps=fps,
             task_description=task_description,
             annotations=annotations,
