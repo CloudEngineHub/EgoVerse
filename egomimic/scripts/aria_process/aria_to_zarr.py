@@ -188,7 +188,7 @@ class DatasetConverter:
             task_description=task_description,
             chunk_timesteps=chunk_timesteps,
             intrinsics={"front_1": ARIA_INTRINSICS},
-            source_recording_id=Path(episode_path).stem,
+            vendor_recording_id=Path(episode_path).stem,
             **required_metadata,
         )
         if self.save_mp4:

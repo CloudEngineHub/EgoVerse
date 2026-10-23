@@ -205,7 +205,7 @@ def convert_episode(
         chunk_timesteps=chunk_timesteps,
         intrinsics={"front_1": Eva.INTRINSICS},
         extrinsics=Eva.EXTRINSICS,
-        source_recording_id=Path(raw_path).stem,
+        vendor_recording_id=Path(raw_path).stem,
         **required_metadata,
     )
 

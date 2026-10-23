@@ -25,9 +25,9 @@ checked exactly as in egomimic.rldb.zarr.required_metadata. `lab` is who the dat
 from (rl2, mecka, microagi). Hardware goes in rig_name / device_serial. Task text is
 task_name, task_description and the annotations; there is no separate instruction.
 
-IDs: Lance recording_id = recording_id(lab, source_recording_id) below, so
-source_recording_id must stay the same across every re-export or correction of the
-recording. A zarr episode trimmed from it names it in its source_recording_id attr. Task
+IDs: Lance recording_id = recording_id(lab, vendor_recording_id) below, so
+vendor_recording_id must stay the same across every re-export or correction of the
+recording. A zarr episode trimmed from it names it in its vendor_recording_id attr. Task
 and annotation IDs are computed downstream from their content.
 """
 
@@ -94,9 +94,9 @@ SHUTTER = re.compile(r"global|rolling:[0-9]+(\.[0-9]+)?ms")
 RECORDING_NAMESPACE = uuid.UUID("6f1d4c3e-2b1a-5e7f-9c8d-0a1b2c3d4e5f")
 
 
-def recording_id(lab: str, source_recording_id: str) -> str:
+def recording_id(lab: str, vendor_recording_id: str) -> str:
     """The Lance recordings.recording_id this episode will get."""
-    return str(uuid.uuid5(RECORDING_NAMESPACE, f"{lab}/{source_recording_id}"))
+    return str(uuid.uuid5(RECORDING_NAMESPACE, f"{lab}/{vendor_recording_id}"))
 
 
 # Frames every vendor uses by these names in /tf_static and in poses.
@@ -322,7 +322,7 @@ METADATA_KEYS = (
     MetaKey("start_time_unix", "int"),  # ms
     MetaKey("end_time_unix", "int"),  # ms
     # The source's own ID for this recording; stable across re-exports and corrections.
-    MetaKey("source_recording_id"),
+    MetaKey("vendor_recording_id"),
     MetaKey("spec_version", "enum", SUPPORTED_SPEC_VERSIONS),
     MetaKey("license"),  # e.g. "CC-BY-4.0"; the Lance recordings.license column
     # Where in the exposure frames are stamped.

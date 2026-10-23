@@ -44,7 +44,7 @@ Your raw data
     └─► Convert to Zarr v3 (start from the reference converter, §6.0)
     └─► Validate every episode (§11)
     └─► Upload to s3://rldb/processed_v3/<lab>/<episode_hash>.zarr/ (§10)
-    └─► Upload the raw recordings to s3://rldb/raw/<lab>/<source_recording_id>/ (§6.6)
+    └─► Upload the raw recordings to s3://rldb/raw/<lab>/<vendor_recording_id>/ (§6.6)
     └─► RL2 registers the episodes; they become available through S3MultiDataset
 ```
 
@@ -230,7 +230,7 @@ Each episode is a **Zarr v3 group** (a directory ending in `.zarr`) containing a
 Start from the reference converter, [`egomimic/scripts/convert_template/template_to_zarr.py`](egomimic/scripts/convert_template/template_to_zarr.py). Copy it and replace two functions:
 
 - `find_raw_episodes(raw_root)` — one entry per raw episode in your layout.
-- `load_episode(raw_path)` — return a `RawEpisode`: the image stream, head and hand poses as `(T, 7)` xyz + wxyz quaternion in your SLAM world frame (§7), optional `(T, 63)` keypoints, the camera K, the recording start time in UTC epoch milliseconds (§4), **that episode's** `task_name` / `operator` / `lab` / `scene` / `objects` (§6.3) read from your own capture logs, and the `source_recording_id` of the raw recording it was cut from (§6.6).
+- `load_episode(raw_path)` — return a `RawEpisode`: the image stream, head and hand poses as `(T, 7)` xyz + wxyz quaternion in your SLAM world frame (§7), optional `(T, 63)` keypoints, the camera K, the recording start time in UTC epoch milliseconds (§4), **that episode's** `task_name` / `operator` / `lab` / `scene` / `objects` (§6.3) read from your own capture logs, and the `vendor_recording_id` of the raw recording it was cut from (§6.6).
 
 The rest is handled for you: the `<episode_hash>.zarr` name, the `ZarrWriter` call with the correct `human_*` embodiment and intrinsics, validation of every episode right after it is written (§11.1 — a failing episode is deleted and reported, the batch keeps going), and the MP4 preview (§6.5). Run it on a folder, or call `convert_all(paths, output_dir, workers=N)` from your own batch script:
 
@@ -378,7 +378,7 @@ The root group's `.attrs` dictionary is the **episode metadata**. It is written 
     "lab":               str,   # who the data came from: short lowercase id, e.g. "mecka"
     "scene":             str,   # scene / location label
     "objects":     list[str],   # objects manipulated
-    "source_recording_id": str, # REQUIRED: raw recording this episode was cut from (§6.6)
+    "vendor_recording_id": str, # REQUIRED: raw recording this episode was cut from (§6.6)
     "intrinsics":        dict,  # MANDATORY: {camera_key: 3x4 K matrix} dict (single-camera =
                                 #   one entry, e.g. {"front_1": K}; 3x4 = the 3x3 pinhole K
                                 #   with a zero last column). Projection uses the "front" entry.
@@ -404,7 +404,7 @@ The root group's `.attrs` dictionary is the **episode metadata**. It is written 
 - `total_frames` must equal `len(store["images.front_1"])` and every other non-padded array.
 - `fps` must be the actual capture rate of `images.front_1`, and must be 30 or 60. Do not set it to a target rate if the actual rate differs.
 - `features` must have one entry per array key present in the store.
-- `source_recording_id` is **required**: it is how we find the raw recording again (§6.6), and with `lab` it gives the recording's ID downstream. Pass it as `ZarrWriter.create_and_write(..., source_recording_id=...)`; the reference converter does this from `RawEpisode.source_recording_id`. It must be a single path component (no `/`), with no placeholder or surrounding whitespace.
+- `vendor_recording_id` is **required**: it is how we find the raw recording again (§6.6), and with `lab` it gives the recording's ID downstream. Pass it as `ZarrWriter.create_and_write(..., vendor_recording_id=...)`; the reference converter does this from `RawEpisode.vendor_recording_id`. It must be a single path component (no `/`), with no placeholder or surrounding whitespace.
 - `intrinsics` is **mandatory** and is always a `{camera_key: 3×4 K matrix}` dict in `zarr.attrs` (single-camera = one entry, e.g. `{"front_1": K}`). `ZarrWriter.create_and_write` raises if it is not a non-empty dict.
 - `extrinsics` is **either `None` or a non-empty `dict`** of 4×4 world↔cam transforms (robots key per-arm, e.g. `{"left": T, "right": T}`); egocentric human contributors omit it (`None`). `ZarrWriter.create_and_write` raises if it is anything other than `None` or a non-empty dict.
 
@@ -500,13 +500,13 @@ resolution, different processing) without coming back to you.
   a high-quality setting). Keep the original resolution and frame rate: no downscaling or
   cropping, and encode at most once.
 - **One folder per raw recording session**, at
-  `s3://rldb/raw/<lab>/<source_recording_id>/`. `source_recording_id` is your own stable
+  `s3://rldb/raw/<lab>/<vendor_recording_id>/`. `vendor_recording_id` is your own stable
   ID for the session; keep it the same across re-exports and corrections.
-- **Link each zarr episode to its session** with the `source_recording_id` attribute
+- **Link each zarr episode to its session** with the `vendor_recording_id` attribute
   (§6.3). One session can be trimmed into several zarr episodes (§2.4); each of them
-  carries the same `source_recording_id`. This link is required and validated (§11.1).
+  carries the same `vendor_recording_id`. This link is required and validated (§11.1).
 - **If you use MCAP**, follow SPEC.md exactly (its episode info uses the same
-  `source_recording_id` key) and check every episode with
+  `vendor_recording_id` key) and check every episode with
   `python -m egomimic.rldb.mcap.validate episode_<id>/ [...]`; `scene` / `objects` waived in
   `missing_metadata` fail unless `--allow-missing`, as for Zarr; `task_name`, `operator`
   and `lab` cannot be waived.
@@ -675,7 +675,7 @@ prefixes; never write to or modify another lab's data.
 ```
 s3://rldb/processed_v3/<lab>/<episode_hash>.zarr/      # the episode (§6)
 s3://rldb/processed_v3/<lab>/<episode_hash>.mp4        # its preview (§6.5)
-s3://rldb/raw/<lab>/<source_recording_id>/             # raw recordings (§6.6)
+s3://rldb/raw/<lab>/<vendor_recording_id>/             # raw recordings (§6.6)
 ```
 
 Example:
@@ -727,7 +727,7 @@ python -m egomimic.rldb.zarr.validate /local/out/*.zarr
 
 Pass the `.zarr` directories themselves, not the folder that contains them. It prints `PASS`/`FAIL` per episode with every problem found, and exits nonzero if any episode fails. Add `-v` to also list the checks that passed. It checks:
 
-- metadata (§6.3): `embodiment`, `total_frames`, `fps` (30 or 60), `features`, and the required metadata fields `task_name`/`operator`/`lab`/`scene`/`objects` and `source_recording_id`, with the same rules as `create_and_write`
+- metadata (§6.3): `embodiment`, `total_frames`, `fps` (30 or 60), `features`, and the required metadata fields `task_name`/`operator`/`lab`/`scene`/`objects` and `vendor_recording_id`, with the same rules as `create_and_write`
 - `embodiment` is a valid identifier (§9)
 - the `<episode_hash>.zarr` name decodes to a recording start between 2015 and now (§4); a start time in seconds or nanoseconds instead of milliseconds fails
 - `intrinsics` is a non-empty `{camera_key: 3x4}` dict with a front camera; `extrinsics` is `None` or a dict of 4x4 matrices
@@ -840,7 +840,7 @@ Complete every item before considering an episode ready for upload.
 - [ ] `features` dict in `zarr.attrs` has one entry per array key.
 - [ ] `fps` is 30 or 60.
 - [ ] `task_name`, `operator`, `lab`, `scene` and `objects` are set for every episode (§6.3).
-- [ ] `source_recording_id` names the raw recording each episode was cut from (§6.6).
+- [ ] `vendor_recording_id` names the raw recording each episode was cut from (§6.6).
 - [ ] `intrinsics` is present in `zarr.attrs` as a `{camera_key: 3×4}` dict (single-camera = one entry) — **mandatory**.
 - [ ] `extrinsics` is present in `zarr.attrs` for robot embodiments.
 - [ ] `python -m egomimic.rldb.zarr.validate` passes on every episode (§11.1); `--allow-missing` only for `scene` / `objects` you set to `MissingMetadata()`.
@@ -862,7 +862,7 @@ Complete every item before considering an episode ready for upload.
 - [ ] Annotation text is in English, imperative or present-continuous form.
 
 **Raw data**
-- [ ] The raw recording of every episode is uploaded to `s3://rldb/raw/<lab>/<source_recording_id>/`, video included, at original resolution (§6.6).
+- [ ] The raw recording of every episode is uploaded to `s3://rldb/raw/<lab>/<vendor_recording_id>/`, video included, at original resolution (§6.6).
 - [ ] It contains what [`SPEC.md`](egomimic/rldb/mcap/SPEC.md) lists (calibration, timestamps, IMU, poses, §6.3 metadata); MCAP deliveries pass `python -m egomimic.rldb.mcap.validate`.
 
 **Upload**

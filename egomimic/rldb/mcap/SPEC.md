@@ -73,7 +73,7 @@ placeholders are rejected in every text key.
 | `objects` | `baby_shirt_2t,basket` | Objects involved, comma-separated; every entry a real name. |
 | `missing_metadata` | `scene` | *Optional.* Comma-separated required keys the source data truly does not have; leave those keys out. Only `scene` and `objects` can be listed: `task_name`, `operator` and `lab` are always required. **Only if absolutely necessary**: such episodes are much harder to filter and train on, and fail validation without `--allow-missing`. |
 | `task_description` | `fold the 2T shirt on the blue table` | *Optional.* Full task text. |
-| `source_recording_id` | `acme-rec-0001` | Your own ID for this recording. **Stable across every re-export or correction** (new labels, fixed calibration, re-run poses). Zarr episodes trimmed from it name it in their `source_recording_id` attr. |
+| `vendor_recording_id` | `acme-rec-0001` | Your own ID for this recording. **Stable across every re-export or correction** (new labels, fixed calibration, re-run poses). Zarr episodes trimmed from it name it in their `vendor_recording_id` attr. |
 | `embodiment` | `human_bimanual` | One of `human_{bimanual,left_arm,right_arm}`, `eva_{bimanual,left_arm,right_arm}`. Must match the topics in the file. |
 | `rig_name` | `aria_gen1` | Capture setup. |
 | `device_serial` | `1WM103600M1292` | Physical unit; ties the episode to its calibration. |
@@ -85,8 +85,8 @@ placeholders are rejected in every text key.
 | `hand_joints` | see §6 | *Human only.* Names of the hand joints, in the order `HandKeypoints.positions` lists them. |
 
 **IDs.** Our recording ID is
-`egomimic.rldb.lance.schema.recording_id(lab, source_recording_id)` (UUIDv5 of
-`<lab>/<source_recording_id>`); the validator prints it. Task and annotation IDs are
+`egomimic.rldb.lance.schema.recording_id(lab, vendor_recording_id)` (UUIDv5 of
+`<lab>/<vendor_recording_id>`); the validator prints it. Task and annotation IDs are
 computed downstream from their content, so vendors send none.
 
 **Tasks.** Without `/task` topics, `task_name` / `task_description` / `objects` describe one task
@@ -269,8 +269,8 @@ then decodes all of it and rejects an episode where any message is not exactly o
 
 | Lance | MCAP |
 |---|---|
-| `recordings.recording_id` | `recording_id(lab, source_recording_id)` |
-| `recordings.vendor_recording_id` | `source_recording_id` |
+| `recordings.recording_id` | `recording_id(lab, vendor_recording_id)` |
+| `recordings.vendor_recording_id` | `vendor_recording_id` |
 | `recordings.lab`, `operator`, `embodiment`, `rig_name`, `scene`, `license` | episode info |
 | `recordings.captured_at` | `start_time_unix` |
 | `recordings.num_frames`, `fps` | Decoded steps-clock frames and their timestamps |

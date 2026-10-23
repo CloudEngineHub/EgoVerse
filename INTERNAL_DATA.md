@@ -112,7 +112,7 @@ update_episode(engine, row)
 
 Vendors upload validated zarr episodes and previews to
 `s3://rldb/processed_v3/<lab>/` and raw recordings to
-`s3://rldb/raw/<lab>/<source_recording_id>/` (CONTRIBUTING_DATA.md §10.1). They send no delivery note
+`s3://rldb/raw/<lab>/<vendor_recording_id>/` (CONTRIBUTING_DATA.md §10.1). They send no delivery note
 or manifest. On ingest:
 
 1. Run `python -m egomimic.rldb.zarr.validate` on the episodes. Episodes with
