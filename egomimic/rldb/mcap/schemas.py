@@ -38,6 +38,7 @@ _SCALARS = {
 class Field:
     name: str
     kind: str  # a scalar above, an enum of the same message, or another message here
+    number: int  # wire tag: never changed or reused; a new field takes a new number
     repeated: bool = False
     doc: str = ""
 
@@ -62,38 +63,40 @@ MESSAGES = (
     Message(
         "Vector3",
         "A 3D vector.",
-        (Field("x", "double"), Field("y", "double"), Field("z", "double")),
+        (Field("x", "double", 1), Field("y", "double", 2), Field("z", "double", 3)),
     ),
     Message(
         "Quaternion",
         "A rotation; must be unit length.",
         (
-            Field("x", "double"),
-            Field("y", "double"),
-            Field("z", "double"),
-            Field("w", "double"),
+            Field("x", "double", 1),
+            Field("y", "double", 2),
+            Field("z", "double", 3),
+            Field("w", "double", 4),
         ),
     ),
     Message(
         "Pose",
         "A child frame's pose in its parent (T_parent_child): m and a unit quaternion.",
-        (Field("position", "Vector3"), Field("orientation", "Quaternion")),
+        (Field("position", "Vector3", 1), Field("orientation", "Quaternion", 2)),
     ),
     Message(
         "CameraInfoExtra",
         "Optional per-camera facts foxglove.CameraCalibration has no field for, on the\n"
         "camera's <topic>-info-extra, published once next to <topic>-info.",
         (
-            Field("frame_id", "string", doc="the camera's frame, as in its -info"),
+            Field("frame_id", "string", 1, doc="the camera's frame, as in its -info"),
             Field(
                 "valid_radius",
                 "double",
+                2,
                 doc="px from the principal point where the lens model holds (fisheye); "
                 "0 = the whole image",
             ),
             Field(
                 "upright_rotation_cw_deg",
                 "int32",
+                3,
                 doc="clockwise turn (0, 90, 180, 270) that makes a frame upright, for "
                 "sensors mounted sideways",
             ),
@@ -103,9 +106,11 @@ MESSAGES = (
         "Imu",
         "One raw IMU sample, straight off the device: no gravity removal, no fusion.",
         (
-            Field("frame_id", "string", doc="IMU frame; must be linked in /tf_static"),
-            Field("linear_acceleration", "Vector3", doc="m/s^2, gravity included"),
-            Field("angular_velocity", "Vector3", doc="rad/s"),
+            Field(
+                "frame_id", "string", 1, doc="IMU frame; must be linked in /tf_static"
+            ),
+            Field("linear_acceleration", "Vector3", 2, doc="m/s^2, gravity included"),
+            Field("angular_velocity", "Vector3", 3, doc="rad/s"),
         ),
     ),
     Message(
@@ -113,17 +118,17 @@ MESSAGES = (
         "IMU noise model, as SLAM/VIO tools expect it. Published once. Datasheet values\n"
         "are fine when the device does not calibrate them.",
         (
-            Field("frame_id", "string"),
-            Field("accel_noise_density", "double", doc="m/s^2/sqrt(Hz)"),
-            Field("accel_random_walk", "double", doc="m/s^3/sqrt(Hz)"),
-            Field("gyro_noise_density", "double", doc="rad/s/sqrt(Hz)"),
-            Field("gyro_random_walk", "double", doc="rad/s^2/sqrt(Hz)"),
+            Field("frame_id", "string", 1),
+            Field("accel_noise_density", "double", 2, doc="m/s^2/sqrt(Hz)"),
+            Field("accel_random_walk", "double", 3, doc="m/s^3/sqrt(Hz)"),
+            Field("gyro_noise_density", "double", 4, doc="rad/s/sqrt(Hz)"),
+            Field("gyro_random_walk", "double", 5, doc="rad/s^2/sqrt(Hz)"),
         ),
     ),
     Message(
         "TrackingQuality",
         "State of the vendor's SLAM at this time, one per head pose.",
-        (Field("state", "State"),),
+        (Field("state", "State", 1),),
         enums=(Enum("State", ("UNKNOWN", "OK", "LOST", "RELOCALIZED")),),
     ),
     Message(
@@ -133,26 +138,29 @@ MESSAGES = (
         "valid = false when the hand is not tracked; never write zeros in its place.\n"
         "A device without keypoints leaves positions empty and sets wrist_pose.",
         (
-            Field("frame_id", "string", doc="frame positions and wrist_pose are in"),
+            Field("frame_id", "string", 1, doc="frame positions and wrist_pose are in"),
             Field(
                 "positions",
                 "double",
+                2,
                 repeated=True,
                 doc="(x, y, z) in m per hand-joints entry, flattened; or empty",
             ),
             Field(
                 "confidence",
                 "float",
+                3,
                 doc="whole-hand tracking confidence in [0, 1]",
             ),
-            Field("valid", "bool", doc="hand tracked and its values usable"),
+            Field("valid", "bool", 4, doc="hand tracked and its values usable"),
             Field(
                 "joint_confidence",
                 "float",
+                5,
                 repeated=True,
                 doc="optional: per-joint confidences in [0, 1], one per joint",
             ),
-            Field("wrist_pose", "Pose", doc="optional: T_frame_wrist"),
+            Field("wrist_pose", "Pose", 6, doc="optional: T_frame_wrist"),
         ),
     ),
     Message(
@@ -162,11 +170,11 @@ MESSAGES = (
         "depth * normalize(tan(yaw), tan(pitch), 1). Set valid = false when gaze is not\n"
         "tracked; never write zeros in its place.",
         (
-            Field("frame_id", "string", doc="gaze frame; linked in /tf_static"),
-            Field("yaw", "double", doc="rad, positive = looking left"),
-            Field("pitch", "double", doc="rad, positive = looking up"),
-            Field("depth", "double", doc="m, distance to the gaze point"),
-            Field("valid", "bool", doc="gaze tracked and values usable"),
+            Field("frame_id", "string", 1, doc="gaze frame; linked in /tf_static"),
+            Field("yaw", "double", 2, doc="rad, positive = looking left"),
+            Field("pitch", "double", 3, doc="rad, positive = looking up"),
+            Field("depth", "double", 4, doc="m, distance to the gaze point"),
+            Field("valid", "bool", 5, doc="gaze tracked and values usable"),
         ),
     ),
     Message(
@@ -174,12 +182,12 @@ MESSAGES = (
         "Measured state of one arm. Joint arrays follow joint_names. ee_pose is\n"
         "T_base_ee: the end effector in the arm-base frame (frame_id), row-major 4x4.",
         (
-            Field("frame_id", "string", doc='arm-base frame, e.g. "left_arm_base"'),
-            Field("joint_names", "string", repeated=True),
-            Field("position", "double", repeated=True, doc="rad (or m, prismatic)"),
-            Field("velocity", "double", repeated=True, doc="rad/s (or m/s)"),
-            Field("torque", "double", repeated=True, doc="N*m (or N)"),
-            Field("ee_pose", "double", repeated=True, doc="16 values, row-major"),
+            Field("frame_id", "string", 1, doc='arm-base frame, e.g. "left_arm_base"'),
+            Field("joint_names", "string", 2, repeated=True),
+            Field("position", "double", 3, repeated=True, doc="rad (or m, prismatic)"),
+            Field("velocity", "double", 4, repeated=True, doc="rad/s (or m/s)"),
+            Field("torque", "double", 5, repeated=True, doc="N*m (or N)"),
+            Field("ee_pose", "double", 6, repeated=True, doc="16 values, row-major"),
         ),
     ),
     Message(
@@ -187,26 +195,26 @@ MESSAGES = (
         "Command sent to one arm at this time (the target it was told to reach),\n"
         "same conventions as ArmState.",
         (
-            Field("frame_id", "string", doc="arm-base frame"),
-            Field("joint_names", "string", repeated=True),
-            Field("position", "double", repeated=True, doc="rad (or m, prismatic)"),
-            Field("ee_pose", "double", repeated=True, doc="16 values, row-major"),
+            Field("frame_id", "string", 1, doc="arm-base frame"),
+            Field("joint_names", "string", 2, repeated=True),
+            Field("position", "double", 3, repeated=True, doc="rad (or m, prismatic)"),
+            Field("ee_pose", "double", 4, repeated=True, doc="16 values, row-major"),
         ),
     ),
     Message(
         "GripperState",
         "Gripper opening, measured (ee-state) or commanded (ee-action).",
-        (Field("position", "double", doc="0 = closed, 1 = fully open"),),
+        (Field("position", "double", 1, doc="0 = closed, 1 = fully open"),),
     ),
     Message(
         "Task",
         "One task performed in the recording; a recording may hold several\n"
         "(e.g. iron, then fold, then pack). Starts at the message's log time.",
         (
-            Field("name", "string", doc='task slug, e.g. "fold_clothes"'),
-            Field("description", "string", doc="free text for this instance"),
-            Field("objects", "string", repeated=True, doc="object slugs involved"),
-            Field("end_time_unix_ns", "int64", doc="task end, absolute Unix ns"),
+            Field("name", "string", 1, doc='task slug, e.g. "fold_clothes"'),
+            Field("description", "string", 2, doc="free text for this instance"),
+            Field("objects", "string", 3, repeated=True, doc="object slugs involved"),
+            Field("end_time_unix_ns", "int64", 4, doc="task end, absolute Unix ns"),
         ),
     ),
     Message(
@@ -215,16 +223,18 @@ MESSAGES = (
         "inside one /task (or the recording, without /task). Field `data` matches\n"
         "ABC-130k's /subtask-annotation.",
         (
-            Field("data", "string", doc="English text"),
+            Field("data", "string", 1, doc="English text"),
             Field(
                 "end_time_unix_ns",
                 "int64",
+                2,
                 doc="end, absolute Unix ns; 0 = point event (one frame wide)",
             ),
-            Field("annotation_type", "string", doc='default "language"'),
+            Field("annotation_type", "string", 3, doc='default "language"'),
             Field(
                 "annotation_source",
                 "string",
+                4,
                 doc="who wrote it; default the episode's lab",
             ),
         ),
@@ -243,9 +253,9 @@ def file_descriptor_proto() -> descriptor_pb2.FileDescriptorProto:
             for number, value in enumerate(e.values):
                 ep.value.add(name=value, number=number)
         enum_names = {e.name for e in m.enums}
-        for number, f in enumerate(m.fields, start=1):
+        for f in m.fields:
             label = _F.LABEL_REPEATED if f.repeated else _F.LABEL_OPTIONAL
-            fd = mp.field.add(name=f.name, number=number, label=label)
+            fd = mp.field.add(name=f.name, number=f.number, label=label)
             if f.kind in _SCALARS:
                 fd.type = _SCALARS[f.kind]
             elif f.kind in enum_names:
@@ -302,10 +312,10 @@ def render_proto() -> str:
             lines.append(f"  enum {e.name} {{")
             lines += [f"    {v} = {n};" for n, v in enumerate(e.values)]
             lines.append("  }")
-        for number, f in enumerate(m.fields, start=1):
+        for f in m.fields:
             prefix = "repeated " if f.repeated else ""
             comment = f"  // {f.doc}" if f.doc else ""
-            lines.append(f"  {prefix}{f.kind} {f.name} = {number};{comment}")
+            lines.append(f"  {prefix}{f.kind} {f.name} = {f.number};{comment}")
         lines.append("}")
     return "\n".join(lines) + "\n"
 

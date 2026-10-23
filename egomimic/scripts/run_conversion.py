@@ -15,6 +15,7 @@ from cloudpathlib import S3Path
 from ray.exceptions import OutOfMemoryError, RayTaskError, WorkerCrashedError
 
 from egomimic.rldb.zarr.required_metadata import (
+    WAIVABLE_FIELDS,
     check_writer_metadata,
     required_metadata_from_args,
 )
@@ -95,7 +96,7 @@ def infer_arm_from_row(row: TableRow) -> str:
 def infer_task_name_from_row(row: TableRow) -> str:
     """
     Infer task name from SQL row.task (e.g., 'fold_clothes').
-    Falls back to '' (recorded as missing by infer_required_metadata_from_row).
+    Falls back to '', which required_metadata_row_error rejects.
     """
     return (row.task or "").strip()
 
@@ -126,9 +127,10 @@ def parse_db_objects(raw) -> list[str]:
 def infer_required_metadata_from_row(row: TableRow) -> dict:
     """
     operator/lab/scene/objects for the converter, plus a missing_metadata list
-    naming every required metadata field the legacy row left empty (including
-    task), so it is written as an explicit MissingMetadata() instead of a
-    placeholder. Plain data so it travels through Ray.
+    naming the waivable fields (scene, objects) the row left empty, so they are
+    written as an explicit MissingMetadata(). An empty task, operator or lab is
+    left as None and rejected by required_metadata_row_error. Plain data so it
+    travels through Ray.
     """
     values = {
         "task_name": infer_task_name_from_row(row),
@@ -137,7 +139,7 @@ def infer_required_metadata_from_row(row: TableRow) -> dict:
         "scene": (row.scene or "").strip(),
         "objects": parse_db_objects(row.objects),
     }
-    missing = [field for field, value in values.items() if not value]
+    missing = [field for field in WAIVABLE_FIELDS if not values[field]]
     del values["task_name"]
     return {**{k: v or None for k, v in values.items()}, "missing_metadata": missing}
 

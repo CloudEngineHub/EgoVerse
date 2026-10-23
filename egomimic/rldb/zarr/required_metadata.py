@@ -4,8 +4,8 @@ Metadata required in every contributed zarr episode.
 See CONTRIBUTING_DATA.md §6.3. ZarrWriter takes each REQUIRED_METADATA_FIELDS
 entry as a keyword argument with no default and checks it in write(); the
 episode validator (egomimic.rldb.zarr.validate) applies the same rules to a
-finished store. The only way to leave a field out is an explicit
-MissingMetadata().
+finished store. task_name, operator and lab are always required; scene and
+objects can be left out only with an explicit MissingMetadata().
 """
 
 import argparse
@@ -14,6 +14,7 @@ from collections.abc import Iterable
 from typing import Any
 
 REQUIRED_METADATA_FIELDS = ("task_name", "operator", "lab", "scene", "objects")
+WAIVABLE_FIELDS = ("scene", "objects")
 
 # Values that mean "I didn't fill this in". Rejected so a placeholder can't
 # stand in for a real value (compared case-insensitively after strip).
@@ -30,8 +31,13 @@ _PLACEHOLDER_VALUES = frozenset(
         "debug",
         "test",
         "placeholder",
+        "template",
+        "missing",
+        "nil",
+        "nan",
         "-",
         "?",
+        "...",
     }
 )
 
@@ -43,9 +49,10 @@ def is_placeholder(value: str) -> bool:
 
 
 class MissingMetadata:
-    """Explicit opt-out for a required metadata field the source data does not have.
+    """Explicit opt-out for ``scene`` or ``objects`` when the source data has no value.
 
-    Pass it in place of the value, e.g. ``scene=MissingMetadata()``. ``None``,
+    Pass it in place of the value, e.g. ``scene=MissingMetadata()``. task_name,
+    operator and lab cannot be waived. ``None``,
     ``""`` and placeholders like ``"unknown"`` are rejected, so a field can only
     be left out on purpose. The field is stored as ``null`` in zarr.attrs.
 
@@ -72,35 +79,36 @@ def required_metadata_error(field: str, value: Any) -> str | None:
     apply the same rules. ``value`` is a concrete value, not MissingMetadata.
     """
     hint = "See CONTRIBUTING_DATA.md §6.3."
+    if field in WAIVABLE_FIELDS:
+        waive = f"If the source data has no {field}, pass {field}=MissingMetadata(). "
+    else:
+        waive = f"{field} is always required and cannot be waived. "
     if field == "objects" and isinstance(value, (list, tuple, str)):
         if isinstance(value, str) and value != value.strip():
             return f"objects={value!r} has leading/trailing whitespace. {hint}"
         names = objects_list(value)
         if not names or names == [""]:
-            return (
-                f"objects must name at least one object. If the source data has "
-                f"no objects, pass objects=MissingMetadata(). {hint}"
-            )
+            return f"objects must name at least one object. {waive}{hint}"
         for obj in names:
             if not isinstance(obj, str) or is_placeholder(obj):
                 return f"objects entries must be real names, got {obj!r}. {hint}"
             if obj != obj.strip():
                 return f"objects entry {obj!r} has leading/trailing whitespace. {hint}"
+            if not obj.isprintable():
+                return f"objects entry {obj!r} has non-printable characters. {hint}"
         return None
     if not isinstance(value, str):
         extra = " or list[str]" if field == "objects" else ""
         return (
             f"{field} must be a str{extra}, got {type(value).__name__} ({value!r}). "
-            f"If the source data has no {field}, pass "
-            f"{field}=MissingMetadata(). {hint}"
+            f"{waive}{hint}"
         )
     if is_placeholder(value):
-        return (
-            f"{field}={value!r} is a placeholder, not a value. If the source data "
-            f"has no {field}, pass {field}=MissingMetadata(). {hint}"
-        )
+        return f"{field}={value!r} is a placeholder, not a value. {waive}{hint}"
     if value != value.strip():
         return f"{field}={value!r} has leading/trailing whitespace. {hint}"
+    if not value.isprintable():
+        return f"{field}={value!r} has non-printable characters. {hint}"
     if field == "lab" and not _LAB_RE.fullmatch(value):
         return (
             f"lab={value!r} must be a short, stable, lowercase identifier "
@@ -116,13 +124,19 @@ def check_stored_metadata(
 
     Shared by the zarr and MCAP validators. An absent key is always an error; a
     ``None`` value is an explicit waiver (MissingMetadata), an error unless
-    ``allow_missing``. Concrete values go through ``required_metadata_error``.
+    ``allow_missing`` and the field is in WAIVABLE_FIELDS. Concrete values go
+    through ``required_metadata_error``.
     """
     errors, warnings, passed = [], [], []
     for name in REQUIRED_METADATA_FIELDS:
         if name not in meta:
             errors.append(
                 f"Missing metadata field: {name}. See CONTRIBUTING_DATA.md §6.3."
+            )
+        elif meta[name] is None and name not in WAIVABLE_FIELDS:
+            errors.append(
+                f"{name} is null: it is always required and cannot be waived. "
+                "See CONTRIBUTING_DATA.md §6.3."
             )
         elif meta[name] is None:
             msg = f"{name}: marked as not available (MissingMetadata)"
@@ -144,8 +158,8 @@ def add_required_metadata_args(parser: argparse.ArgumentParser) -> None:
     """Add --operator/--lab/--scene/--objects/--missing-metadata to a converter CLI.
 
     The converter supplies its own --task-name. None of these have usable
-    defaults: an omitted field fails in ZarrWriter.write unless it is waived
-    with ``--missing-metadata FIELD``.
+    defaults: an omitted field fails in ZarrWriter.write unless it is scene or
+    objects waived with ``--missing-metadata FIELD``.
     """
     group = parser.add_argument_group(
         "required episode metadata (CONTRIBUTING_DATA.md §6.3)"
@@ -158,9 +172,10 @@ def add_required_metadata_args(parser: argparse.ArgumentParser) -> None:
         "--missing-metadata",
         action="append",
         default=[],
-        choices=REQUIRED_METADATA_FIELDS,
+        choices=WAIVABLE_FIELDS,
         metavar="FIELD",
-        help="Explicitly mark FIELD as not available in the source data. "
+        help="Explicitly mark FIELD (scene or objects) as not available in the "
+        "source data. "
         "Repeatable. Only use this if absolutely necessary: provide the value "
         "whenever the source data has it.",
     )
@@ -185,14 +200,22 @@ def _build_required_metadata(
 
 
 def waiver_errors(values: dict[str, Any], missing: Iterable[str]) -> list[str]:
-    """Unknown waived field names, and fields with both a value and a waiver."""
+    """Waived fields that are unknown or not waivable, and fields with both a
+    value and a waiver."""
     missing = set(missing)
     errors = []
     unknown = missing - set(REQUIRED_METADATA_FIELDS)
     if unknown:
         errors.append(
             f"missing_metadata names unknown fields {sorted(unknown)}; "
-            f"expected a subset of {list(REQUIRED_METADATA_FIELDS)}"
+            f"expected a subset of {list(WAIVABLE_FIELDS)}"
+        )
+    if unwaivable := sorted(
+        (missing & set(REQUIRED_METADATA_FIELDS)) - set(WAIVABLE_FIELDS)
+    ):
+        errors.append(
+            f"{unwaivable} cannot be waived; only {list(WAIVABLE_FIELDS)} can be "
+            "marked missing. See CONTRIBUTING_DATA.md §6.3."
         )
     for field in REQUIRED_METADATA_FIELDS:
         value = values.get(field)
@@ -214,7 +237,12 @@ def check_writer_metadata(kwargs: dict[str, Any]) -> None:
     for field in REQUIRED_METADATA_FIELDS:
         value = kwargs.get(field)
         if isinstance(value, MissingMetadata):
-            continue
+            if field in WAIVABLE_FIELDS:
+                continue
+            raise ValueError(
+                f"{field}=MissingMetadata(): {field} is always required and "
+                "cannot be waived. See CONTRIBUTING_DATA.md §6.3."
+            )
         if (err := required_metadata_error(field, value)) is not None:
             raise ValueError(err)
 

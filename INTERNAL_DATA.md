@@ -116,8 +116,9 @@ Vendors upload validated zarr episodes and previews to
 or manifest. On ingest:
 
 1. Run `python -m egomimic.rldb.zarr.validate` on the episodes. Episodes with
-   required fields stored as `null` (waived with `MissingMetadata()`) pass with
-   `--allow-missing` and are accepted.
+   `scene` or `objects` stored as `null` (waived with `MissingMetadata()`) pass
+   with `--allow-missing` and are accepted. Episodes without a `schema_version`
+   (written before the required metadata) only get warnings for metadata.
 2. Map each vendor-proposed `task_name` to an existing task (§2.1), or add a new
    task name if none fits.
 3. Insert one DB row per episode (§2.2), with `lab`, `operator`, `scene`,
@@ -134,7 +135,8 @@ or manifest. On ingest:
 `aria_to_zarr.py` and `eva_to_zarr.py` take the required metadata on the command
 line through `egomimic.rldb.zarr.required_metadata.add_required_metadata_args`:
 `--task-name`, `--operator`, `--lab`, `--scene`, `--objects`, and a repeatable
-`--missing-metadata FIELD` to write a field as `MissingMetadata()`. None of them
+`--missing-metadata FIELD` to write `scene` or `objects` as `MissingMetadata()`
+(`task_name`, `operator` and `lab` cannot be waived). None of them
 has a usable default: a missing flag without a waiver fails when the episode is
 written. `--save-mp4` writes the CONTRIBUTING_DATA.md §6.5 preview next to the `.zarr`.
 
@@ -150,7 +152,8 @@ The required metadata comes from the row:
 - `task` → `task_name`; `operator`, `lab`, `scene` as stored (stripped).
 - `objects` is parsed from the Postgres array literal or comma-separated text;
   `None` / `NULL` entries are dropped.
-- An empty field is written as `MissingMetadata()`.
+- An empty `scene` or `objects` is written as `MissingMetadata()`. An empty
+  `task`, `operator` or `lab` is a metadata error (below).
 - A row whose metadata the writer would reject (a placeholder such as
   `"unknown"` or `"debug"`, a non-identifier `lab`, ...) is skipped before
   extraction, and `zarr_processing_error` is set to `Metadata: <reason>`. Fix
@@ -159,9 +162,10 @@ The required metadata comes from the row:
 
 ### 4.3 Disabled converters
 
-`egomimic/scripts/mecka_process/mecka_to_zarr.py` (`MeckaDatasetConverter`) and
-`external/scale/scripts/sfs_to_egoverse_zarr.py` (`convert_task_to_zarr`) raise
-`NotImplementedError`. They predate the required metadata and mandatory
+`egomimic/scripts/mecka_process/mecka_to_zarr.py` (`MeckaDatasetConverter` and
+its CLI), `external/scale/scripts/sfs_to_egoverse_zarr.py`
+(`convert_task_to_zarr`) and `external/scale/scripts/sfs_zarr_pipeline.py` raise
+`NotImplementedError`. Tracking: #738 (mecka), #739 (Scale). They predate the required metadata and mandatory
 intrinsics. Re-enabling either one means passing `intrinsics={"front_1": 3x4 K}`,
 `task_name`, `operator`, `lab`, `scene` and `objects` to
 `ZarrWriter.create_and_write` as real arguments (`metadata_override` may not

@@ -943,6 +943,7 @@ def main() -> None:
     local data directory. Creates MeckaDatasetConverter and runs extract_episode.
     Removes existing output directory before conversion. Exits with traceback on error.
     """
+    raise NotImplementedError(_CONVERTER_DISABLED)
     parser = argparse.ArgumentParser(description="Convert Mecka RL2 to LeRobot format")
     parser.add_argument(
         "--episode-json", required=True, help="Path to episode JSON file"

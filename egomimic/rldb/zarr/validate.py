@@ -5,8 +5,10 @@ Run on every episode before uploading (vendors) and on ingest (RL2):
 
     python -m egomimic.rldb.zarr.validate ep1.zarr ep2.zarr ...
 
-Exits nonzero if any episode has errors. Required metadata fields written as
+Exits nonzero if any episode has errors. scene or objects written as
 MissingMetadata() (stored as null) are errors unless --allow-missing is passed.
+Episodes without a schema_version predate the required metadata rules: their
+metadata problems are reported as warnings.
 """
 
 import argparse
@@ -20,6 +22,8 @@ import simplejpeg
 import zarr
 
 from egomimic.rldb.zarr.episode_rules import (
+    QUAT_UNIT_TOL,
+    SCHEMA_VERSION,
     arm_sides,
     camera_errors,
     embodiment_error,
@@ -111,6 +115,22 @@ def _check_attrs(meta: dict, report: ValidationReport, allow_missing: bool) -> N
             report.errors.append(err)
     report.errors += camera_errors(meta.get("intrinsics"), meta.get("extrinsics"))
     errors, warnings, passed = check_stored_metadata(meta, allow_missing=allow_missing)
+    version = meta.get("schema_version")
+    if version is None:
+        warnings = [
+            f"legacy episode (no schema_version): {e}" for e in errors + warnings
+        ]
+        errors = []
+        report.warnings.append(
+            "legacy episode written before schema_version "
+            f"{SCHEMA_VERSION}; required metadata checked as warnings only"
+        )
+    elif type(version) is not int or not 1 <= version <= SCHEMA_VERSION:
+        report.errors.append(
+            f"schema_version must be an int in 1..{SCHEMA_VERSION}, got {version!r}"
+        )
+    else:
+        report.successes.append(f"schema_version={version}")
     report.errors += errors
     report.warnings += warnings
     report.successes += [f"{name}={meta[name]!r}" for name in passed]
@@ -150,7 +170,7 @@ def _check_arrays(
             errors.append(f"{key}: contains NaN or inf")
             continue
         norms = np.linalg.norm(arr[:, 3:7], axis=1)
-        bad = np.where(np.abs(norms - 1.0) > 1e-4)[0]
+        bad = np.where(np.abs(norms - 1.0) > QUAT_UNIT_TOL)[0]
         if len(bad):
             errors.append(
                 f"{key}: {len(bad)} frames with non-unit quaternions "
@@ -233,7 +253,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--allow-missing",
         action="store_true",
-        help="Accept required metadata fields written as MissingMetadata (warn instead of fail)",
+        help="Accept scene/objects written as MissingMetadata (warn instead of fail)",
     )
     parser.add_argument("-v", "--verbose", action="store_true", help="Print passes")
     args = parser.parse_args(argv)

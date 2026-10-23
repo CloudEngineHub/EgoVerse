@@ -9,6 +9,7 @@ import zarr
 from fixtures.synthetic_episodes import write_episode
 
 from egomimic.rldb.zarr import validate
+from egomimic.rldb.zarr.episode_rules import SCHEMA_VERSION
 from egomimic.rldb.zarr.required_metadata import (
     MissingMetadata,
     add_required_metadata_args,
@@ -152,9 +153,22 @@ def test_values_land_in_attrs(tmp_path):
 
 
 def test_missing_metadata_is_stored_as_null(tmp_path):
-    attrs = _attrs(_write(tmp_path / "ep.zarr", operator=MissingMetadata()))
-    assert attrs["operator"] is None
+    attrs = _attrs(_write(tmp_path / "ep.zarr", scene=MissingMetadata()))
+    assert attrs["scene"] is None
     assert "missing_metadata" not in attrs
+
+
+@pytest.mark.parametrize("field", ["task_name", "operator", "lab"])
+def test_core_fields_cannot_be_waived(tmp_path, field):
+    with pytest.raises(ValueError, match="cannot be waived"):
+        _write(tmp_path / "ep.zarr", **{field: MissingMetadata()})
+    assert not (tmp_path / "ep.zarr").exists()
+    with pytest.raises(ValueError, match="cannot be waived"):
+        required_metadata_from_args(argparse.Namespace(missing_metadata=[field]))
+
+
+def test_schema_version_is_stamped(tmp_path):
+    assert _attrs(_write(tmp_path / "ep.zarr"))["schema_version"] == SCHEMA_VERSION
 
 
 @pytest.mark.parametrize("key", ["operator", "intrinsics", "embodiment", "features"])
@@ -206,7 +220,7 @@ def test_rewrite_does_not_keep_stale_features(tmp_path):
 def test_waiver_rejects_value_and_unknown_fields():
     with pytest.raises(ValueError, match="both"):
         required_metadata_from_args(
-            argparse.Namespace(operator="op", missing_metadata=["operator"])
+            argparse.Namespace(scene="kitchen", missing_metadata=["scene"])
         )
     with pytest.raises(ValueError, match="unknown fields"):
         required_metadata_from_args(argparse.Namespace(missing_metadata=["opertor"]))
@@ -250,24 +264,58 @@ def test_validator_passes_fixture_episode(tmp_path):
 def test_validator_flags_waived_and_absent_fields(tmp_path):
     ep = write_episode(tmp_path, "aria", T=16, H=32, W=32)
     group = zarr.open_group(str(ep), mode="r+")
-    group.attrs["operator"] = None
+    group.attrs["objects"] = None
     del group.attrs["scene"]
 
     strict = validate.validate_episode(ep)
-    assert any("operator" in e for e in strict.errors)
+    assert any("objects" in e for e in strict.errors)
     assert any("scene" in e for e in strict.errors)
 
     lenient = validate.validate_episode(ep, allow_missing=True)
-    assert any("operator" in w for w in lenient.warnings)
-    assert not any("operator" in e for e in lenient.errors)
+    assert any("objects" in w for w in lenient.warnings)
+    assert not any("objects" in e for e in lenient.errors)
     assert any("scene" in e for e in lenient.errors)  # absent != waived
     assert validate.main([str(ep), "--allow-missing"]) == 1
+
+
+@pytest.mark.parametrize("field", ["task_name", "operator", "lab"])
+def test_validator_rejects_null_core_field_even_with_allow_missing(tmp_path, field):
+    ep = write_episode(tmp_path, "aria", T=16, H=32, W=32)
+    zarr.open_group(str(ep), mode="r+").attrs[field] = None
+    report = validate.validate_episode(ep, allow_missing=True)
+    assert any(field in e and "cannot be waived" in e for e in report.errors)
+
+
+def test_legacy_episode_metadata_is_only_warned(tmp_path):
+    ep = write_episode(tmp_path, "aria", T=16, H=32, W=32)
+    group = zarr.open_group(str(ep), mode="r+")
+    attrs = dict(group.attrs)
+    for key in ("schema_version", "operator", "lab", "scene"):
+        del attrs[key]
+    attrs.update(task_name="debug", objects=[])
+    group.attrs.clear()
+    group.attrs.update(attrs)
+    report = validate.validate_episode(ep)
+    assert report.ok, report.errors
+    assert any("legacy episode" in w for w in report.warnings)
+    assert any("operator" in w for w in report.warnings)
+
+    group["left.obs_ee_pose"][0] = np.full(7, np.nan)  # arrays are still checked
+    assert any("NaN" in e for e in validate.validate_episode(ep).errors)
+
+
+@pytest.mark.parametrize("version", [0, SCHEMA_VERSION + 1, "1"])
+def test_validator_rejects_unknown_schema_version(tmp_path, version):
+    ep = write_episode(tmp_path, "aria", T=16, H=32, W=32)
+    zarr.open_group(str(ep), mode="r+").attrs["schema_version"] = version
+    report = validate.validate_episode(ep)
+    assert any("schema_version" in e for e in report.errors)
 
 
 def test_validator_accepts_waiver_with_allow_missing(tmp_path):
     ep = write_episode(tmp_path, "aria", T=16, H=32, W=32)
     group = zarr.open_group(str(ep), mode="r+")
-    group.attrs["operator"] = None
+    group.attrs["scene"] = None
     assert validate.main([str(ep)]) == 1
     assert validate.main([str(ep), "--allow-missing"]) == 0
 
@@ -276,6 +324,16 @@ def test_validator_accepts_waiver_with_allow_missing(tmp_path):
 def test_surrounding_whitespace_is_rejected(tmp_path, field):
     with pytest.raises(ValueError, match="whitespace"):
         _write(tmp_path / "ep.zarr", **{field: f" {GOOD[field]}\n"})
+
+
+@pytest.mark.parametrize(
+    "value", ["template", "Missing", "NaN", "...", "op\u200b7", "a\nb"]
+)
+def test_placeholders_and_nonprintable_values_are_rejected(tmp_path, value):
+    with pytest.raises(ValueError, match="placeholder|non-printable"):
+        _write(tmp_path / "ep.zarr", operator=value)
+    with pytest.raises(ValueError, match="objects"):
+        _write(tmp_path / "ep.zarr", objects=["shirt", value])
 
 
 def test_objects_string_is_split_and_stored_as_list(tmp_path):
@@ -296,6 +354,16 @@ def _corrupt(ep, **attrs):
     [
         ({"total_frames": None}, "total_frames"),
         ({"intrinsics": {"front_1": [[1, 2], [3]]}}, "must be a 3x4 K matrix"),
+        (
+            {
+                "intrinsics": {
+                    "front_1": [[float("nan"), 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]
+                }
+            },
+            "NaN or inf",
+        ),
+        ({"intrinsics": {"front_1": [[0] * 4] * 3}}, "positive focal lengths"),
+        ({"extrinsics": {"left": [[float("inf")] * 4] * 4}}, "NaN or inf"),
         ({"features": {"images.front_1": "jpeg"}}, "could not finish"),
     ],
 )

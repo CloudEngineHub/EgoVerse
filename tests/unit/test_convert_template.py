@@ -1,9 +1,32 @@
 """The reference converter vendors copy must keep producing valid episodes."""
 
 import numpy as np
+import pytest
 import zarr
 
 from egomimic.scripts.convert_template import template_to_zarr as tmpl
+
+
+@pytest.fixture(autouse=True)
+def _demo_lab(monkeypatch):
+    """The shipped lab="template" is rejected on purpose; tests stand in a lab."""
+    shipped = tmpl.load_episode
+
+    def load(raw_path):
+        ep = shipped(raw_path)
+        ep.metadata["lab"] = "demo_lab"
+        return ep
+
+    monkeypatch.setattr(tmpl, "load_episode", load)
+    return shipped
+
+
+def test_shipped_template_metadata_is_rejected(tmp_path, monkeypatch, _demo_lab):
+    monkeypatch.setattr(tmpl, "load_episode", _demo_lab)
+    raw = _raw_paths(tmp_path, 1)
+    written, failed = tmpl.convert_all(raw, tmp_path / "out", save_mp4=False)
+    assert not written
+    assert "lab='template' is a placeholder" in failed[raw[0]]
 
 
 def _raw_paths(tmp_path, n):
@@ -24,7 +47,7 @@ def test_template_converts_and_validates(tmp_path):
         assert len(path.stem.split("-")) == 7
         attrs = zarr.open_group(str(path), mode="r").attrs
         assert attrs["embodiment"] == "human_bimanual"
-        assert attrs["lab"] == "template"
+        assert attrs["lab"] == "demo_lab"
 
 
 def test_template_cli_and_workers(tmp_path):
@@ -74,3 +97,40 @@ def test_waived_field_needs_allow_missing(tmp_path, monkeypatch):
     )
     assert not failed
     assert zarr.open_group(str(written[0]), mode="r").attrs["scene"] is None
+
+
+def test_operator_cannot_be_waived(tmp_path, monkeypatch):
+    good_load = tmpl.load_episode
+
+    def waived_load(raw_path):
+        ep = good_load(raw_path)
+        ep.metadata["operator"] = tmpl.MissingMetadata()
+        return ep
+
+    monkeypatch.setattr(tmpl, "load_episode", waived_load)
+    raw = _raw_paths(tmp_path, 1)
+    written, failed = tmpl.convert_all(
+        raw, tmp_path / "out", save_mp4=False, allow_missing=True
+    )
+    assert not written
+    assert "cannot be waived" in failed[raw[0]]
+
+
+def test_whole_episode_annotation_covers_every_frame(tmp_path):
+    written, _ = tmpl.convert_all(
+        _raw_paths(tmp_path, 1), tmp_path / "out", save_mp4=False
+    )
+    attrs = zarr.open_group(str(written[0]), mode="r").attrs
+    ep = tmpl.load_episode(tmp_path / "raw" / "session_0")
+    assert ep.annotations[0][1:] == (0, attrs["total_frames"])
+
+
+def test_failed_preview_keeps_the_episode(tmp_path, monkeypatch):
+    def no_ffmpeg(*args, **kwargs):
+        raise RuntimeError("ffmpeg not found")
+
+    monkeypatch.setattr(tmpl, "save_preview_mp4", no_ffmpeg)
+    raw = _raw_paths(tmp_path, 1)
+    written, failed = tmpl.convert_all(raw, tmp_path / "out")
+    assert not failed
+    assert [p.name for p in (tmp_path / "out").iterdir()] == [written[0].name]

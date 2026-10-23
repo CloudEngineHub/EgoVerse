@@ -18,7 +18,8 @@ deliver MCAP follows it exactly: one raw, self-contained MCAP recording per epis
 
 The machine-readable version of this document is [`spec.py`](spec.py); the message
 definitions are [`proto/egoverse.proto`](proto/egoverse.proto) (generated from
-[`schemas.py`](schemas.py)). The three change together.
+[`schemas.py`](schemas.py)). The three change together. Proto field numbers are never
+changed or reused; a new field gets a new number.
 
 Spec 0.1 covers **human (egocentric) recordings** and **Eva robot recordings with
 grippers**. Dexterous hands, tactile, humanoid / auxiliary joints (e.g. Sharpa) are not
@@ -70,7 +71,7 @@ placeholders are rejected in every text key.
 | `lab` | `rl2` | Who the data came from: short, stable, lowercase (`a-z`, `0-9`, `_`, `-`), e.g. `rl2`, `mecka`. Never changes once chosen. |
 | `scene` | `kitchen_a` | Where it was recorded. |
 | `objects` | `baby_shirt_2t,basket` | Objects involved, comma-separated; every entry a real name. |
-| `missing_metadata` | `scene` | *Optional.* Comma-separated required keys the source data truly does not have; leave those keys out. **Only if absolutely necessary**: such episodes are much harder to filter and train on, and fail validation without `--allow-missing`. |
+| `missing_metadata` | `scene` | *Optional.* Comma-separated required keys the source data truly does not have; leave those keys out. Only `scene` and `objects` can be listed: `task_name`, `operator` and `lab` are always required. **Only if absolutely necessary**: such episodes are much harder to filter and train on, and fail validation without `--allow-missing`. |
 | `task_description` | `fold the 2T shirt on the blue table` | *Optional.* Full task text. |
 | `source_recording_id` | `acme-rec-0001` | Your own ID for this recording. **Stable across every re-export or correction** (new labels, fixed calibration, re-run poses). Zarr episodes trimmed from it name it in their `source_recording_id` attr. |
 | `embodiment` | `human_bimanual` | One of `human_{bimanual,left_arm,right_arm}`, `eva_{bimanual,left_arm,right_arm}`. Must match the topics in the file. |
@@ -206,6 +207,8 @@ ring_dip,pinky_mcp,pinky_pip,pinky_dip,palm_center
 - **Video.** H.264 or H.265, Annex B byte stream, `CompressedVideo.format` `h264` /
   `h265`. **Each message is exactly one frame**, stamped with that frame's capture time;
   the first message is a keyframe and carries SPS/PPS (repeat them at every keyframe).
+  **No B-frames**, so messages decode one-to-one into frames in timestamp order (as in
+  `foxglove.CompressedVideo`); with x264 pass `-bf 0`, with x265 `bframes=0`.
   Original resolution, frame rate and orientation: no resizing, cropping, undistorting
   or rotating. Send the video as the device stores it, or lightly compressed (H.264 /
   H.265 at a high-quality setting), encoded at most once.
@@ -247,8 +250,8 @@ problem fails the episode.
 
 | Group | Checks |
 |---|---|
-| everything there | Chunk CRCs valid; required topics present with the exact type and encoding, one channel each; once-topics published once; required fields non-empty on every message; exactly one `session-metadata` record; every episode-info key known and present, values not placeholders, the required metadata real values (waivers in `missing_metadata` fail unless `--allow-missing`; `lab` cannot be waived), integers / enums valid; `embodiment` matches the topics; `annotation.mcap` holds only label topics. |
-| video usable | Codec exactly `h264` / `h265`, the same on every message; every message holds a coded picture; first message a keyframe; one frame per message; frames decode without bitstream errors; size matches the calibration; ≥ 30 fps. |
+| everything there | Chunk CRCs valid; required topics present with the exact type and encoding, one channel each; once-topics published once; required fields non-empty on every message; exactly one `session-metadata` record; every episode-info key known and present, values not placeholders, the required metadata real values (waivers in `missing_metadata` fail unless `--allow-missing`; only `scene` and `objects` can be waived), integers / enums valid; `embodiment` matches the topics; `annotation.mcap` holds only label topics. |
+| video usable | Codec exactly `h264` / `h265`, the same on every message; every message holds a coded picture; first message a keyframe; no B-frames; one frame per message; frames decode without bitstream errors; size matches the calibration; ≥ 30 fps. |
 | clocks | Unix ns (after 2015); never decreasing; no gap over 0.5 s; streams cover the recording to within 1 s; start / end times match the data to within 1 s; head pose and quality ≥ 30 Hz. |
 | calibration | Every camera has a valid `-info` with a known lens model and its coefficient count; `-info-extra` values valid; a camera's video and calibration name the same frame; every named frame reaches `world`; a head-worn rig's main camera has a `/tf_static` path to `head`; `/tf_static` rotations unit and translations finite. |
 | imu | ≥ 200 Hz; mean \|accel\| in the stillest 1 s within 0.5 m/s² of 9.81 (gravity not removed); noise values > 0. |

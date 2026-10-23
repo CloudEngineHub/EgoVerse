@@ -33,19 +33,19 @@ VIDEO_FPS = 30
 
 
 @lru_cache(maxsize=None)
-def h264_packets(n_frames: int) -> tuple[bytes, ...]:
-    """Annex B H.264, one frame per packet, keyframe every 2 frames, SPS/PPS repeated."""
+def h264_packets(n_frames: int, b_frames: bool = False) -> tuple[bytes, ...]:
+    """Annex B H.264, one frame per packet, keyframe every 2 frames, SPS/PPS repeated.
+    With b_frames, x264's defaults instead (B-frames, keyframe every 30 frames)."""
     import av
 
     enc = av.CodecContext.create("libx264", "w")
     enc.width, enc.height, enc.pix_fmt = WIDTH, HEIGHT, "yuv420p"
     enc.time_base = Fraction(1, VIDEO_FPS)
-    enc.options = {
-        "bframes": "0",
-        "g": "2",
-        "repeat-headers": "1",
-        "tune": "zerolatency",
-    }
+    enc.options = (
+        {"g": "30", "repeat-headers": "1"}
+        if b_frames
+        else {"bf": "0", "g": "2", "repeat-headers": "1", "tune": "zerolatency"}
+    )
     packets = []
     for i in range(n_frames):
         img = np.full((HEIGHT, WIDTH, 3), i * 4 % 255, dtype=np.uint8)
@@ -116,6 +116,7 @@ def write_mcap_episode(
     # 2. video
     video_format: str = "h264",
     skip_first_keyframe: bool = False,
+    b_frames: bool = False,
     calibration_width: int = WIDTH,
     video_fps: int = VIDEO_FPS,
     # 3. clocks
@@ -173,6 +174,7 @@ def write_mcap_episode(
                             release)
       video_format          CompressedVideo.format on every camera
       skip_first_keyframe   cameras start on a P-frame
+      b_frames              cameras are encoded with B-frames (x264 defaults)
       calibration_width     width in /main-camera-info (frames stay 64 wide)
       video_fps             frame rate of every camera
       backwards_head_pose   two /head-pose messages swap timestamps
@@ -228,7 +230,7 @@ def write_mcap_episode(
         return topic != drop_topic
 
     n_frames = DURATION_S * video_fps
-    packets = h264_packets(n_frames)
+    packets = h264_packets(n_frames, b_frames)
     if skip_first_keyframe:
         packets = packets[1:]
     video_times = [

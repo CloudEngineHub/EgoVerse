@@ -19,6 +19,7 @@ import zarr
 from zarr.core.dtype import VariableLengthBytes
 
 from egomimic.rldb.zarr.episode_rules import (
+    SCHEMA_VERSION,
     camera_errors,
     embodiment_error,
     fps_error,
@@ -43,6 +44,7 @@ _WRITER_OWNED_ATTRS = frozenset(
         "features",
         "intrinsics",
         "extrinsics",
+        "schema_version",
         *REQUIRED_METADATA_FIELDS,
     }
 )
@@ -101,9 +103,10 @@ class ZarrWriter:
                 "extrinsics" key in zarr.json metadata.
             task_name, operator, lab, scene, objects: REQUIRED episode
                 metadata; rules in CONTRIBUTING_DATA.md §6.3. objects may be a
-                list or a comma-separated str and is stored as a list. Pass
-                MissingMetadata() only if the source data has no value; it is
-                stored as null.
+                list or a comma-separated str and is stored as a list.
+                task_name, operator and lab are always required. scene and
+                objects may be MissingMetadata() only if the source data has no
+                value; it is stored as null.
         """
         self.episode_path = Path(episode_path)
         self.fps = fps
@@ -425,6 +428,7 @@ class ZarrWriter:
             Metadata dictionary.
         """
         metadata = {
+            "schema_version": SCHEMA_VERSION,
             "embodiment": self.embodiment,
             "total_frames": total_frames,
             "fps": self.fps,

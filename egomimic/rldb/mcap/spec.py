@@ -35,8 +35,11 @@ import re
 import uuid
 from dataclasses import dataclass
 
-from egomimic.rldb.zarr.episode_rules import EMBODIMENTS, arm_sides
-from egomimic.rldb.zarr.required_metadata import REQUIRED_METADATA_FIELDS
+from egomimic.rldb.zarr.episode_rules import EMBODIMENTS, QUAT_UNIT_TOL, arm_sides
+from egomimic.rldb.zarr.required_metadata import (
+    REQUIRED_METADATA_FIELDS,
+    WAIVABLE_FIELDS,
+)
 
 SPEC_VERSION = "0.1"
 SUPPORTED_SPEC_VERSIONS = ("0.1",)
@@ -116,7 +119,7 @@ STILL_WINDOW_S = 1.0  # window used to find the IMU at rest
 MAX_GAP_S = 0.5  # largest allowed gap between consecutive messages of one stream
 SPAN_TOL_S = 1.0  # how far a stream may start late / end early vs. the episode
 METADATA_TIME_TOL_S = 1.0  # start/end_time_unix vs. the data's actual span
-UNIT_TOL = 1e-3  # |quaternion| - 1, and R^T R - I for rotation matrices
+UNIT_TOL = QUAT_UNIT_TOL  # |quaternion| - 1, and R^T R - I for rotation matrices
 # Frames fully decoded per camera; structural checks run on every message.
 VIDEO_SAMPLE_FRAMES = 60
 MIN_UNIX_NS = 1_420_070_400 * 10**9  # 2015-01-01: anything earlier is not Unix time
@@ -328,8 +331,11 @@ METADATA_KEYS = (
     # HandKeypoints.positions order, chosen by the vendor, e.g. ",".join(MANO_JOINTS)
     MetaKey("hand_joints", "hand_joints", human_only=True),
 )
-# Lab feeds recording_id, so it cannot be waived in missing_metadata.
-UNWAIVABLE_FIELDS = ("lab",)
+# Every converter must give these (task_name, operator, lab); only scene and objects
+# may be listed in missing_metadata. The shared waiver_errors rejects the rest.
+UNWAIVABLE_FIELDS = tuple(
+    f for f in REQUIRED_METADATA_FIELDS if f not in WAIVABLE_FIELDS
+)
 # Topics published exactly once per episode.
 ONCE_TOPICS = ("/tf_static", "/imu-info")
 # Topic kinds whose messages form a time series; the rest are published once or rarely.

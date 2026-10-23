@@ -9,7 +9,8 @@ Copy this file and replace the two functions marked YOUR CODE:
 
 Everything else (writing the zarr, the episode hash name, validation, the MP4
 preview, batch conversion) is done for you. As shipped, ``load_episode``
-returns synthetic data so the script runs end to end:
+returns synthetic data with ``lab="template"``, which validation rejects, so
+every episode fails until you put in your own metadata:
 
     python egomimic/scripts/convert_template/template_to_zarr.py \\
         --raw-root /path/to/raw --output-dir /path/to/out --workers 8
@@ -21,9 +22,12 @@ or from your own batch script:
 
 Each episode is validated right after it is written (CONTRIBUTING_DATA.md
 §11.1); an episode that fails is deleted and reported, so whatever ends up in
-``output_dir`` is ready to upload. An episode with a MissingMetadata() field
-fails unless you pass ``--allow-missing`` (``allow_missing=True``). Spec: CONTRIBUTING_DATA.md §4 (episode
-hash), §6 (arrays + metadata), §7 (coordinate frames).
+``output_dir`` is ready to upload. An episode with scene or objects set to
+MissingMetadata() fails unless you pass ``--allow-missing``
+(``allow_missing=True``). The MP4 preview needs ffmpeg; if it fails the episode
+is kept and a warning is logged (``--no-mp4`` skips it). Spec:
+CONTRIBUTING_DATA.md §4 (episode hash), §6 (arrays + metadata), §7 (coordinate
+frames).
 """
 
 import argparse
@@ -75,7 +79,7 @@ class RawEpisode:
     # Your ID for the raw recording this episode was cut from, so it can be
     # re-converted from the raw upload later (§6.6).
     source_recording_id: str | None = None
-    # Language spans: (text, start_frame, end_frame) (§8)
+    # Language spans: (text, start_frame, end_frame), end exclusive (§8.1)
     annotations: list[tuple[str, int, int]] = field(default_factory=list)
 
 
@@ -96,9 +100,10 @@ def load_episode(raw_path: Path) -> RawEpisode:
 
     ``metadata`` is per episode: read the operator, scene and objects from your
     own capture logs rather than hardcoding them for the whole batch — they
-    are what lets people filter and train on the data. If your source truly
-    has no value for a field, use MissingMetadata() for it — only if
-    absolutely necessary, and convert with --allow-missing.
+    are what lets people filter and train on the data. task_name, operator
+    and lab are always required. If your source truly has no scene or
+    objects, use MissingMetadata() for it — only if absolutely necessary, and
+    convert with --allow-missing.
     """
     # Synthetic stand-in so the template runs as shipped.
     seed = int(hashlib.sha256(Path(raw_path).name.encode()).hexdigest()[:8], 16)
@@ -116,11 +121,11 @@ def load_episode(raw_path: Path) -> RawEpisode:
         right_ee_pose=_synthetic_trajectory(T, rng),
         task_description="folding a towel on a table",
         source_recording_id=Path(raw_path).name,
-        annotations=[("fold the towel", 0, T - 1)],
+        annotations=[("fold the towel", 0, T)],
         metadata={
             "task_name": "fold_clothes",
             "operator": f"operator_{seed % 5}",
-            "lab": "template",
+            "lab": "template",  # rejected: replace with your lab id
             "scene": "kitchen_a",
             "objects": ["towel"],
             # Only if absolutely necessary, e.g. your capture logs have no scene:
@@ -210,7 +215,7 @@ def _write_and_validate(
     save_mp4: bool,
     allow_missing: bool,
 ) -> None:
-    """Write, validate and preview one episode; on any failure remove its outputs."""
+    """Write and validate one episode, removing it on failure; then the preview."""
     try:
         ZarrWriter.create_and_write(
             episode_path=zarr_path,
@@ -235,12 +240,15 @@ def _write_and_validate(
             )
         for warning in report.warnings:
             logger.warning("%s: %s", zarr_path.name, warning)
-        if save_mp4:  # sibling preview for review (§6.5)
-            save_preview_mp4(ep.images.transpose(0, 3, 1, 2), mp4_path, ep.fps)
     except BaseException:
         shutil.rmtree(zarr_path, ignore_errors=True)
-        mp4_path.unlink(missing_ok=True)
         raise
+    if save_mp4:  # sibling preview for review (§6.5); the zarr is valid without it
+        try:
+            save_preview_mp4(ep.images.transpose(0, 3, 1, 2), mp4_path, ep.fps)
+        except Exception as e:
+            mp4_path.unlink(missing_ok=True)
+            logger.warning("%s: MP4 preview not written: %s", zarr_path.name, e)
 
 
 def convert_all(
@@ -308,12 +316,14 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--raw-root", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=1)
-    parser.add_argument("--no-mp4", action="store_true", help="Skip MP4 previews")
+    parser.add_argument(
+        "--no-mp4", action="store_true", help="Skip MP4 previews (need ffmpeg)"
+    )
     parser.add_argument(
         "--allow-missing",
         action="store_true",
-        help="Keep episodes with MissingMetadata() fields. Only if absolutely "
-        "necessary.",
+        help="Keep episodes with scene/objects set to MissingMetadata(). Only "
+        "if absolutely necessary.",
     )
     args = parser.parse_args(argv)
 

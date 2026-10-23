@@ -10,6 +10,13 @@ import numpy as np
 
 SUPPORTED_FPS = (30, 60)
 
+# Max |‖q‖ - 1| for pose quaternions; the MCAP validator uses the same value.
+QUAT_UNIT_TOL = 1e-3
+
+# Stamped in zarr.attrs by ZarrWriter. Episodes without it predate the required
+# metadata rules; bump it when a rule change should not apply to older episodes.
+SCHEMA_VERSION = 1
+
 # Must match egomimic.rldb.embodiment.embodiment.EMBODIMENT (lowercased); a unit
 # test checks. Listed here so the validators don't import torch.
 EMBODIMENTS = (
@@ -79,6 +86,15 @@ def camera_errors(intrinsics: Any, extrinsics: Any) -> list[str]:
                     f"with np.hstack([K, np.zeros((3, 1))])), got {shape or K!r}. "
                     "See CONTRIBUTING_DATA.md §6.4."
                 )
+                continue
+            K = np.asarray(K, dtype=np.float64)
+            if not np.isfinite(K).all():
+                errors.append(f"intrinsics[{cam!r}] contains NaN or inf")
+            elif not (K[0, 0] > 0 and K[1, 1] > 0):
+                errors.append(
+                    f"intrinsics[{cam!r}] must have positive focal lengths "
+                    f"(fx={K[0, 0]}, fy={K[1, 1]}). See CONTRIBUTING_DATA.md §6.4."
+                )
     if extrinsics is None:
         return errors
     if not isinstance(extrinsics, dict) or not extrinsics:
@@ -93,6 +109,8 @@ def camera_errors(intrinsics: Any, extrinsics: Any) -> list[str]:
                 f"extrinsics[{key!r}] must be a 4x4 transform matrix, got "
                 f"{shape or T!r}. See CONTRIBUTING_DATA.md §6.4."
             )
+        elif not np.isfinite(np.asarray(T, dtype=np.float64)).all():
+            errors.append(f"extrinsics[{key!r}] contains NaN or inf")
     return errors
 
 

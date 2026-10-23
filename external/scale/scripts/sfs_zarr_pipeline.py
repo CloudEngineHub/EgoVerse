@@ -275,6 +275,11 @@ def log_task_result(
 
 
 def main() -> int:
+    raise NotImplementedError(
+        "sfs_zarr_pipeline is disabled with sfs_to_egoverse_zarr until it passes "
+        "the required episode metadata and intrinsics to ZarrWriter; see "
+        "INTERNAL_DATA.md §4.3."
+    )
     parser = argparse.ArgumentParser(
         description="End-to-end Scale SFS -> EgoVerse Zarr pipeline",
         formatter_class=argparse.RawDescriptionHelpFormatter,

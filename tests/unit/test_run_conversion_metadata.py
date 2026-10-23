@@ -51,9 +51,18 @@ def test_null_objects_become_a_waiver():
     assert run_conversion.required_metadata_row_error("fold_clothes", meta) is None
 
 
+def test_empty_scene_is_a_waiver():
+    meta = run_conversion.infer_required_metadata_from_row(_row(scene=None))
+    assert meta["missing_metadata"] == ["scene"]
+    assert run_conversion.required_metadata_row_error("fold_clothes", meta) is None
+
+
 @pytest.mark.parametrize(
     "overrides, task_name, match",
     [
+        ({"operator": None}, "fold_clothes", "operator is always required"),
+        ({"lab": ""}, "fold_clothes", "lab is always required"),
+        ({}, "", "task_name is always required"),
         ({"operator": "unknown"}, "fold_clothes", "operator"),
         ({"lab": "RL2"}, "fold_clothes", "lab"),
         ({}, "debug", "task_name"),

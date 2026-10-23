@@ -143,7 +143,7 @@ Python environment. The `aws` CLI is optional.
 ### 3.3 Credentials
 
 You only need Cloudflare R2 credentials for the data bucket. An RL2 team member
-sends them to you directly, scoped to your `lab` prefix (§10.1). You do not need
+sends them to you directly. Upload only under your `lab` prefixes (§10.1). You do not need
 AWS account keys or database access: RL2 registers your episodes (§5).
 
 Set them in your environment. `s5cmd` reads the `AWS_*` names; the Python
@@ -238,7 +238,7 @@ The rest is handled for you: the `<episode_hash>.zarr` name, the `ZarrWriter` ca
 python egomimic/scripts/convert_template/template_to_zarr.py --raw-root /raw --output-dir /out --workers 8
 ```
 
-As shipped, `load_episode` returns synthetic data, so you can run the template end to end before writing any code. Re-running into an `--output-dir` that already holds an episode fails that episode (`FileExistsError`), so write each batch to a fresh directory. If an episode has a field set to `MissingMetadata()` (§6.3), add `--allow-missing`; otherwise it is deleted. The sections below are the spec it implements.
+As shipped, `load_episode` returns synthetic data with `lab="template"`, which the validator rejects; set `lab` to your own id and you can run the template end to end before writing the rest of your loader. Re-running into an `--output-dir` that already holds an episode fails that episode (`FileExistsError`), so write each batch to a fresh directory. If an episode has `scene` or `objects` set to `MissingMetadata()` (§6.3), add `--allow-missing`; otherwise it is deleted. The MP4 preview needs `ffmpeg`; if it fails, the episode is kept and a warning is logged (`--no-mp4` skips previews). The sections below are the spec it implements.
 
 ### 6.1 Directory Structure
 
@@ -368,6 +368,7 @@ The root group's `.attrs` dictionary is the **episode metadata**. It is written 
 
 ```python
 {
+    "schema_version":    int,   # set by ZarrWriter (currently 1); do not set it yourself
     "embodiment":        str,   # e.g. "human_bimanual" (§9)
     "total_frames":      int,   # number of valid frames (not padded)
     "fps":               int,   # capture frame rate: 30 or 60
@@ -409,14 +410,14 @@ The root group's `.attrs` dictionary is the **episode metadata**. It is written 
 
 #### Required metadata fields (`task_name`, `operator`, `lab`, `scene`, `objects`)
 
-These are what let people filter the data and train on it — per-operator splits, held-out scenes, object-conditioned subsets — so **we heavily recommend providing every one of them for every episode.** `ZarrWriter.create_and_write` takes each as a required keyword argument with **no default**, and raises `ValueError` on an empty string, a placeholder (`"unknown"`, `"none"`, `"n/a"`, `"tbd"`, `"debug"`, `"test"`, …), or a value with leading or trailing whitespace.
+These are what let people filter the data and train on it — per-operator splits, held-out scenes, object-conditioned subsets. **`task_name`, `operator` and `lab` are always required and cannot be waived.** We heavily recommend providing `scene` and `objects` for every episode too. `ZarrWriter.create_and_write` takes each as a required keyword argument with **no default**, and raises `ValueError` on an empty string, a placeholder (`"unknown"`, `"none"`, `"n/a"`, `"tbd"`, `"debug"`, `"test"`, …), or a value with leading or trailing whitespace.
 
 - `task_name`: propose your own short, stable, lowercase name for the task category, e.g. `fold_clothes` or `object_in_container` — not a one-off trial description. RL2 maps it to the existing task list on ingest. Put trial-specific detail in `task_description`, `scene` and `objects`.
 - `operator` is per-episode — use your own stable collector ID (a pseudonymous ID is fine).
 - `lab` names who the data came from. It must be a full match of `^[a-z0-9][a-z0-9_-]*$`, is the same string as your S3 prefix (§10.1), and must never change once chosen.
 - `objects` is a list of names, or a comma-separated string (`"shirt, basket"`), which is stored as a list. Every entry is checked the same way as the other fields.
 
-If your source data genuinely has no value for a field, you must say so explicitly:
+If your source data genuinely has no `scene` or `objects`, you must say so explicitly:
 
 ```python
 from egomimic.rldb.zarr.required_metadata import MissingMetadata
@@ -427,7 +428,7 @@ ZarrWriter.create_and_write(
 )
 ```
 
-Only do this if absolutely necessary. The field is then stored as `null`, and the validator (§11.1) fails the episode unless it is run with `--allow-missing`. With the reference converter (`template_to_zarr.py`), pass `--allow-missing` (or `allow_missing=True` to `convert_all`); otherwise it deletes the episode. Episodes converted this way are accepted, and the `null` fields are visible in `zarr.json`.
+Only do this if absolutely necessary; it is rejected for `task_name`, `operator` and `lab`. The field is then stored as `null`, and the validator (§11.1) fails the episode unless it is run with `--allow-missing`. With the reference converter (`template_to_zarr.py`), pass `--allow-missing` (or `allow_missing=True` to `convert_all`); otherwise it deletes the episode. Episodes converted this way are accepted, and the `null` fields are visible in `zarr.json`.
 
 ### 6.4 Storage / Chunking
 
@@ -506,8 +507,9 @@ resolution, different processing) without coming back to you.
   carries the same `source_recording_id`. This link is recommended, not validated.
 - **If you use MCAP**, follow SPEC.md exactly (its episode info uses the same
   `source_recording_id` key) and check every episode with
-  `python -m egomimic.rldb.mcap.validate episode_<id>/ [...]`; required metadata waived in
-  `missing_metadata` fails unless `--allow-missing`, as for Zarr.
+  `python -m egomimic.rldb.mcap.validate episode_<id>/ [...]`; `scene` / `objects` waived in
+  `missing_metadata` fail unless `--allow-missing`, as for Zarr; `task_name`, `operator`
+  and `lab` cannot be waived.
 
 ---
 
@@ -667,8 +669,8 @@ RL2 adds the training data config for your data on ingest.
 ### 10.1 S3 Path Convention
 
 Upload everything under the prefix named by your `lab` (§6.3). Your RL2 contact
-confirms the `lab` string when they send your credentials, which are scoped to
-exactly these prefixes; uploads anywhere else are denied.
+confirms the `lab` string when they send your credentials. Write only to these
+prefixes; never write to or modify another lab's data.
 
 ```
 s3://rldb/processed_v3/<lab>/<episode_hash>.zarr/      # the episode (§6)
@@ -734,7 +736,7 @@ Pass the `.zarr` directories themselves, not the folder that contains them. It p
 - annotations are well-formed `annotation_v1` records within `[0, T]`
 - frame 0 of every JPEG key decodes to an RGB image
 
-A field written as `MissingMetadata()` (stored as `null`) fails the check by default. `--allow-missing` downgrades it to a warning; only use it once you have confirmed the source data really has no value for that field. Episodes that pass with `--allow-missing` are accepted. From Python, `validate_episode(path)` returns a `ValidationReport` with `.errors`, `.warnings` and `.ok`.
+`scene` or `objects` written as `MissingMetadata()` (stored as `null`) fails the check by default; a `null` `task_name`, `operator` or `lab` always fails. `--allow-missing` downgrades it to a warning; only use it once you have confirmed the source data really has no value for that field. Episodes that pass with `--allow-missing` are accepted. From Python, `validate_episode(path)` returns a `ValidationReport` with `.errors`, `.warnings` and `.ok`.
 
 ### 11.2 End-to-End Load Test
 
@@ -843,7 +845,7 @@ Complete every item before considering an episode ready for upload.
 - [ ] `source_recording_id` names the raw recording each episode was cut from (§6.6).
 - [ ] `intrinsics` is present in `zarr.attrs` as a `{camera_key: 3×4}` dict (single-camera = one entry) — **mandatory**.
 - [ ] `extrinsics` is present in `zarr.attrs` for robot embodiments.
-- [ ] `python -m egomimic.rldb.zarr.validate` passes on every episode (§11.1); `--allow-missing` only for fields you set to `MissingMetadata()`.
+- [ ] `python -m egomimic.rldb.zarr.validate` passes on every episode (§11.1); `--allow-missing` only for `scene` / `objects` you set to `MissingMetadata()`.
 - [ ] A sample episode has been visually verified (§11.3).
 
 **Coordinate frames**
@@ -877,7 +879,7 @@ Complete every item before considering an episode ready for upload.
 To get credentials for the EgoVerse data bucket:
 
 1. Email the consortium leads with your lab name, GitHub handle, and a brief description of the data you intend to contribute.
-2. An RL2 team member confirms your `lab` string and sends you R2 credentials scoped to your prefixes (§3.3, §10.1).
+2. An RL2 team member confirms your `lab` string and sends you R2 credentials; upload only to your prefixes (§3.3, §10.1).
 
 ### Consortium Leads
 

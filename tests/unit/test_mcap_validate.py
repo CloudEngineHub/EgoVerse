@@ -55,12 +55,14 @@ BREAKAGES = [
     ("human_bimanual", {"metadata_override": {"scene": "unknown"}}, [("present", None, "scene='unknown' is a placeholder")]),
     ("human_bimanual", {"metadata_override": {"objects": "shirt,,basket"}}, [("present", None, "objects entries must be real names")]),
     ("human_bimanual", {"metadata_override": {"objects": " shirt, basket"}}, [("present", None, "objects=' shirt, basket' has leading/trailing whitespace")]),
-    ("human_bimanual", {"metadata_override": {"missing_metadata": "operator"}}, [("present", None, "operator has both a value")]),
+    ("human_bimanual", {"metadata_override": {"missing_metadata": "objects"}}, [("present", None, "objects has both a value")]),
     ("human_bimanual", {"metadata_override": {"missing_metadata": "scen"}}, [("present", None, "names unknown fields ['scen']")]),
     ("human_bimanual", {"drop_metadata_key": "license"}, [("present", None, "'license' missing")]),
     ("human_bimanual", {"drop_metadata_key": "source_recording_id"}, [("present", None, "'source_recording_id' missing")]),
     ("human_bimanual", {"drop_metadata_key": "hand_joints"}, [("present", None, "'hand_joints' missing")]),
-    ("human_bimanual", {"metadata_override": {"missing_metadata": "lab"}}, [("present", None, "lab cannot be listed in 'missing_metadata'"), ("present", None, "lab has both a value")]),
+    ("human_bimanual", {"metadata_override": {"missing_metadata": "lab"}}, [("present", None, "['lab'] cannot be waived"), ("present", None, "lab has both a value")]),
+    ("human_bimanual", {"metadata_override": {"missing_metadata": "operator"}}, [("present", None, "['operator'] cannot be waived"), ("present", None, "operator has both a value")]),
+    ("human_bimanual", {"metadata_override": {"missing_metadata": "task_name"}}, [("present", None, "['task_name'] cannot be waived"), ("present", None, "task_name has both a value")]),
     ("human_bimanual", {"metadata_override": {"site": "rl2"}}, [("present", None, "unknown episode info key 'site'")]),
     ("human_bimanual", {"metadata_override": {"rig-name": "test_rig"}}, [("present", None, "unknown episode info key 'rig-name'; did you mean 'rig_name'?")]),
     ("human_bimanual", {"metadata_override": {"license": "tbd"}}, [("present", None, "'license' = 'tbd' is a placeholder")]),
@@ -81,6 +83,8 @@ BREAKAGES = [
     # 2. video
     ("human_bimanual", {"video_format": "vp9"}, [("video", "/main-camera", "format 'vp9'")]),
     ("human_bimanual", {"skip_first_keyframe": True}, [("video", "/main-camera", "not a keyframe")]),
+    ("human_bimanual", {"b_frames": True}, [("video", "/main-camera", "uses B-frames; re-encode without them (x264: -bf 0)")]),
+    ("eva_bimanual", {"b_frames": True}, [("video", c, "uses B-frames") for c in ("/left-wrist-camera", "/right-wrist-camera", "/top-camera")]),
     ("human_bimanual", {"calibration_width": 128}, [("video", "/main-camera", "calibration says 128x48")]),
     ("human_bimanual", {"video_fps": 15}, [("video", "/main-camera", "15.0 fps")]),
     ("human_bimanual", {"multi_frame_video": True}, [("video", "/main-camera", "exactly one frame")]),
@@ -165,6 +169,16 @@ def test_waived_metadata_needs_allow_missing(tmp_path, capsys):
     assert "warning: scene: marked as not available" in capsys.readouterr().out
 
 
+@pytest.mark.parametrize("name", ["lab", "task_name", "operator"])
+def test_unwaivable_metadata_fails_even_with_allow_missing(tmp_path, name):
+    ep = write_mcap_episode(
+        tmp_path, drop_metadata_key=name, metadata_override={"missing_metadata": name}
+    )
+    r = validate_episode(ep, allow_missing=True)
+    assert not r.ok
+    assert any(f"['{name}'] cannot be waived" in p.message for p in r.problems)
+
+
 def test_missing_and_unreadable_episodes(tmp_path):
     r = validate_episode(tmp_path / "episode_nope")
     assert [p.message for p in r.problems] == [
@@ -188,6 +202,21 @@ def test_proto_file_matches_schemas():
     assert PROTO.read_text() == schemas.render_proto(), (
         "regenerate: python -m egomimic.rldb.mcap.schemas > " + str(PROTO)
     )
+
+
+def test_proto_field_numbers_are_unique():
+    for m in schemas.MESSAGES:
+        numbers = [f.number for f in m.fields]
+        assert len(set(numbers)) == len(numbers), f"{m.name} reuses a field number"
+        assert all(n >= 1 for n in numbers), m.name
+
+
+def test_only_scene_and_objects_can_be_waived():
+    from egomimic.rldb.zarr.required_metadata import REQUIRED_METADATA_FIELDS
+
+    assert set(spec.UNWAIVABLE_FIELDS) == {"task_name", "operator", "lab"}
+    waivable = set(REQUIRED_METADATA_FIELDS) - set(spec.UNWAIVABLE_FIELDS)
+    assert waivable == {"scene", "objects"}
 
 
 def test_embodiments_match_enum():
@@ -311,9 +340,10 @@ def test_wrong_message_type_is_reported_not_raised(tmp_path):
     assert any(g == "imu" and "could not check" in m for g, _, m in found), found
 
 
-def _rewrite(path: Path, extra=None) -> None:
+def _rewrite(path: Path, extra=None, **writer_options) -> None:
     """Rewrite an MCAP record by record, uncompressed (so a chunk's CRC is its only
-    guard). extra(writer, messages, channel_ids, schema_ids) adds records at the end."""
+    guard). extra(writer, messages, channel_ids, schema_ids) adds records at the end;
+    writer_options go to mcap's Writer."""
     from mcap.reader import make_reader
     from mcap.writer import CompressionType, Writer
 
@@ -323,7 +353,7 @@ def _rewrite(path: Path, extra=None) -> None:
         messages = list(reader.iter_messages(log_time_order=False))
     schema_ids, channel_ids = {}, {}
     with open(path, "wb") as f:
-        w = Writer(f, compression=CompressionType.NONE)
+        w = Writer(f, compression=CompressionType.NONE, **writer_options)
         w.start()
         for name, data in records:
             w.add_metadata(name, data)
@@ -360,6 +390,51 @@ def test_corrupt_chunk_fails_crc(tmp_path):
     path.write_bytes(bytes(data))
     (p,) = validate_episode(ep).problems
     assert p.message.startswith("cannot read episode.mcap") and "CRC" in p.message
+
+
+def test_corrupt_unchunked_file_fails_crc(tmp_path):
+    from fixtures.mcap_episodes import h264_packets
+
+    ep = write_mcap_episode(tmp_path)
+    path = ep / spec.EPISODE_FILE
+    _rewrite(path, use_chunking=False, enable_data_crcs=True)
+    data = bytearray(path.read_bytes())
+    i = data.find(h264_packets(60)[5][-16:])
+    assert i > 0
+    data[i] ^= 0x01
+    path.write_bytes(bytes(data))
+    (p,) = validate_episode(ep).problems
+    assert p.message.startswith("cannot read episode.mcap"), p.message
+    assert "crc" in p.message.lower(), p.message
+
+
+def test_file_without_metadata_index_passes(tmp_path):
+    from mcap.writer import IndexType
+
+    ep = write_mcap_episode(tmp_path)
+    no_metadata = IndexType.ATTACHMENT | IndexType.CHUNK | IndexType.MESSAGE
+    _rewrite(ep / spec.EPISODE_FILE, index_types=no_metadata)
+    assert validate_episode(ep).problems == []
+
+
+def test_unknown_topics_are_not_decoded_and_series_keep_no_messages(tmp_path):
+    from egomimic.rldb.mcap.validate import _read
+
+    ep = write_mcap_episode(tmp_path)
+
+    def garbage_topic(w, messages, channel_ids, schema_ids):
+        imu_schema = next(s.id for s, c, _ in messages if c.topic == "/imu")
+        ch = w.register_channel("/vendor-debug", "protobuf", schema_ids[imu_schema])
+        for i in range(3):
+            w.add_message(ch, T0 + i, b"\xff not protobuf", T0 + i)
+
+    _rewrite(ep / spec.EPISODE_FILE, extra=garbage_topic)
+    assert validate_episode(ep).problems == []
+    streams = _read(ep / spec.EPISODE_FILE).streams
+    assert streams["/vendor-debug"].n == 3 and not streams["/vendor-debug"].msgs
+    for topic in ("/imu", "/head-pose", "/left-hand-keypoints", "/head-pose-quality"):
+        assert streams[topic].n > 0 and not streams[topic].msgs, topic
+    assert len(streams["/main-camera"].msgs) == spec.VIDEO_SAMPLE_FRAMES
 
 
 def _after_sample(change):

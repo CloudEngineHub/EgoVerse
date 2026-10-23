@@ -6,7 +6,8 @@ Prints PASS, or every problem found, per episode; exits 1 if any episode fails. 
 checks fall in seven groups:
 
   1. everything there   required topics, types, non-empty fields, episode info
-  2. video usable       codec, starts on a keyframe, decodes, size matches calibration, fps
+  2. video usable       codec, starts on a keyframe, no B-frames, decodes, size matches
+                        calibration, fps
   3. clocks             Unix ns, in order, no big gaps, streams cover the episode, rates
   4. calibration        every camera has intrinsics and a path to the world frame
   5. imu                raw (gravity still in it) and fast enough, noise specs present
@@ -15,7 +16,8 @@ checks fall in seven groups:
                         each label inside one task (the rules Lance's annotation review
                         applies, egomimic/rldb/lance/annotations.py in PR #717)
 
-The file is read once, in file order, with chunk CRCs checked. Every video message is
+The file is read once, in file order, with chunk and data-section CRCs checked; topics
+the spec does not define are counted but never decoded. Every video message is
 checked structurally (non-empty, one frame_id and format per stream, holds an H.264 /
 H.265 picture); only the first VIDEO_SAMPLE_FRAMES are fully decoded, each of which
 must decode to exactly one frame, so that every frame has its own capture time (Lance
@@ -30,6 +32,7 @@ import argparse
 import math
 import re
 import sys
+from array import array
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -89,16 +92,22 @@ class _Stream:
 
     schema: str
     encoding: str
-    times: list[int] = field(default_factory=list)
-    msgs: list = field(default_factory=list)  # decoded; video keeps only the sample
+    times: array = field(default_factory=lambda: array("q"))
+    # Decoded messages of the rare topics, and the video sample; time series keep only
+    # `values` instead.
+    msgs: list = field(default_factory=list)
+    # Time series: _ROWS[kind] of every message, flattened, `width` per message.
+    values: array = field(default_factory=lambda: array("d"))
+    width: int = 0
+    row_error: Exception | None = None  # a message _ROWS could not read (wrong type)
     # field -> messages where it is empty
     empty: Counter = field(default_factory=Counter)
     missing_fields: set = field(default_factory=set)  # fields the message type lacks
     undecodable: bool = False
     channels: set = field(default_factory=set)
+    frame_ids: Counter = field(default_factory=Counter)  # of messages that have one
     # Video only, over every message (msgs holds just the sample).
     formats: Counter = field(default_factory=Counter)
-    frame_ids: Counter = field(default_factory=Counter)
     no_picture: int = 0
 
     @property
@@ -161,55 +170,140 @@ def _is_empty(msg, name: str) -> bool:
 def _note_video(s: _Stream, msg) -> None:
     fmt = str(getattr(msg, "format", ""))
     s.formats[fmt] += 1
-    if hasattr(msg, "frame_id"):  # a type without it is reported in group 1
-        s.frame_ids[str(msg.frame_id)] += 1
     data = bytes(getattr(msg, "data", b""))
     if data and fmt in PICTURE_NALS and not _nal_types(data, fmt) & PICTURE_NALS[fmt]:
         s.no_picture += 1
 
 
+def _imu_row(m) -> tuple:
+    a, g = m.linear_acceleration, m.angular_velocity
+    return (a.x, a.y, a.z, g.x, g.y, g.z)
+
+
+def _hand_row(m) -> tuple:
+    pos = np.asarray(m.positions, dtype=np.float64)
+    finite = bool(np.isfinite(pos).all())
+    wrist = m.HasField("wrist_pose")
+    conf_ok = 0 <= m.confidence <= 1 and all(0 <= c <= 1 for c in m.joint_confidence)
+    return (
+        m.valid,
+        len(pos),
+        wrist,
+        wrist and _pose_ok(m.wrist_pose),
+        conf_ok,
+        len(m.joint_confidence),
+        finite,
+        finite and not pos.any(),
+    )
+
+
+def _arm_row(m) -> tuple:
+    names = len(m.joint_names) != len(m.position) or any(
+        hasattr(m, a) and len(getattr(m, a)) != len(m.position)
+        for a in ("velocity", "torque")
+    )
+    return (names, _rigid_4x4(m))
+
+
+# Topic.kind -> what its checks need of one message, as a fixed-width row of floats.
+_ROWS = {
+    "imu": (6, _imu_row),
+    "pose": (1, lambda m: (_pose_ok(m.pose),)),
+    "hand_keypoints": (8, _hand_row),
+    "eye_gaze": (
+        1,
+        lambda m: (m.valid and not all(map(math.isfinite, (m.yaw, m.pitch, m.depth))),),
+    ),
+    "arm": (2, _arm_row),
+    "gripper": (1, lambda m: (m.position,)),
+    "tracking_quality": (0, lambda m: ()),  # only its fields are checked
+}
+
+
+def _rows(s: _Stream) -> np.ndarray:
+    """The stream's rows as an (n, width) array; raises if a message was unreadable."""
+    if s.row_error is not None:
+        raise s.row_error
+    return np.array(s.values, dtype=np.float64).reshape(-1, s.width)
+
+
+def _note(s: _Stream, topic: str, kind: str | None, fields: tuple, msg) -> None:
+    for name in fields:
+        if not hasattr(msg, name):
+            s.missing_fields.add(name)
+        elif _is_empty(msg, name):
+            s.empty[name] += 1
+    if hasattr(msg, "frame_id"):  # a type without it is reported in group 1
+        s.frame_ids[str(msg.frame_id)] += 1
+    if topic.endswith(spec.CAMERA_SUFFIX):
+        _note_video(s, msg)
+        if len(s.msgs) < spec.VIDEO_SAMPLE_FRAMES:
+            s.msgs.append(msg)  # only the sample is kept and fully decoded
+    elif kind in _ROWS:
+        s.width, row = _ROWS[kind]
+        if s.row_error is None:
+            try:
+                s.values.extend(map(float, row(msg)))
+            except Exception as e:
+                s.row_error = e.with_traceback(None)
+    else:
+        s.msgs.append(msg)
+
+
 def _read(path: Path) -> _Episode:
-    from mcap.reader import make_reader
+    from mcap.records import Channel, Message, Metadata, Schema
+    from mcap.stream_reader import StreamReader
     from mcap_protobuf.decoder import DecoderFactory
 
-    fields_of = {t.name: t.fields for p in (spec.HUMAN, spec.ROBOT) for t in p.topics}
+    topics = {t.name: t for p in (spec.HUMAN, spec.ROBOT) for t in p.topics}
+    camera_topics = tuple(
+        spec.CAMERA_SUFFIX + x
+        for x in ("", spec.CALIBRATION_SUFFIX, spec.CAMERA_EXTRA_SUFFIX)
+    )
     factory = DecoderFactory()
     decoders: dict[int, object] = {}
+    schemas: dict[int, Schema] = {}
+    channels: dict[int, Channel] = {}
     streams: dict[str, _Stream] = {}
+    metadata: dict[str, dict[str, str]] = {}
+    record_counts: Counter = Counter()
 
+    # One linear pass: it checks the data-section CRC of unchunked files as well as
+    # chunk CRCs (SeekingReader skips both without chunk indexes), and finds metadata
+    # records whether or not the summary indexes them.
     with open(path, "rb") as f:
-        reader = make_reader(f, validate_crcs=True)
-        records = list(reader.iter_metadata())
-        metadata = {r.name: dict(r.metadata) for r in records}
-        record_counts = Counter(r.name for r in records)
-        for schema, channel, message in reader.iter_messages(log_time_order=False):
-            topic = channel.topic
-            s = streams.get(topic)
-            if s is None:
-                s = streams[topic] = _Stream(
-                    schema.name if schema else "", channel.message_encoding
-                )
-            s.times.append(message.log_time)
-            s.channels.add(channel.id)
-            if channel.id not in decoders:
-                decoders[channel.id] = factory.decoder_for(
-                    channel.message_encoding, schema
-                )
-            decode = decoders[channel.id]
-            if decode is None:
-                s.undecodable = True
-                continue
-            msg = decode(message.data)
-            for name in fields_of.get(topic, ()):
-                if not hasattr(msg, name):
-                    s.missing_fields.add(name)
-                elif _is_empty(msg, name):
-                    s.empty[name] += 1
-            if topic.endswith(spec.CAMERA_SUFFIX):
-                _note_video(s, msg)
-                if len(s.msgs) >= spec.VIDEO_SAMPLE_FRAMES:
-                    continue  # only the sample is kept and fully decoded
-            s.msgs.append(msg)
+        for record in StreamReader(f, validate_crcs=True).records:
+            if isinstance(record, Schema):
+                schemas[record.id] = record
+            elif isinstance(record, Channel):
+                channels[record.id] = record
+            elif isinstance(record, Metadata):
+                metadata[record.name] = dict(record.metadata)
+                record_counts[record.name] += 1
+            elif isinstance(record, Message):
+                channel = channels[record.channel_id]
+                topic = channel.topic
+                s = streams.get(topic)
+                if s is None:
+                    schema = schemas.get(channel.schema_id)
+                    s = streams[topic] = _Stream(
+                        schema.name if schema else "", channel.message_encoding
+                    )
+                s.times.append(record.log_time)
+                s.channels.add(channel.id)
+                t = topics.get(topic)
+                if t is None and not topic.endswith(camera_topics):
+                    continue  # not in the spec: counted, never decoded
+                if channel.id not in decoders:
+                    decoders[channel.id] = factory.decoder_for(
+                        channel.message_encoding, schemas.get(channel.schema_id)
+                    )
+                decode = decoders[channel.id]
+                if decode is None:
+                    s.undecodable = True
+                    continue
+                msg = decode(record.data)
+                _note(s, topic, t and t.kind, t.fields if t else (), msg)
     return _Episode(path, metadata, streams, record_counts)
 
 
@@ -282,15 +376,10 @@ def _required_metadata_problems(
 ) -> tuple[list[str], list[str]]:
     """(problems, waiver warnings) from the zarr required-metadata rules on the episode
     info (CONTRIBUTING_DATA.md §6.3). Fields named in `missing_metadata` are waived
-    (MissingMetadata), except UNWAIVABLE_FIELDS."""
+    (MissingMetadata), except spec.UNWAIVABLE_FIELDS."""
     raw = info.get(spec.MISSING_METADATA_KEY, "")
     waived = {f.strip() for f in raw.split(",") if f.strip()}
     out = waiver_errors(info, waived)
-    for name in sorted(waived & set(spec.UNWAIVABLE_FIELDS)):
-        out.append(
-            f"{name} cannot be listed in {spec.MISSING_METADATA_KEY!r}: it feeds "
-            "recording_id, so every episode must give it"
-        )
     meta = {}
     for name in REQUIRED_METADATA_FIELDS:
         value = info.get(name)
@@ -473,21 +562,34 @@ def check_video(ep: _Episode) -> list[Problem]:
         ctx = av.CodecContext.create("hevc" if codec == "h265" else "h264", "r")
         # Fail on bitstream errors instead of concealing them.
         ctx.options = {"err_detect": "explode"}
-        frames, size = 0, None
+        # pts = message index: a decoder that hands frames back out of that order is
+        # reordering B-frames (has_b_frames alone is set by streams that have none).
+        out_order, b_frames, size = [], False, None
         try:
-            for msg in sample:
-                for frame in ctx.decode(av.Packet(bytes(msg.data))):
-                    frames += 1
+            for i, msg in enumerate(sample):
+                packet = av.Packet(bytes(msg.data))
+                packet.pts = i
+                for frame in ctx.decode(packet):
+                    out_order.append(frame.pts)
+                    b_frames |= frame.pict_type == av.video.frame.PictureType.B
                     size = size or (frame.width, frame.height)
             for frame in ctx.decode(None):
-                frames += 1
+                out_order.append(frame.pts)
+                b_frames |= frame.pict_type == av.video.frame.PictureType.B
                 size = size or (frame.width, frame.height)
         except av.error.FFmpegError as e:
             add(topic, f"decode error in the first {len(sample)} messages: {e}")
             continue
+        frames = len(out_order)
         if frames == 0:
             add(topic, f"no frames decoded from the first {len(sample)} messages")
             continue
+        if b_frames or (not packed and out_order != sorted(out_order)):
+            add(
+                topic,
+                "uses B-frames; re-encode without them (x264: -bf 0), so each "
+                "message decodes to its own frame in timestamp order",
+            )
         if not packed and frames != len(sample):
             add(
                 topic,
@@ -743,9 +845,9 @@ def _check_frames(ep: _Episode, embodiment: str, cameras: list[str]) -> list[Pro
         skip = topic == "/tf_static" or topic.endswith(
             (spec.CALIBRATION_SUFFIX, spec.CAMERA_EXTRA_SUFFIX)
         )
-        if skip or not s.msgs or not hasattr(s.msgs[0], "frame_id"):
+        if skip or not s.frame_ids:
             continue  # a camera's -info / -info-extra share its frame, checked above
-        named = set(s.frame_ids) or {str(m.frame_id) for m in s.msgs}
+        named = set(s.frame_ids)
         if "" in named and topic in must_name:
             add(topic, "no frame_id, so it cannot be placed")
         for frame in sorted(named - reached - {""}):
@@ -754,11 +856,7 @@ def _check_frames(ep: _Episode, embodiment: str, cameras: list[str]) -> list[Pro
                 f"frame {frame!r} has no path to {spec.WORLD_FRAME!r} via /tf_static",
             )
     head = ep.streams.get("/head-pose")
-    if (
-        head
-        and head.msgs
-        and {str(m.frame_id) for m in head.msgs} != {spec.WORLD_FRAME}
-    ):
+    if head and head.frame_ids and set(head.frame_ids) != {spec.WORLD_FRAME}:
         add("/head-pose", f"poses must be in frame {spec.WORLD_FRAME!r} (T_world_head)")
     return out
 
@@ -766,19 +864,15 @@ def _check_frames(ep: _Episode, embodiment: str, cameras: list[str]) -> list[Pro
 # ---------------------------------------------------------------- 5. imu
 
 
-def _vec3(msgs: list, attr: str) -> np.ndarray:
-    return np.array([[v.x, v.y, v.z] for v in (getattr(m, attr) for m in msgs)])
-
-
 def check_imu(ep: _Episode) -> list[Problem]:
     out = []
     add = _adder(out, "imu")
     s = ep.streams.get("/imu")
-    if s and s.msgs:
+    rows = _rows(s) if s and s.width else ()
+    if len(rows):
         if s.rate_hz() < spec.MIN_IMU_HZ * (1 - spec.RATE_TOL):
             add("/imu", f"{s.rate_hz():.0f} Hz, need >= {spec.MIN_IMU_HZ:g}")
-        acc = _vec3(s.msgs, "linear_acceleration")
-        gyr = _vec3(s.msgs, "angular_velocity")
+        acc, gyr = rows[:, :3], rows[:, 3:]
         if not (np.isfinite(acc).all() and np.isfinite(gyr).all()):
             add("/imu", "NaN/Inf samples")
         else:
@@ -817,51 +911,39 @@ def _pose_ok(pose) -> bool:
     return _quat_ok(pose.orientation) and all(math.isfinite(v) for v in (p.x, p.y, p.z))
 
 
-def _check_pose(ep: _Episode, name: str, s: _Stream, add: Add) -> None:
-    bad = sum(not _pose_ok(m.pose) for m in s.msgs)
+def _check_pose(ep: _Episode, name: str, rows: np.ndarray, add: Add) -> None:
+    bad = int((rows[:, 0] == 0).sum())
     if bad:
-        add(name, f"{bad}/{s.n} poses have NaNs or a non-unit rotation")
+        add(name, f"{bad}/{len(rows)} poses have NaNs or a non-unit rotation")
 
 
-def _check_hand_keypoints(ep: _Episode, name: str, s: _Stream, add: Add) -> None:
+def _check_hand_keypoints(ep: _Episode, name: str, rows: np.ndarray, add: Add) -> None:
     joints = _hand_joint_count(ep)
-    shape = sum(len(m.positions) not in (0, 3 * joints) for m in s.msgs)
+    valid, n_pos, wrist, wrist_ok, conf_ok, n_conf, finite, zeros = rows.T.astype(bool)
+    n_pos, n_conf = rows[:, 1], rows[:, 5]
+    n = len(rows)
+    shape = int((~np.isin(n_pos, (0, 3 * joints))).sum())
     if shape:
         add(
             name,
-            f"{shape}/{s.n} messages have neither {3 * joints} positions "
+            f"{shape}/{n} messages have neither {3 * joints} positions "
             f"({joints} hand-joints x xyz) nor none",
         )
-    empty = sum(
-        m.valid and not m.positions and not m.HasField("wrist_pose") for m in s.msgs
-    )
+    empty = int((valid & (n_pos == 0) & ~wrist).sum())
     if empty:
         add(name, f"{empty} valid messages have neither positions nor wrist_pose")
-    conf = sum(
-        not 0 <= m.confidence <= 1
-        or len(m.joint_confidence) not in (0, joints)
-        or not all(0 <= c <= 1 for c in m.joint_confidence)
-        for m in s.msgs
-    )
+    conf = int((~conf_ok | ~np.isin(n_conf, (0, joints))).sum())
     if conf:
         add(
             name,
-            f"{conf}/{s.n} messages have a confidence outside [0, 1] or "
+            f"{conf}/{n} messages have a confidence outside [0, 1] or "
             f"joint_confidence not {joints} values",
         )
-    wrist = sum(
-        m.valid and m.HasField("wrist_pose") and not _pose_ok(m.wrist_pose)
-        for m in s.msgs
-    )
-    if wrist:
-        add(name, f"{wrist} valid wrist poses have NaNs or a non-unit rotation")
-    valid = [
-        np.asarray(m.positions)
-        for m in s.msgs
-        if m.valid and len(m.positions) == 3 * joints
-    ]
-    nan = sum(not np.isfinite(p).all() for p in valid)
-    zero = sum(bool(np.isfinite(p).all() and not p.any()) for p in valid)
+    bad_wrist = int((valid & wrist & ~wrist_ok).sum())
+    if bad_wrist:
+        add(name, f"{bad_wrist} valid wrist poses have NaNs or a non-unit rotation")
+    full = valid & (n_pos == 3 * joints)
+    nan, zero = int((full & ~finite).sum()), int((full & zeros).sum())
     if nan:
         add(name, f"{nan} valid messages have NaN/Inf positions")
     if zero:
@@ -872,11 +954,8 @@ def _check_hand_keypoints(ep: _Episode, name: str, s: _Stream, add: Add) -> None
         )
 
 
-def _check_eye_gaze(ep: _Episode, name: str, s: _Stream, add: Add) -> None:
-    bad = sum(
-        m.valid and not all(math.isfinite(v) for v in (m.yaw, m.pitch, m.depth))
-        for m in s.msgs
-    )
+def _check_eye_gaze(ep: _Episode, name: str, rows: np.ndarray, add: Add) -> None:
+    bad = int(rows[:, 0].sum())
     if bad:
         add(name, f"{bad} valid messages have NaN/Inf")
 
@@ -898,26 +977,22 @@ def _rigid_4x4(m) -> bool:
     )
 
 
-def _check_arm(ep: _Episode, name: str, s: _Stream, add: Add) -> None:
-    names = sum(
-        len(m.joint_names) != len(m.position)
-        or (hasattr(m, "velocity") and len(m.velocity) != len(m.position))
-        or (hasattr(m, "torque") and len(m.torque) != len(m.position))
-        for m in s.msgs
-    )
+def _check_arm(ep: _Episode, name: str, rows: np.ndarray, add: Add) -> None:
+    names, bad = int(rows[:, 0].sum()), int((rows[:, 1] == 0).sum())
     if names:
-        add(name, f"{names}/{s.n} messages' joint arrays do not match joint_names")
-    bad = sum(not _rigid_4x4(m) for m in s.msgs)
+        add(
+            name, f"{names}/{len(rows)} messages' joint arrays do not match joint_names"
+        )
     if bad:
-        add(name, f"{bad}/{s.n} poses are not a finite rigid 4x4 transform")
+        add(name, f"{bad}/{len(rows)} poses are not a finite rigid 4x4 transform")
 
 
-def _check_gripper(ep: _Episode, name: str, s: _Stream, add: Add) -> None:
+def _check_gripper(ep: _Episode, name: str, rows: np.ndarray, add: Add) -> None:
     lo, hi = spec.GRIPPER_RANGE
-    vals = np.array([m.position for m in s.msgs], dtype=np.float64)
+    vals = rows[:, 0]
     bad = int((~np.isfinite(vals) | (vals < lo) | (vals > hi)).sum())
     if bad:
-        add(name, f"{bad}/{s.n} gripper values outside [{lo:g}, {hi:g}]")
+        add(name, f"{bad}/{len(rows)} gripper values outside [{lo:g}, {hi:g}]")
 
 
 # Topic.kind -> its group-6 check.
@@ -936,8 +1011,9 @@ def check_poses(ep: _Episode, embodiment: str) -> list[Problem]:
     for t in spec.topics_for(embodiment):
         s = ep.streams.get(t.name)
         check = _POSE_CHECKS.get(t.kind)
-        if check and s and s.msgs:
-            check(ep, t.name, s, add)
+        rows = _rows(s) if check and s and s.width else ()
+        if len(rows):
+            check(ep, t.name, rows, add)
     return out
 
 
