@@ -75,7 +75,7 @@ def _metadata(embodiment: str, declared: str) -> dict[str, str]:
         "device_serial": "SN0001",
         "start_time_unix": str(T0 // 10**6),
         "end_time_unix": str((T0 + DURATION_S * 10**9) // 10**6),
-        "source_recording_id": "acme-rec-0001",
+        "vendor_recording_id": "acme-rec-0001",
         "spec_version": spec.SPEC_VERSION,
         "license": "CC-BY-4.0",
     }

@@ -74,7 +74,7 @@ class RawEpisode:
     metadata: dict[str, Any]  # task_name, operator, lab, scene, objects (§6.3)
     # Your ID for the raw recording this episode was cut from, so it can be
     # re-converted from the raw upload later (§6.6).
-    source_recording_id: str
+    vendor_recording_id: str
     left_ee_pose: np.ndarray | None = None  # (T, 7)
     right_ee_pose: np.ndarray | None = None  # (T, 7)
     left_keypoints: np.ndarray | None = None  # (T, 63) = 21 MANO kps x xyz
@@ -121,7 +121,7 @@ def load_episode(raw_path: Path) -> RawEpisode:
         left_ee_pose=_synthetic_trajectory(T, rng),
         right_ee_pose=_synthetic_trajectory(T, rng),
         task_description="folding a towel on a table",
-        source_recording_id=Path(raw_path).name,
+        vendor_recording_id=Path(raw_path).name,
         annotations=[("fold the towel", 0, T)],
         metadata={
             "task_name": "fold_clothes",
@@ -229,7 +229,7 @@ def _write_and_validate(
             task_description=ep.task_description,
             annotations=ep.annotations or None,
             intrinsics={"front_1": K},
-            source_recording_id=ep.source_recording_id,
+            vendor_recording_id=ep.vendor_recording_id,
             **ep.metadata,
         )
         report = validate_episode(zarr_path, allow_missing=allow_missing)

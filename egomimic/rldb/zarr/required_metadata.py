@@ -117,21 +117,21 @@ def required_metadata_error(field: str, value: Any) -> str | None:
     return None
 
 
-def source_recording_id_error(value: Any) -> str | None:
-    """Why ``value`` is not a usable source_recording_id (§6.6), or None.
+def vendor_recording_id_error(value: Any) -> str | None:
+    """Why ``value`` is not a usable vendor_recording_id (§6.6), or None.
 
-    It names the raw recording under s3://rldb/raw/<lab>/<source_recording_id>/
+    It names the raw recording under s3://rldb/raw/<lab>/<vendor_recording_id>/
     and, with lab, gives the Lance recording_id, so it is one path component.
     """
     hint = "See CONTRIBUTING_DATA.md §6.6."
     if not isinstance(value, str) or is_placeholder(value):
         return (
-            "source_recording_id must name the raw recording this episode was cut "
+            "vendor_recording_id must name the raw recording this episode was cut "
             f"from, got {value!r}. {hint}"
         )
     if value != value.strip() or not value.isprintable() or "/" in value:
         return (
-            f"source_recording_id={value!r} must be a single path component with no "
+            f"vendor_recording_id={value!r} must be a single path component with no "
             f"surrounding whitespace or non-printable characters. {hint}"
         )
     return None

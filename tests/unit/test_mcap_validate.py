@@ -58,7 +58,7 @@ BREAKAGES = [
     ("human_bimanual", {"metadata_override": {"missing_metadata": "objects"}}, [("present", None, "objects has both a value")]),
     ("human_bimanual", {"metadata_override": {"missing_metadata": "scen"}}, [("present", None, "names unknown fields ['scen']")]),
     ("human_bimanual", {"drop_metadata_key": "license"}, [("present", None, "'license' missing")]),
-    ("human_bimanual", {"drop_metadata_key": "source_recording_id"}, [("present", None, "'source_recording_id' missing")]),
+    ("human_bimanual", {"drop_metadata_key": "vendor_recording_id"}, [("present", None, "'vendor_recording_id' missing")]),
     ("human_bimanual", {"drop_metadata_key": "hand_joints"}, [("present", None, "'hand_joints' missing")]),
     ("human_bimanual", {"metadata_override": {"missing_metadata": "lab"}}, [("present", None, "['lab'] cannot be waived"), ("present", None, "lab has both a value")]),
     ("human_bimanual", {"metadata_override": {"missing_metadata": "operator"}}, [("present", None, "['operator'] cannot be waived"), ("present", None, "operator has both a value")]),

@@ -33,7 +33,7 @@ from egomimic.rldb.zarr.episode_rules import (
 )
 from egomimic.rldb.zarr.required_metadata import (
     check_stored_metadata,
-    source_recording_id_error,
+    vendor_recording_id_error,
 )
 
 _POSE_KEYS = (
@@ -121,8 +121,8 @@ def _check_attrs(meta: dict, report: ValidationReport, allow_missing: bool) -> N
             report.errors.append(err)
     report.errors += camera_errors(meta.get("intrinsics"), meta.get("extrinsics"))
     errors, warnings, passed = check_stored_metadata(meta, allow_missing=allow_missing)
-    if (err := source_recording_id_error(meta.get("source_recording_id"))) is None:
-        passed.append("source_recording_id")
+    if (err := vendor_recording_id_error(meta.get("vendor_recording_id"))) is None:
+        passed.append("vendor_recording_id")
     else:
         errors.append(err)
     version = meta.get("schema_version")

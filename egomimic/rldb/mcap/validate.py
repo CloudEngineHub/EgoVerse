@@ -1152,7 +1152,7 @@ def validate_episode(episode: Path, *, allow_missing: bool = False) -> Result:
                 )
             )
     lab = ep.info.get("lab", "")
-    source_id = ep.info.get("source_recording_id", "")
+    source_id = ep.info.get("vendor_recording_id", "")
     rid = spec.recording_id(lab, source_id) if lab and source_id else ""
     return Result(embodiment, rid, problems, warnings)
 

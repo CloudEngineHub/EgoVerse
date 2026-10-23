@@ -30,7 +30,7 @@ GOOD = {
     "lab": "rl2",
     "scene": "kitchen_a",
     "objects": ["shirt"],
-    "source_recording_id": "session_0412",
+    "vendor_recording_id": "session_0412",
 }
 
 
@@ -418,22 +418,22 @@ def test_orphaned_old_copy_is_restored_not_swept(tmp_path):
 
 
 @pytest.mark.parametrize("value", ["", "unknown", "a/b", " s1", None])
-def test_source_recording_id_is_required(tmp_path, value):
-    with pytest.raises(ValueError, match="source_recording_id"):
-        _write(tmp_path / "ep.zarr", source_recording_id=value)
+def test_vendor_recording_id_is_required(tmp_path, value):
+    with pytest.raises(ValueError, match="vendor_recording_id"):
+        _write(tmp_path / "ep.zarr", vendor_recording_id=value)
     assert not (tmp_path / "ep.zarr").exists()
 
 
-def test_validator_requires_source_recording_id_and_head_pose(tmp_path):
+def test_validator_requires_vendor_recording_id_and_head_pose(tmp_path):
     ep = write_episode(tmp_path, "aria", T=16, H=32, W=32)
     group = zarr.open_group(str(ep), mode="r+")
     attrs = dict(group.attrs)
-    del attrs["source_recording_id"]
+    del attrs["vendor_recording_id"]
     group.attrs.clear()
     group.attrs.update(attrs)
     del group["obs_head_pose"]
     errors = validate.validate_episode(ep).errors
-    assert any("source_recording_id" in e for e in errors)
+    assert any("vendor_recording_id" in e for e in errors)
     assert any("Missing required key: obs_head_pose" in e for e in errors)
 
 
