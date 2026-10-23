@@ -240,7 +240,7 @@ class AriaRay(EmbodimentRay):
                 vrs = vrs_by_name[filename]
                 jsonf = root / f"{filename}.json"
                 mps_dir = root / f"mps_{filename}_vrs"
-                # arm, task_name, task_description are inferred from row in run_converion.py
+                # arm, task_name, task_description, required_metadata are inferred from row in run_conversion.py
                 args = {
                     "processed_local_root": str(self.processed_local_root),
                     "processed_remote_prefix": self.processed_remote_prefix,
@@ -274,6 +274,7 @@ class AriaRay(EmbodimentRay):
         fps: int,
         task_name: str,
         task_description: str,
+        required_metadata: dict,
         chunk_timesteps: int,
         image_compressed: bool,
         save_mp4: bool,
@@ -356,6 +357,7 @@ class AriaRay(EmbodimentRay):
                         fps=fps,
                         task_name=task_name,
                         task_description=task_description,
+                        required_metadata=required_metadata,
                         chunk_timesteps=chunk_timesteps,
                         image_compressed=image_compressed,
                         save_mp4=save_mp4,
@@ -441,6 +443,8 @@ class AriaRay(EmbodimentRay):
         raw_path: str | Path,
         output_dir: str | Path,
         arm: str,
+        *,
+        required_metadata: dict,
         fps: int = 30,
         task_name: str = "",
         task_description: str = "",
@@ -455,6 +459,7 @@ class AriaRay(EmbodimentRay):
             fps=fps,
             task_name=task_name,
             task_description=task_description,
+            **required_metadata,
             chunk_timesteps=chunk_timesteps,
             image_compressed=image_compressed,
             save_mp4=save_mp4,
@@ -526,6 +531,7 @@ class EvaRay(EmbodimentRay):
         fps: int,
         task_name: str,
         task_description: str,
+        required_metadata: dict,
         chunk_timesteps: int,
         save_mp4: bool,
     ) -> tuple[str, str, int]:
@@ -586,6 +592,7 @@ class EvaRay(EmbodimentRay):
                         fps=fps,
                         task_name=task_name,
                         task_description=task_description,
+                        required_metadata=required_metadata,
                         chunk_timesteps=chunk_timesteps,
                         save_mp4=save_mp4,
                     )
@@ -668,6 +675,8 @@ class EvaRay(EmbodimentRay):
         raw_path: str | Path,
         output_dir: str | Path,
         arm: str,
+        *,
+        required_metadata: dict,
         fps: int = 30,
         save_mp4: bool = True,
         task_name: str = "",
@@ -688,6 +697,7 @@ class EvaRay(EmbodimentRay):
             save_mp4=save_mp4,
             task_name=task_name,
             task_description=task_description,
+            **required_metadata,
             chunk_timesteps=chunk_timesteps,
         )
 

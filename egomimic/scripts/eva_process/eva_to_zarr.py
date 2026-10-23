@@ -14,6 +14,11 @@ import numpy as np
 from scipy.spatial.transform import Rotation as R
 
 from egomimic.rldb.embodiment.eva import Eva
+from egomimic.rldb.zarr.required_metadata import (
+    add_required_metadata_args,
+    check_writer_metadata,
+    required_metadata_from_args,
+)
 from egomimic.rldb.zarr.zarr_writer import ZarrWriter
 from egomimic.scripts.eva_process.eva_utils import EvaHD5Extractor
 from egomimic.utils.aws.aws_sql import timestamp_ms_to_episode_hash
@@ -161,12 +166,16 @@ def convert_episode(
     dataset_name: str,
     arm: str,
     fps: int,
-    task_name: str = "",
+    *,
+    required_metadata: dict,
     task_description: str = "",
     save_mp4: bool = False,
     chunk_timesteps: int = 100,
 ) -> tuple[Path, Path]:
     """Process one HDF5 file and write a .zarr episode.
+
+    ``required_metadata`` holds the task_name/operator/lab/scene/objects kwargs for
+    create_and_write (see egomimic.rldb.zarr.required_metadata.required_metadata_from_args).
 
     Returns the zarr episode path on success.
     """
@@ -192,11 +201,12 @@ def convert_episode(
         image_data=image_data or None,
         embodiment=embodiment,
         fps=fps,
-        task_name=task_name,
         task_description=task_description,
         chunk_timesteps=chunk_timesteps,
         intrinsics={"front_1": Eva.INTRINSICS},
         extrinsics=Eva.EXTRINSICS,
+        source_recording_id=Path(raw_path).stem,
+        **required_metadata,
     )
 
     logger.info("Wrote zarr episode: %s", zarr_path)
@@ -230,16 +240,18 @@ def main(args) -> None:
 
     try:
         episode_hash = timestamp_ms_to_episode_hash(Path(args.raw_path).stem)
+        required_metadata = required_metadata_from_args(args)
+        check_writer_metadata(required_metadata)
         zarr_path, mp4_path = convert_episode(
             raw_path=Path(args.raw_path),
             output_dir=Path(args.output_dir),
             dataset_name=episode_hash,
             arm=args.arm,
             fps=args.fps,
-            task_name=args.task_name,
             task_description=args.task_description,
             save_mp4=args.save_mp4,
             chunk_timesteps=args.chunk_timesteps,
+            required_metadata=required_metadata,
         )
         return zarr_path, mp4_path
     except Exception:
@@ -272,8 +284,11 @@ def argument_parse():
         help="Timesteps per zarr chunk for numeric arrays.",
     )
     parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--task-name", type=str, default="")
+    parser.add_argument(
+        "--task-name", type=str, default=None, help="Must match the DB row's task."
+    )
     parser.add_argument("--task-description", type=str, default="")
+    add_required_metadata_args(parser)
 
     return parser.parse_args()
 

@@ -108,6 +108,11 @@ def write_episode(
         embodiment=v.embodiment,
         fps=30,
         task_name="synthetic",
+        operator=f"op_{seed:02d}",
+        lab="synthetic",
+        scene="test_scene",
+        objects=["red_cube", "bin"],
+        source_recording_id=f"{vendor}_session_{seed:02d}",
         annotations=[
             ("pick up the red cube", 0, T // 2),
             ("place it in the bin", T // 2, T - 1),

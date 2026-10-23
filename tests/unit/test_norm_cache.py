@@ -19,7 +19,7 @@ from omegaconf import OmegaConf
 import egomimic.trainHydra as train_hydra
 from egomimic.rldb.zarr import norm_cache
 from egomimic.rldb.zarr.zarr_dataset_multi import MultiDataset
-from egomimic.rldb.zarr.zarr_writer import ZarrWriter
+from egomimic.rldb.zarr.zarr_writer import write_annotations
 
 CFG = OmegaConf.create(
     {
@@ -151,11 +151,10 @@ def test_episode_fingerprint_changes_when_episode_is_rewritten(tmp_path) -> None
 
 
 def test_episode_fingerprint_changes_when_annotations_are_rewritten(tmp_path) -> None:
-    """Re-annotating in place (scale_to_zarr_annotation.py) and adding a key
-    (zarr_key_transform.py) touch only a child array, not the root zarr.json."""
+    """Re-annotating in place and adding an annotation key, as
+    scale_to_zarr_annotation.py does through write_annotations."""
     write_episode(tmp_path, "aria", seed=0)
     ep = tmp_path / "aria_00.zarr"
-    writer = ZarrWriter(episode_path=ep)
     seen = [norm_cache.episode_fingerprint(ep)]
     for mode, annotations in [
         ("w", [("pick", 0, 5)]),
@@ -164,7 +163,7 @@ def test_episode_fingerprint_changes_when_annotations_are_rewritten(tmp_path) ->
     ]:
         time.sleep(0.02)  # past the filesystem's mtime granularity
         key = "annotations" if mode == "w" else "annotations_v2"
-        writer.append_annotations(key, annotations, mode=mode)
+        write_annotations(ep, annotations, key, mode=mode)
         seen.append(norm_cache.episode_fingerprint(ep))
     assert len(set(seen)) == len(seen)
 

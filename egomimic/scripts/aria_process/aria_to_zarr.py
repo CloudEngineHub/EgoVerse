@@ -8,6 +8,11 @@ from pathlib import Path
 import numpy as np
 
 from egomimic.rldb.embodiment.human import ARIA_INTRINSICS
+from egomimic.rldb.zarr.required_metadata import (
+    add_required_metadata_args,
+    check_writer_metadata,
+    required_metadata_from_args,
+)
 from egomimic.rldb.zarr.zarr_writer import ZarrWriter
 from egomimic.scripts.aria_process.aria_utils import AriaVRSExtractor
 from egomimic.utils.aws.aws_sql import timestamp_ms_to_episode_hash
@@ -34,7 +39,7 @@ class DatasetConverter:
         Whether the images are compressed, by default True.
     Methods
     -------
-    extract_episode(episode_path, task_name='', output_dir='.', dataset_name='', chunk_timesteps=100)
+    extract_episode(episode_path, required_metadata=..., output_dir='.', dataset_name='', chunk_timesteps=100)
         Extracts frames from a single episode and saves it with a description.
     main(args)
         Main function to convert the dataset.
@@ -122,7 +127,8 @@ class DatasetConverter:
     def extract_episode(
         self,
         episode_path,
-        task_name: str = "",
+        *,
+        required_metadata: dict,
         task_description: str = "",
         output_dir: Path = Path("."),
         dataset_name: str = "",
@@ -136,6 +142,9 @@ class DatasetConverter:
             The path to the episode file.
         task_description : str, optional
             A description of the task associated with the episode (default is an empty string).
+        required_metadata : dict
+            task_name/operator/lab/scene/objects kwargs for create_and_write (see
+            egomimic.rldb.zarr.required_metadata.required_metadata_from_args).
         Returns
         -------
         None
@@ -176,10 +185,11 @@ class DatasetConverter:
             image_data=image_data if image_data else None,
             fps=self.fps,
             embodiment=self.embodiment,
-            task_name=task_name,
             task_description=task_description,
             chunk_timesteps=chunk_timesteps,
             intrinsics={"front_1": ARIA_INTRINSICS},
+            source_recording_id=Path(episode_path).stem,
+            **required_metadata,
         )
         if self.save_mp4:
             mp4_path = output_dir / f"{episode_name}.mp4"
@@ -201,6 +211,8 @@ def main(args) -> None:
 
     try:
         episode_hash = timestamp_ms_to_episode_hash(Path(args.raw_path).stem)
+        required_metadata = required_metadata_from_args(args)
+        check_writer_metadata(required_metadata)
 
         converter = DatasetConverter(
             raw_path=Path(args.raw_path),
@@ -224,10 +236,10 @@ def main(args) -> None:
         ctypes.CDLL("libc.so.6").malloc_trim(0)
         zarr_path, mp4_path = converter.extract_episode(
             episode_path=Path(args.raw_path),
-            task_name=args.task_name,
             task_description=args.task_description,
             output_dir=Path(args.output_dir),
             dataset_name=episode_hash,
+            required_metadata=required_metadata,
         )
         return zarr_path, mp4_path
     except Exception:
@@ -256,8 +268,8 @@ def argument_parse():
     parser.add_argument(
         "--task-name",
         type=str,
-        default="Aria recorded dataset.",
-        help="Task name of the data.",
+        default=None,
+        help="Task name of the data (must match the DB row's task).",
     )
     parser.add_argument(
         "--task-description",
@@ -272,6 +284,7 @@ def argument_parse():
         default="both",
         help="Specify the arm for processing.",
     )
+    add_required_metadata_args(parser)
     parser.add_argument(
         "--image-compressed",
         type=str2bool,

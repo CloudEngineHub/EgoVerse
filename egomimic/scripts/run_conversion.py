@@ -7,12 +7,18 @@ import csv
 import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Dict
 
 import ray
 from cloudpathlib import S3Path
 from ray.exceptions import OutOfMemoryError, RayTaskError, WorkerCrashedError
 
+from egomimic.rldb.zarr.required_metadata import (
+    WAIVABLE_FIELDS,
+    check_writer_metadata,
+    required_metadata_from_args,
+)
 from egomimic.scripts.ray_helper import AriaRay, EmbodimentRay, EvaRay
 from egomimic.utils.aws.aws_data_utils import (
     get_cloudpathlib_s3_client,
@@ -89,10 +95,68 @@ def infer_arm_from_row(row: TableRow) -> str:
 
 def infer_task_name_from_row(row: TableRow) -> str:
     """
-    Infer task name from SQL row.task_name (e.g., 'task_name').
-    Falls back to ''.
+    Infer task name from SQL row.task (e.g., 'fold_clothes').
+    Falls back to '', which required_metadata_row_error rejects.
     """
-    return row.task or "unknown"
+    return (row.task or "").strip()
+
+
+_NULL_OBJECTS = frozenset({"", "none", "null"})
+
+
+def parse_db_objects(raw) -> list[str]:
+    """Object names from the DB objects column.
+
+    Most rows hold a Postgres array literal ('{"pink cup",bag}'), some a plain
+    comma-separated string; a driver may also hand back a list. None/NULL
+    entries are dropped.
+    """
+    if isinstance(raw, (list, tuple)):
+        entries = [str(e) for e in raw if e is not None]
+    elif isinstance(raw, str):
+        text = raw.strip()
+        if text.startswith("{") and text.endswith("}"):
+            text = text[1:-1]
+        reader = csv.reader([text], skipinitialspace=True, escapechar="\\")
+        entries = next(reader, [])
+    else:
+        entries = []
+    return [e.strip() for e in entries if e.strip().lower() not in _NULL_OBJECTS]
+
+
+def infer_required_metadata_from_row(row: TableRow) -> dict:
+    """
+    operator/lab/scene/objects for the converter, plus a missing_metadata list
+    naming the waivable fields (scene, objects) the row left empty, so they are
+    written as an explicit MissingMetadata(). An empty task, operator or lab is
+    left as None and rejected by required_metadata_row_error. Plain data so it
+    travels through Ray.
+    """
+    values = {
+        "task_name": infer_task_name_from_row(row),
+        "operator": (row.operator or "").strip(),
+        "lab": (row.lab or "").strip(),
+        "scene": (row.scene or "").strip(),
+        "objects": parse_db_objects(row.objects),
+    }
+    missing = [field for field in WAIVABLE_FIELDS if not values[field]]
+    del values["task_name"]
+    return {**{k: v or None for k, v in values.items()}, "missing_metadata": missing}
+
+
+def required_metadata_row_error(
+    task_name: str | None, required_metadata: dict
+) -> str | None:
+    """First reason the row's metadata would be rejected by ZarrWriter, or None."""
+    try:
+        check_writer_metadata(
+            required_metadata_from_args(
+                SimpleNamespace(task_name=task_name, **required_metadata)
+            )
+        )
+    except ValueError as e:
+        return str(e)
+    return None
 
 
 def infer_task_description_from_row(row: TableRow) -> str:
@@ -256,8 +320,21 @@ def launch(
         #     continue
 
         args["arm"] = arm
-        args["task_name"] = task_name
+        args["task_name"] = task_name or None
+        args["required_metadata"] = infer_required_metadata_from_row(row)
         args["task_description"] = task_description
+        # Reject here, not after a full extraction, and record why.
+        metadata_error = required_metadata_row_error(
+            args["task_name"], args["required_metadata"]
+        )
+        if metadata_error is not None:
+            print(f"[SKIP] {name}: {metadata_error}", flush=True)
+            if not dry and (
+                table_row := episode_hash_to_table_row(engine, episode_key)
+            ):
+                table_row.zarr_processing_error = f"Metadata: {metadata_error}"
+                update_episode(engine, table_row)
+            continue
         start_time = time.time()
         ref = submit_convert(embodiment_ray, "small", **args)
         pending[ref] = {
