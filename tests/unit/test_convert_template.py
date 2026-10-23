@@ -52,3 +52,25 @@ def test_bad_episode_is_reported_and_removed(tmp_path, monkeypatch):
     assert list(failed) == [raw[1]]
     assert "quaternion" in failed[raw[1]]
     assert sorted(p.name for p in (tmp_path / "out").iterdir()) == [written[0].name]
+
+
+def test_waived_field_needs_allow_missing(tmp_path, monkeypatch):
+    good_load = tmpl.load_episode
+
+    def waived_load(raw_path):
+        ep = good_load(raw_path)
+        ep.metadata["scene"] = tmpl.MissingMetadata()
+        return ep
+
+    monkeypatch.setattr(tmpl, "load_episode", waived_load)
+    raw = _raw_paths(tmp_path, 1)
+    written, failed = tmpl.convert_all(raw, tmp_path / "strict", save_mp4=False)
+    assert not written
+    assert "--allow-missing" in failed[raw[0]]
+    assert not list((tmp_path / "strict").iterdir())
+
+    written, failed = tmpl.convert_all(
+        raw, tmp_path / "waived", save_mp4=False, allow_missing=True
+    )
+    assert not failed
+    assert zarr.open_group(str(written[0]), mode="r").attrs["scene"] is None

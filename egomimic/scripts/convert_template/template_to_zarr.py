@@ -21,16 +21,20 @@ or from your own batch script:
 
 Each episode is validated right after it is written (CONTRIBUTING_DATA.md
 §11.1); an episode that fails is deleted and reported, so whatever ends up in
-``output_dir`` is ready to upload. Spec: CONTRIBUTING_DATA.md §4 (episode
+``output_dir`` is ready to upload. An episode with a MissingMetadata() field
+fails unless you pass ``--allow-missing`` (``allow_missing=True``). Spec: CONTRIBUTING_DATA.md §4 (episode
 hash), §6 (arrays + metadata), §7 (coordinate frames).
 """
 
 import argparse
+import fcntl
 import hashlib
 import logging
+import os
 import shutil
 import traceback
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -68,6 +72,9 @@ class RawEpisode:
     left_keypoints: np.ndarray | None = None  # (T, 63) = 21 MANO kps x xyz
     right_keypoints: np.ndarray | None = None  # (T, 63)
     task_description: str = ""
+    # Your ID for the raw recording this episode was cut from, so it can be
+    # re-converted from the raw upload later (§6.6).
+    source_recording_id: str | None = None
     # Language spans: (text, start_frame, end_frame) (§8)
     annotations: list[tuple[str, int, int]] = field(default_factory=list)
 
@@ -91,7 +98,7 @@ def load_episode(raw_path: Path) -> RawEpisode:
     own capture logs rather than hardcoding them for the whole batch — they
     are what lets people filter and train on the data. If your source truly
     has no value for a field, use MissingMetadata() for it — only if
-    absolutely necessary.
+    absolutely necessary, and convert with --allow-missing.
     """
     # Synthetic stand-in so the template runs as shipped.
     seed = int(hashlib.sha256(Path(raw_path).name.encode()).hexdigest()[:8], 16)
@@ -108,6 +115,7 @@ def load_episode(raw_path: Path) -> RawEpisode:
         left_ee_pose=_synthetic_trajectory(T, rng),
         right_ee_pose=_synthetic_trajectory(T, rng),
         task_description="folding a towel on a table",
+        source_recording_id=Path(raw_path).name,
         annotations=[("fold the towel", 0, T - 1)],
         metadata={
             "task_name": "fold_clothes",
@@ -124,7 +132,13 @@ def load_episode(raw_path: Path) -> RawEpisode:
 # ── Conversion (no changes needed below) ───────────────────────────────────
 
 
-def convert_episode(raw_path: Path, output_dir: Path, *, save_mp4: bool = True) -> Path:
+def convert_episode(
+    raw_path: Path,
+    output_dir: Path,
+    *,
+    save_mp4: bool = True,
+    allow_missing: bool = False,
+) -> Path:
     """Convert and validate one raw episode; returns the written .zarr path.
 
     Raises (and leaves nothing behind) if the episode fails validation.
@@ -133,8 +147,7 @@ def convert_episode(raw_path: Path, output_dir: Path, *, save_mp4: bool = True) 
     output_dir = Path(output_dir)
     episode_hash = timestamp_ms_to_episode_hash(ep.start_time_ms)
     zarr_path = output_dir / f"{episode_hash}.zarr"
-    if zarr_path.exists():
-        raise FileExistsError(f"{zarr_path} already exists (duplicate start time?)")
+    mp4_path = output_dir / f"{episode_hash}.mp4"
 
     numeric = {"obs_head_pose": ep.head_pose}
     for side in ("left", "right"):
@@ -147,6 +160,57 @@ def convert_episode(raw_path: Path, output_dir: Path, *, save_mp4: bool = True) 
     if K.shape == (3, 3):
         K = np.hstack([K, np.zeros((3, 1))])
 
+    output_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = output_dir / f"{episode_hash}.lock"
+    with _hash_lock(lock_path, zarr_path):
+        if zarr_path.exists():
+            raise FileExistsError(f"{zarr_path} already exists (duplicate start time?)")
+        _write_and_validate(
+            ep, zarr_path, mp4_path, numeric, K, save_mp4, allow_missing
+        )
+    return zarr_path
+
+
+@contextmanager
+def _hash_lock(lock_path: Path, zarr_path: Path):
+    """Exclusive per-hash lock so parallel workers that share a start time can't
+    overwrite each other. flock is released if the worker is killed, so a crash
+    never blocks a rerun."""
+    while True:
+        lock = open(lock_path, "w")
+        try:
+            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            lock.close()
+            raise FileExistsError(
+                f"{zarr_path} is being written by another worker "
+                "(duplicate start time?)"
+            ) from None
+        # Another worker may have unlinked the file between our open and flock;
+        # a lock on an unlinked inode excludes nobody, so take a fresh one.
+        try:
+            if os.stat(lock_path).st_ino == os.fstat(lock.fileno()).st_ino:
+                break
+        except FileNotFoundError:
+            pass
+        lock.close()
+    try:
+        yield
+    finally:
+        lock_path.unlink(missing_ok=True)
+        lock.close()
+
+
+def _write_and_validate(
+    ep: RawEpisode,
+    zarr_path: Path,
+    mp4_path: Path,
+    numeric: dict[str, np.ndarray],
+    K: np.ndarray,
+    save_mp4: bool,
+    allow_missing: bool,
+) -> None:
+    """Write, validate and preview one episode; on any failure remove its outputs."""
     try:
         ZarrWriter.create_and_write(
             episode_path=zarr_path,
@@ -157,22 +221,26 @@ def convert_episode(raw_path: Path, output_dir: Path, *, save_mp4: bool = True) 
             task_description=ep.task_description,
             annotations=ep.annotations or None,
             intrinsics={"front_1": K},
+            metadata_override=(
+                {"source_recording_id": ep.source_recording_id}
+                if ep.source_recording_id
+                else None
+            ),
             **ep.metadata,
         )
-        report = validate_episode(zarr_path)
+        report = validate_episode(zarr_path, allow_missing=allow_missing)
         if not report.ok:
             raise ValueError(
                 f"{zarr_path.name} failed validation:\n  " + "\n  ".join(report.errors)
             )
+        for warning in report.warnings:
+            logger.warning("%s: %s", zarr_path.name, warning)
+        if save_mp4:  # sibling preview for review (§6.5)
+            save_preview_mp4(ep.images.transpose(0, 3, 1, 2), mp4_path, ep.fps)
     except BaseException:
         shutil.rmtree(zarr_path, ignore_errors=True)
+        mp4_path.unlink(missing_ok=True)
         raise
-
-    if save_mp4:  # sibling preview for review (§6.5)
-        save_preview_mp4(
-            ep.images.transpose(0, 3, 1, 2), output_dir / f"{episode_hash}.mp4", ep.fps
-        )
-    return zarr_path
 
 
 def convert_all(
@@ -181,6 +249,7 @@ def convert_all(
     *,
     workers: int = 1,
     save_mp4: bool = True,
+    allow_missing: bool = False,
 ) -> tuple[list[Path], dict[Path, str]]:
     """Convert many episodes; one bad episode never stops the batch.
 
@@ -199,13 +268,14 @@ def convert_all(
             failed[raw_path] = traceback.format_exc()
             logger.error("FAILED  %s\n%s", raw_path, failed[raw_path])
 
+    opts = {"save_mp4": save_mp4, "allow_missing": allow_missing}
     if workers <= 1:
         for p in raw_paths:
-            _record(p, lambda p=p: convert_episode(p, output_dir, save_mp4=save_mp4))
+            _record(p, lambda p=p: convert_episode(p, output_dir, **opts))
     else:
         with ProcessPoolExecutor(max_workers=workers) as pool:
             futures = {
-                p: pool.submit(convert_episode, p, output_dir, save_mp4=save_mp4)
+                p: pool.submit(convert_episode, p, output_dir, **opts)
                 for p in raw_paths
             }
             for p, fut in futures.items():
@@ -239,11 +309,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--workers", type=int, default=1)
     parser.add_argument("--no-mp4", action="store_true", help="Skip MP4 previews")
+    parser.add_argument(
+        "--allow-missing",
+        action="store_true",
+        help="Keep episodes with MissingMetadata() fields. Only if absolutely "
+        "necessary.",
+    )
     args = parser.parse_args(argv)
 
     raw_paths = find_raw_episodes(args.raw_root)
     written, failed = convert_all(
-        raw_paths, args.output_dir, workers=args.workers, save_mp4=not args.no_mp4
+        raw_paths,
+        args.output_dir,
+        workers=args.workers,
+        save_mp4=not args.no_mp4,
+        allow_missing=args.allow_missing,
     )
     print(f"{len(written)}/{len(raw_paths)} episodes written to {args.output_dir}")
     for p in failed:
